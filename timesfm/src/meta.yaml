@@ -1,0 +1,17 @@
+package:
+  name: "timesfm"
+  version: "1.0.1"
+
+source:
+  path: .
+
+build:
+  script: python setup.py install
+
+requirements:
+  build:
+    - numpy >=1.26.4
+    - python >=3.10, <3.11
+    - setuptools
+  run:
+    - python
