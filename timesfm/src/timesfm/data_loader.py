@@ -20,7 +20,9 @@ from absl import logging
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
-import tensorflow as tf
+# import tensorflow as tf
+import torch
+from torch.utils.data import Dataset
 from . import time_features
 
 
@@ -242,14 +244,36 @@ class TimeSeriesdata(object):
     bcf_pred = bcf[:, hist_len:]          # 0
     return bts_train, bts_pred, bfeats_train, bfeats_pred, bcf_train, bcf_pred
 
-  def tf_dataset(self, mode='train', shift=1):
+  def torch_dataset(self, mode='train', shift=1):
     """Tensorflow Dataset."""
     if mode == 'train':
       gen_fn = self.train_gen
     else:
       gen_fn = lambda: self.test_val_gen(mode, shift)
-    output_types = tuple([tf.float32] * 2 + [tf.int32] + [tf.float32] * 2 +
-                         [tf.int32] * 2)
-    dataset = tf.data.Dataset.from_generator(gen_fn, output_types)
-    dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE)
+    # output_types = tuple([tf.float32] * 2 + [tf.int32] + [tf.float32] * 2 +
+    #                      [tf.int32] * 2)
+    output_shapes = tuple([torch.float32] * 2 + [torch.int32] + [torch.float32] * 2 +
+                          [torch.int32] * 2)
+    dataset = CustomTorchDataset(gen_fn, output_shapes)
     return dataset
+
+
+class CustomTorchDataset(Dataset):
+    def __init__(self, gen_fn, output_shapes):
+        self.gen_fn = gen_fn
+        self.output_shapes = output_shapes
+
+        self.data = list(self._generate_data())
+    
+    def _generate_data(self):
+        for item in self.gen_fn():
+            yield item
+
+    def __len__(self):
+        return len(self.data)
+    
+    def __getitem__(self, idx):
+        item = self.data[idx]
+        
+        return tuple(torch.tensor(value, dtype=dtype) 
+                     for value, dtype in zip(item, self.output_shapes))

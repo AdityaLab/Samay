@@ -24,7 +24,10 @@ from timesfm.src.timesfm import timesfm_base
 
 from timesfm.src.timesfm import pytorch_patched_decoder as ppd
 
+from utils import get_least_used_gpu
+
 _TOL = 1e-6
+
 
 
 class TimesFmTorch(timesfm_base.TimesFmBase):
@@ -44,8 +47,14 @@ class TimesFmTorch(timesfm_base.TimesFmBase):
     self._model = None
     self.num_cores = 1
     self.global_batch_size = self.per_core_batch_size
-    self._device = torch.device("cuda:0" if (
-        torch.cuda.is_available() and self.backend == "gpu") else "cpu")
+    # self._device = torch.device("cuda:0" if (
+    #     torch.cuda.is_available() and self.backend == "gpu") else "cpu")
+    least_used_gpu = get_least_used_gpu()
+    if least_used_gpu >= 0:
+      self._device = torch.device(f"cuda:{least_used_gpu}")
+    else:
+      self._device = torch.device("cpu")
+    print(f"Using device: {self._device}")
 
   def load_from_checkpoint(
       self,

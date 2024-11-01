@@ -3,6 +3,7 @@ from timesfm.src.timesfm import pytorch_patched_decoder as ppd
 import numpy as np
 import pandas as pd
 import torch
+from utils import get_least_used_gpu
 
 
 class Basemodel():
@@ -13,6 +14,11 @@ class Basemodel():
             repo: str, Huggingface model repository id
         """
         self.config = config
+        least_used_gpu = get_least_used_gpu()
+        if least_used_gpu >= 0:
+            self.device = torch.device(f"cuda:{least_used_gpu}")
+        else:
+            self.device = torch.device("cpu")
 
     def finetune(self, dataloader, **kwargs):
         raise NotImplementedError
@@ -38,8 +44,9 @@ class TimesfmModel(Basemodel):
                 raise ValueError(f"Repository {repo} not found")
 
         self.model = tfm.TimesFm(hparams=hparams, checkpoint=ckpt)
+    
 
-    def finetune(self, dataloader, **kwargs):
+    def finetune(self, dataset, **kwargs):
         """
         Args:
             dataloader: torch.utils.data.DataLoader, input data
@@ -49,14 +56,24 @@ class TimesfmModel(Basemodel):
         core_layer_tpl = self.model._model
         # Todo: whether add freq
         FinetuneModel = ppd.PatchedDecoderFinetuneModel(core_layer_tpl=core_layer_tpl)
+        FinetuneModel.to(self.device)
         FinetuneModel.train()
-        optimizer = torch.optim.Adam(FinetuneModel.parameters(), lr=1e-3)
-        for i, (inputs) in enumerate(dataloader):
-            optimizer.zero_grad()
-            outputs = FinetuneModel.compute_predictions(inputs)
-            loss = FinetuneModel.compute_loss(outputs)
-            loss.backward()
-            optimizer.step()
+        dataloader = dataset.get_data_loader()
+        optimizer = torch.optim.Adam(FinetuneModel.parameters(), lr=1e-4)
+        epoch = 10 if 'epoch' not in kwargs else kwargs['epoch']
+        avg_loss = 0
+        for epoch in range(epoch):
+            for i, (inputs) in enumerate(dataloader):
+                inputs = dataset.preprocess_train_batch(inputs)
+                inputs = {k: v.to(self.device) for k, v in inputs.items()}
+                optimizer.zero_grad()
+                outputs = FinetuneModel.compute_predictions(inputs)
+                loss = FinetuneModel.compute_loss(outputs, inputs)
+                loss.backward()
+                optimizer.step()
+                avg_loss += loss.item()
+            avg_loss /= len(dataloader)
+            print(f"Epoch {epoch}, Loss: {avg_loss}")
         return FinetuneModel
 
     def forecast(self, input, **kwargs):
@@ -101,5 +118,24 @@ if __name__ == "__main__":
         "model_dims": 1280,
         "quantiles": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
     }
+    
     tfm = TimesfmModel(config=config, repo=repo)
-    print(tfm.model)
+    model = tfm.model
+    # print(tfm.model)
+    df = pd.read_csv("/nethome/sli999/data/Tycho/dengue_laos.csv")
+    df = df[df['SourceName'] == 'Laos Dengue Surveillance System']
+    df = df[['Admin1ISO', 'PeriodStartDate', 'CountValue']]
+    df.columns = ['unique_id', 'ds', 'y']
+    df['ds'] = pd.to_datetime(df['ds'])
+    df = df.sort_values(by=['unique_id', 'ds'])
+    forecast_df = model.forecast_on_df(
+        inputs=df,
+        freq="D",  # daily frequency
+        value_name="y",
+        num_jobs=1,
+    )
+    forecast_df = forecast_df[['ds', 'unique_id', 'timesfm']]
+    forecast_df.columns = ['ds', 'unique_id', 'y']
+
+    print(forecast_df.head())
+
