@@ -1,20 +1,27 @@
 import pandas as pd
 import torch
+from torch.utils.data import Dataset, DataLoader
 from timesfm.src.timesfm.data_loader import TimeSeriesdata
 import numpy as np
+from datasets import load_dataset
 
 
 # function for specific dataset to download and preprocess data, returning path
 # BaseDataset class call the specific function decided by "name" argument
 class BaseDataset():
-    def __init__(self, name=None, datetime_col='ds', **kwargs):
+    def __init__(self, name=None, datetime_col='ds', path=None, **kwargs):
         """
         Args:
             name: str, dataset name
             target: np.ndarray, target data
         """
-        self.data_path = f"data/{name}/{name}.csv"
+        self.name = name
         self.datetime_col = datetime_col
+        if path:
+            self.data_path = path
+        else:
+            data_func = globals()[f"get_{self.name}_dataset"]
+            self.data_path = data_func()
 
     def __len__(self):
         return len(self.data)
@@ -26,12 +33,27 @@ class BaseDataset():
 
     def preprocess(self, **kwargs):
         raise NotImplementedError 
+    
+    def get_data_loader(self):
+        raise NotImplementedError
 
     def save(self, path):
-        pass
+        save_path = path    
+        torch.save(self.data, save_path)
 
-    def load(self, path):
-        pass
+
+def get_tycho_dataset():
+    """
+    Download and preprocess Tycho dataset
+    Returns:
+        data_path: str, path to the preprocessed data
+    """
+    repo_id = "username/tycho"
+    # download data
+    data = load_dataset(repo_id, cache_dir="data/Tycho")
+    data_path = "data/Tycho/Tycho.csv"
+
+    return data_path
 
 
 class TimesfmDataset(BaseDataset):
@@ -42,14 +64,15 @@ class TimesfmDataset(BaseDataset):
     input_ts: np.ndarray, historical time series data
     actual_ts: np.ndarray, actual time series data
     """
-    def __init__(self, name=None, datetime_col='ds', boundaries=(0, 0, 0), context_len=128, horizon_len=32, batch_size=16, freq='H', normalize=True, mode=None, **kwargs):
-        super().__init__(name=name, datetime_col=datetime_col)
-        self,context_len = context_len
+    def __init__(self, name=None, datetime_col='ds', path=None, boundaries=(0, 0, 0), context_len=128, horizon_len=32, batch_size=16, freq='h', normalize=True, mode='train', **kwargs):
+        super().__init__(name=name, datetime_col=datetime_col, path=path)
+        self.context_len = context_len
         self.horizon_len = horizon_len
         self.batch_size = batch_size
         self.freq = freq
         self.normalize = normalize
         self.data = pd.read_csv(self.data_path)
+        self.mode = mode
         if boundaries == (0, 0, 0):
         # Default boundaries: train 60%, val 20%, test 20%
             self.boundaries = [
@@ -77,22 +100,31 @@ class TimesfmDataset(BaseDataset):
             holiday=False,
             permute=False,
         )
-        if mode == 'train':
-            tfset = tfdtl.tf_dataset(mode='train', shift=1)
+        if self.mode == 'train':
+            tfset = tfdtl.torch_dataset(mode='train', shift=1)
         else:
-            tfset = tfdtl.tf_dataset(mode='test', shift=self.horizon_len)
-        self.data = list(tfset.as_numpy_iterator())
+            tfset = tfdtl.torch_dataset(mode='test', shift=self.horizon_len)
+        self.dataset = tfset
 
-    def preprocess(self, data):
+    def get_data_loader(self):
+        if self.mode == 'train':
+            return DataLoader(self.dataset, batch_size=self.batch_size, shuffle=True)
+        else:
+            return DataLoader(self.dataset, batch_size=self.batch_size, shuffle=False)
+        
+    def preprocess_train_batch(self, data):
         past_ts = data[0].reshape(self.batch_size * len(self.ts_cols), -1)
         actual_ts = data[3].reshape(self.batch_size * len(self.ts_cols), -1)
         return {"input_ts": past_ts, "actual_ts": actual_ts}
+    
+    def preprocess_eval_batch(self, data):
+        past_ts = data[0]
+        actual_ts = data[3]
+        return {"input_ts": past_ts, "actual_ts": actual_ts}
 
-    def save(self, path):
+    def preprocess(self, data):
         pass
 
-    def load(self, path):
-        pass
 
 
 class ChronosDataset(BaseDataset):

@@ -812,15 +812,18 @@ class PatchedDecoderFinetuneModel(nn.Module):
         input_padding = torch.zeros_like(input_ts)
 
         context_len = input_ts.shape[1]
-        input_patch_len = self.core_layer.patch_len
+        input_patch_len = self.core_layer.config.patch_len
         context_pad = ((context_len + input_patch_len - 1) // input_patch_len) * input_patch_len - context_len
 
         input_ts = F.pad(input_ts, (context_pad, 0))
         input_padding = F.pad(input_padding, (context_pad, 0), value=1)
         freq = torch.ones([input_ts.shape[0], 1], dtype=torch.int32) * self.freq
 
-        new_input_batch = {"input_ts": input_ts, "input_padding": input_padding, "freq": freq}
-        return self.core_layer(new_input_batch)
+        # Check device
+        input_padding = input_padding.to(input_ts.device)
+        freq = freq.to(input_ts.device)
+
+        return self.core_layer(input_ts, input_padding, freq)
 
     def _quantile_loss(self, pred, actual, quantile):
         """Calculates quantile loss."""
@@ -836,7 +839,7 @@ class PatchedDecoderFinetuneModel(nn.Module):
         pred_ts = output_ts[:, -1, :actual_ts.shape[1], :]
         loss = torch.square(pred_ts[:, :, 0] - actual_ts).mean()
 
-        for i, quantile in enumerate(self.core_layer.quantiles):
+        for i, quantile in enumerate(self.core_layer.config.quantiles):
             loss += self._quantile_loss(pred_ts[:, :, i + 1], actual_ts, quantile).mean()
 
         return loss
