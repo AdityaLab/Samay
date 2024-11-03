@@ -8,7 +8,9 @@ Contains repos for the projects. Each repo is a seperate folder.
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
-2. ```bash
+
+2. Install dependecies and package
+```bash
 uv sync
 ```
 
