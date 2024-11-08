@@ -1,6 +1,7 @@
 import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader
+from sklearn.preprocessing import StandardScaler
 from timesfm.src.timesfm.data_loader import TimeSeriesdata
 import numpy as np
 from datasets import load_dataset
@@ -9,7 +10,7 @@ from datasets import load_dataset
 # function for specific dataset to download and preprocess data, returning path
 # BaseDataset class call the specific function decided by "name" argument
 class BaseDataset():
-    def __init__(self, name=None, datetime_col='ds', path=None, **kwargs):
+    def __init__(self, name=None, datetime_col='ds', path=None, batchsize=8, mode='train', **kwargs):
         """
         Args:
             name: str, dataset name
@@ -17,6 +18,8 @@ class BaseDataset():
         """
         self.name = name
         self.datetime_col = datetime_col
+        self.batchsize = batchsize
+        self.mode = mode
         if path:
             self.data_path = path
         else:
@@ -56,6 +59,20 @@ def get_tycho_dataset():
     return data_path
 
 
+def get_ett_dataset():
+    """
+    Download and preprocess ETTh dataset
+    Returns:
+        data_path: str, path to the preprocessed data
+    """
+    repo_id = "username/ett"
+    # download data
+    data = load_dataset(repo_id, cache_dir="data/ETTh")
+    data_path = "data/ETTh/ETTh.csv"
+
+    return data_path
+
+
 class TimesfmDataset(BaseDataset):
     """
     Dataset class for TimesFM model
@@ -64,15 +81,13 @@ class TimesfmDataset(BaseDataset):
     input_ts: np.ndarray, historical time series data
     actual_ts: np.ndarray, actual time series data
     """
-    def __init__(self, name=None, datetime_col='ds', path=None, boundaries=(0, 0, 0), context_len=128, horizon_len=32, batch_size=16, freq='h', normalize=True, mode='train', **kwargs):
-        super().__init__(name=name, datetime_col=datetime_col, path=path)
+    def __init__(self, name=None, datetime_col='ds', path=None, batch_size=16, mode='train', boundaries=(0, 0, 0), context_len=128, horizon_len=32, freq='h', normalize=True, **kwargs):
+        super().__init__(name=name, datetime_col=datetime_col, path=path, batchsize=batch_size, mode=mode)
         self.context_len = context_len
         self.horizon_len = horizon_len
-        self.batch_size = batch_size
         self.freq = freq
         self.normalize = normalize
         self.data = pd.read_csv(self.data_path)
-        self.mode = mode
         if boundaries == (0, 0, 0):
         # Default boundaries: train 60%, val 20%, test 20%
             self.boundaries = [
@@ -143,3 +158,88 @@ class ChronosDataset(BaseDataset):
     def preprocess(self, data):
         # Todo: implement preprocess
         pass
+
+
+class MomentDataset(BaseDataset):
+    """
+    Dataset class for Moment model
+    Data Format:
+    Dict with keys:
+    input_ts: np.ndarray, historical time series data
+    actual_ts: np.ndarray, actual time series data
+    """
+    def __init__(self, name=None, datetime_col='ds', path=None, batchsize=8, mode='train', boundaries=(0, 0, 0), horizon=192, **kwargs):
+        super().__init__(name=name, datetime_col=datetime_col, path=path, batchsize=batchsize, mode=mode)
+        self.df = pd.read_csv(self.data_path)
+        self.seq_len = 512
+        self.forecast_horizon = horizon
+
+        if boundaries == (0, 0, 0):
+            self.boundaries = [
+                int(len(self.df) * 0.6),
+                int(len(self.df) * 0.8),
+                len(self.df) - 1,
+            ]
+        else:
+            self.boundaries = boundaries
+
+        self._read_data()
+
+    def _read_data(self):
+        self.scaler = StandardScaler()
+        self.n_channels = self.df.shape[1] - 1
+        self.df.drop(columns=[self.datetime_col], inplace=True)
+
+        self.df = self.df.infer_objects(copy=False).interpolate(method="cubic")
+
+        self.scaler.fit(self.df[slice(0, self.boundaries[0])].values)
+        self.df = self.scaler.transform(self.df.values)
+
+        if self.mode == "train":
+            self.data = self.df[slice(0, self.boundaries[0]), :]
+        elif self.mode == "test":
+            self.data = self.df[slice(self.boundaries[1], self.boundaries[2]), :]
+
+        self.length_timeseries = self.data.shape[0]
+
+    def __getitem__(self, index):
+        if self.length_timeseries < self.seq_len + self.forecast_horizon:
+            input_seq = self.data[:-self.forecast_horizon, :].T
+            forecast_seq = self.data[-self.forecast_horizon:, :].T
+            # Pad input sequence with zeros from the left
+            pad_len = self.seq_len - input_seq.shape[0]
+            input_seq = np.pad(
+                input_seq, ((pad_len, 0), (0, 0))
+            )
+            input_mask = np.concatenate(
+                (np.zeros(pad_len), np.ones(input_seq.shape[0] - pad_len))
+            )
+        else:
+            seq_start = self.seq_len * index
+            seq_end = seq_start + self.seq_len
+            input_mask = np.ones(self.seq_len)
+
+            pred_end = seq_end + self.forecast_horizon
+
+            if pred_end > self.length_timeseries:
+                pred_end = self.length_timeseries
+                seq_end = pred_end - self.forecast_horizon
+                seq_start = seq_end - self.seq_len
+
+            input_seq = self.data[seq_start:seq_end, :].T
+            forecast_seq = self.data[seq_end:pred_end, :].T
+
+        return input_seq, forecast_seq, input_mask
+
+    def __len__(self):
+        if self.length_timeseries < self.seq_len + self.forecast_horizon:
+            return 1
+        return (self.length_timeseries - self.seq_len - self.forecast_horizon) + 1
+    
+    def get_data_loader(self):
+        if self.mode == 'train':
+            return DataLoader(self, batch_size=self.batchsize, shuffle=True)
+        else:
+            return DataLoader(self, batch_size=self.batchsize, shuffle=False)
+
+        

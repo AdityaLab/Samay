@@ -1,5 +1,6 @@
 import timesfm.src.timesfm as tfm
 from timesfm.src.timesfm import pytorch_patched_decoder as ppd
+from moment.momentfm.models.moment import MOMENT, MOMENTPipeline
 import numpy as np
 import pandas as pd
 import torch
@@ -91,7 +92,7 @@ class TimesfmModel(Basemodel):
 
 class ChronosModel(Basemodel):
     def __init__(self, config=None, repo=None, hparams=None, ckpt=None, **kwargs):
-        super().__init__(name="chronos", config=config, repo=repo)
+        super().__init__(config=config, repo=repo)
         # Todo: load model
 
     def finetune(self, dataloader, **kwargs):
@@ -101,7 +102,73 @@ class ChronosModel(Basemodel):
     def forecast(self, input, **kwargs):
         # Todo: forecast
         pass
-    
+
+
+class MomentModel(Basemodel):
+    def __init__(self, config=None, repo=None):
+        super().__init__(config=config, repo=repo)
+        if not repo:
+            raise ValueError("Moment model requires a repository")
+        self.model = MOMENTPipeline.from_pretrained(
+            repo, 
+            model_kwargs=self.config
+        )
+        self.model.init()
+
+    def finetune(self, dataset, **kwargs):
+        # arguments
+        max_lr = 1e-4 if 'max_lr' not in kwargs else kwargs['max_lr']
+        max_epoch = 2 if 'max_epoch' not in kwargs else kwargs['max_epoch']
+        max_norm = 5.0 if 'max_norm' not in kwargs else kwargs['max_norm']
+
+        dataloader = dataset.get_data_loader()
+        criterion = torch.nn.MSELoss()
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=max_lr)
+        criterion.to(self.device)
+        scaler = torch.amp.GradScaler()
+
+        total_steps = len(dataloader) * max_epoch
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=max_lr, total_steps=total_steps, pct_start=0.3)
+        self.model.to(self.device)
+        self.model.train()
+
+        for epoch in range(max_epoch):
+            losses = []
+            for i, data in enumerate(dataloader):
+                # unpack the data
+                timeseries, forecast, input_mask = data
+                # Move the data to the GPU
+                timeseries = timeseries.float().to(self.device)
+                input_mask = input_mask.to(self.device)
+                forecast = forecast.float().to(self.device)
+
+                with torch.amp.autocast(device_type='cuda'):
+                    output = self.model(x_enc=timeseries, input_mask=input_mask)
+                
+                loss = criterion(output.forecast, forecast)
+
+                # Scales the loss for mixed precision training
+                scaler.scale(loss).backward()
+
+                # Clip gradients
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm)
+
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad(set_to_none=True)
+
+                losses.append(loss.item())
+
+            losses = np.array(losses)
+            average_loss = np.average(losses)
+            print(f"Epoch {epoch}: Train loss: {average_loss:.3f}")
+
+            scheduler.step()
+
+        return self.model
+
+
 
 
 if __name__ == "__main__":
