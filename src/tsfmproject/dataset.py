@@ -3,6 +3,11 @@ import pandas as pd
 import torch
 from datasets import load_dataset
 from torch.utils.data import DataLoader
+import os
+from typing import List, Tuple, Union
+from pathlib import Path
+from gluonts.dataset.arrow import ArrowWriter
+
 
 from .models.timesfm.timesfm.data_loader import TimeSeriesdata
 
@@ -155,19 +160,103 @@ class ChronosDataset(BaseDataset):
         self,
         name=None,
         datetime_col="ds",
+        path=None,
         boundaries=(0, 0, 0),
         context_len=128,
         horizon_len=32,
         batch_size=16,
-        freq="H",
+        freq="h",
         normalize=True,
-        mode=None,
+        mode="train",
         **kwargs,
     ):
-        super().__init__(name=name, datetime_col=datetime_col)
-        # Todo: implement ChronosDataset
-        pass
+        super().__init__(name=name, datetime_col=datetime_col, path=path)
+        self.context_len = context_len
+        self.horizon_len = horizon_len
+        self.batch_size = batch_size
+        self.freq = freq
+        self.normalize = normalize
+        self.data = pd.read_csv(self.data_path)
+        self.dataset = self.data
+        self.mode = mode
 
-    def preprocess(self, data):
-        # Todo: implement preprocess
-        pass
+    def process_covid_data(self):
+        us_columns = [col for col in self.data.columns if col.startswith('UNITED STATES')]
+        df_us = self.data[['ds'] + us_columns]
+
+        df_us.loc[:, 'ds'] = pd.to_datetime(df_us['ds'])
+
+        start_date = pd.Timestamp('2020-06-01')
+        end_date = pd.Timestamp('2021-07-31')
+
+        df_us = df_us[(df_us['ds'] >= start_date) & (df_us['ds'] <= end_date)]
+
+        df_us.set_index('ds', inplace=True)
+        df_us = df_us.resample('D').sum().reset_index()
+
+        processed_df = pd.DataFrame(columns=['unique_id', 'startdate', 'enddate', 'infected', 'dead'])
+
+        for col in us_columns:
+            if col.endswith('_Unspecified'):
+                region = col.replace('_Unspecified', '')
+                infected_series = df_us[['ds', col]].copy()
+                infected_series.columns = ['enddate', 'infected']
+                infected_series['unique_id'] = region
+                infected_series['startdate'] = df_us['ds'].min()
+
+                dead_col = region + '_Dead'
+                if dead_col in df_us.columns:
+                    infected_series['dead'] = df_us[dead_col].values
+
+                if infected_series['infected'].sum() > 0:
+                    infected_series['dead'] = infected_series['dead'].clip(lower=0)
+                    processed_df = pd.concat([processed_df, infected_series], ignore_index=True)
+        
+        infected_df = processed_df.pivot(index='enddate', columns='unique_id', values='infected')
+        dead_df = processed_df.pivot(index='enddate', columns='unique_id', values='dead')
+
+        infected_df.columns = [f"{col}_infected" for col in infected_df.columns]
+        dead_df.columns = [f"{col}_dead" for col in dead_df.columns]
+
+        self.dataset = pd.concat([infected_df, dead_df], axis=1)
+
+        
+
+    def pivot_timeseries(self, df: pd.DataFrame) -> pd.DataFrame:
+        infected_df = df.pivot(index='enddate', columns='unique_id', values='infected')
+        dead_df = df.pivot(index='enddate', columns='unique_id', values='dead')
+
+        infected_df.columns = [f"{col}_infected" for col in infected_df.columns]
+        dead_df.columns = [f"{col}_dead" for col in dead_df.columns]
+
+        pivoted_df = pd.concat([infected_df, dead_df], axis=1)
+
+        return pivoted_df
+
+    def convert_to_arrow(
+        self,
+        path: Union[str, Path],
+        time_series: Union[List[np.ndarray], np.ndarray],
+        start_date: str = None,
+        start_date_list: List[str] = None,
+        freq: str = "D",
+        compression: str = "lz4",
+    ):
+        assert isinstance(time_series, list) or (
+            isinstance(time_series, np.ndarray) and time_series.ndim == 2
+        )
+        if start_date is None and start_date_list is None:
+            raise ValueError("Either start_date or start_date_list must be provided.")
+        if start_date_list is not None:
+            dataset = [
+                {"start": start_date_list[i], "target": ts, "freq": freq} for i, ts in enumerate(time_series)
+            ]
+        else:
+            dataset = [
+                {"start": start_date, "target": ts, "freq": freq} for ts in time_series
+            ]
+
+        ArrowWriter(compression=compression).write_to_file(
+            dataset,
+            path=path,
+        )
