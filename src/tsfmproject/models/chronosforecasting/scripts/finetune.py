@@ -771,7 +771,7 @@ def main(
     model_type: str = "seq2seq",
     random_init: bool = False,
     tie_embeddings: bool = False,
-    output_dir: str = "./output/",
+    output_dir: str = "./src/tsfmproject/models/chronosforecasting/output/finetuning/",
     tf32: bool = True,
     torch_compile: bool = True,
     tokenizer_class: str = "MeanScaleUniformBins",

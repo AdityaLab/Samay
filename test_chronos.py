@@ -1,10 +1,11 @@
-from tsfmproject.model import TimesfmModel, TimesfmDataset, ChronosModel, ChronosDataset
+from src.tsfmproject.model import ChronosModel
+from src.tsfmproject.dataset import ChronosDataset
 import torch
 import numpy as np
 
 
 def main():
-    Chdataset = ChronosDataset(name="tycho", path='data/datasets/timesfm_covid_pivot.csv')
+    Chdataset = ChronosDataset(name="tycho", path='data/dataset/timesfm_covid_pivot.csv')
     Chdataset.process_covid_data()
     data = Chdataset.dataset
     data_loc = './src/tsfmproject/models/chronosforecasting/data/us_data.arrow'
@@ -20,8 +21,8 @@ def main():
 
     repo = "amazon/chronos-t5-small"
     
-    ch = ChronosModel(repo=repo)
-    ch.finetune(training_data_paths=data_loc, probability_list=[1])
+    ch = ChronosModel(config=None, repo=repo)
+    ch.finetune(training_data_paths=[data_loc], probability_list=[1])
 
 
 if __name__ == "__main__":

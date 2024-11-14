@@ -25,6 +25,7 @@ class Basemodel:
             repo: str, Huggingface model repository id
         """
         self.config = config
+        self.repo = repo
         least_used_gpu = get_least_used_gpu()
         if least_used_gpu >= 0:
             self.device = torch.device(f"cuda:{least_used_gpu}")
@@ -99,7 +100,7 @@ class TimesfmModel(Basemodel):
         return self.model.forecast(input)
 
 
-class ChronosModel:
+class ChronosModel(Basemodel):
     def __init__(self, config=None, repo=None):
         super().__init__(config=config, repo=repo)
         if self.config is None:
@@ -119,7 +120,7 @@ class ChronosModel:
             'model_type': 'seq2seq',
             'random_init': False,
             'tie_embeddings': False,
-            'output_dir': './output/',
+            'output_dir': './src/tsfmproject/models/chronosforecasting/output/finetuning/',
             'tf32': True,
             'torch_compile': True,
             'tokenizer_class': 'MeanScaleUniformBins',
