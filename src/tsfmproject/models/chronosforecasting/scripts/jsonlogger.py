@@ -15,11 +15,23 @@ class JsonFileHandler(logging.Handler):
             json.dump(self.logs, f, indent=4)
 
 class JsonFormatter(logging.Formatter):
+    def __init__(self, log_type):
+        super().__init__()
+        self.log_type = log_type
+
     def format(self, record):
-        log_record = {
-            'time': self.formatTime(record),
-            'name': record.name,
-            'level': record.levelname,
-            'message': record.getMessage(),
-        }
+        if self.log_type == "evaluation":
+            log_record = {
+                'column_id': record.msg.get('column_id'),
+                'num_samples': record.msg.get('num_samples'),
+                'predictions': record.msg.get('predictions'),
+                'eval_results': record.msg.get('eval_results')
+            }
+        else:
+            log_record = {
+                'time': self.formatTime(record, self.datefmt),
+                'name': record.name,
+                'level': record.levelname,
+                'message': record.getMessage()
+            }
         return json.dumps(log_record)
