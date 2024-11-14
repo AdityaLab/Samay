@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -5,6 +6,9 @@ from sklearn.preprocessing import StandardScaler
 from timesfm.src.timesfm.data_loader import TimeSeriesdata
 import numpy as np
 from datasets import load_dataset
+from torch.utils.data import DataLoader
+
+from .models.timesfm.timesfm.data_loader import TimeSeriesdata
 
 
 # function for specific dataset to download and preprocess data, returning path
@@ -35,13 +39,13 @@ class BaseDataset():
         return dt
 
     def preprocess(self, **kwargs):
-        raise NotImplementedError 
-    
+        raise NotImplementedError
+
     def get_data_loader(self):
         raise NotImplementedError
 
     def save(self, path):
-        save_path = path    
+        save_path = path
         torch.save(self.data, save_path)
 
 
@@ -81,7 +85,17 @@ class TimesfmDataset(BaseDataset):
     input_ts: np.ndarray, historical time series data
     actual_ts: np.ndarray, actual time series data
     """
-    def __init__(self, name=None, datetime_col='ds', path=None, batch_size=16, mode='train', boundaries=(0, 0, 0), context_len=128, horizon_len=32, freq='h', normalize=True, **kwargs):
+    def __init__(self, name=None,
+                datetime_col='ds',
+                path=None,
+                batch_size=16,
+                mode='train',
+                boundaries=(0, 0, 0),
+                context_len=128,
+                horizon_len=32, 
+                freq='h', 
+                normalize=True, 
+                **kwargs):
         super().__init__(name=name, datetime_col=datetime_col, path=path, batchsize=batch_size, mode=mode)
         self.context_len = context_len
         self.horizon_len = horizon_len
@@ -89,7 +103,7 @@ class TimesfmDataset(BaseDataset):
         self.normalize = normalize
         self.data = pd.read_csv(self.data_path)
         if boundaries == (0, 0, 0):
-        # Default boundaries: train 60%, val 20%, test 20%
+            # Default boundaries: train 60%, val 20%, test 20%
             self.boundaries = [
                 int(len(self.data) * 0.6),
                 int(len(self.data) * 0.8),
@@ -98,7 +112,8 @@ class TimesfmDataset(BaseDataset):
         else:
             self.boundaries = boundaries
         self.ts_cols = [col for col in self.data.columns if col != self.datetime_col]
-        tfdtl = TimeSeriesdata(data_path=self.data_path,
+        tfdtl = TimeSeriesdata(
+            data_path=self.data_path,
             datetime_col=self.datetime_col,
             num_cov_cols=None,
             cat_cov_cols=None,
@@ -115,23 +130,23 @@ class TimesfmDataset(BaseDataset):
             holiday=False,
             permute=False,
         )
-        if self.mode == 'train':
-            tfset = tfdtl.torch_dataset(mode='train', shift=1)
+        if self.mode == "train":
+            tfset = tfdtl.torch_dataset(mode="train", shift=1)
         else:
-            tfset = tfdtl.torch_dataset(mode='test', shift=self.horizon_len)
+            tfset = tfdtl.torch_dataset(mode="test", shift=self.horizon_len)
         self.dataset = tfset
 
     def get_data_loader(self):
-        if self.mode == 'train':
+        if self.mode == "train":
             return DataLoader(self.dataset, batch_size=self.batch_size, shuffle=True)
         else:
             return DataLoader(self.dataset, batch_size=self.batch_size, shuffle=False)
-        
+
     def preprocess_train_batch(self, data):
         past_ts = data[0].reshape(self.batch_size * len(self.ts_cols), -1)
         actual_ts = data[3].reshape(self.batch_size * len(self.ts_cols), -1)
         return {"input_ts": past_ts, "actual_ts": actual_ts}
-    
+
     def preprocess_eval_batch(self, data):
         past_ts = data[0]
         actual_ts = data[3]
@@ -139,7 +154,6 @@ class TimesfmDataset(BaseDataset):
 
     def preprocess(self, data):
         pass
-
 
 
 class ChronosDataset(BaseDataset):
@@ -150,7 +164,20 @@ class ChronosDataset(BaseDataset):
     input_ts: np.ndarray, historical time series data
     actual_ts: np.ndarray, actual time series data
     """
-    def __init__(self, name=None, datetime_col='ds', boundaries=(0, 0, 0), context_len=128, horizon_len=32, batch_size=16, freq='H', normalize=True, mode=None, **kwargs):
+
+    def __init__(
+        self,
+        name=None,
+        datetime_col="ds",
+        boundaries=(0, 0, 0),
+        context_len=128,
+        horizon_len=32,
+        batch_size=16,
+        freq="H",
+        normalize=True,
+        mode=None,
+        **kwargs,
+    ):
         super().__init__(name=name, datetime_col=datetime_col)
         # Todo: implement ChronosDataset
         pass
@@ -168,7 +195,14 @@ class MomentDataset(BaseDataset):
     input_ts: np.ndarray, historical time series data
     actual_ts: np.ndarray, actual time series data
     """
-    def __init__(self, name=None, datetime_col='ds', path=None, batchsize=8, mode='train', boundaries=(0, 0, 0), horizon=192, **kwargs):
+    def __init__(self, name=None, 
+                 datetime_col='ds', 
+                 path=None, 
+                 batchsize=8, 
+                 mode='train', 
+                 boundaries=(0, 0, 0), 
+                 horizon=192, 
+                 **kwargs):
         super().__init__(name=name, datetime_col=datetime_col, path=path, batchsize=batchsize, mode=mode)
         self.df = pd.read_csv(self.data_path)
         self.seq_len = 512

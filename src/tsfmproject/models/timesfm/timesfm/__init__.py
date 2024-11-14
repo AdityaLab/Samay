@@ -15,7 +15,11 @@
 # print(
 #     "TimesFM v1.2.0. See https://github.com/google-research/timesfm/blob/master/README.md for updated APIs."
 # )
-from timesfm.src.timesfm.timesfm_base import freq_map, TimesFmCheckpoint, TimesFmHparams, TimesFmBase
+from timesfm.src.timesfm.timesfm_base import (TimesFmCheckpoint, 
+                                              TimesFmHparams, 
+                                              TimesFmBase, 
+                                              freq_map, 
+                                              )
 # try:
 #   print("Loaded Jax TimesFM.")
 #   from timesfm.src.timesfm.timesfm_jax import TimesFmJax as TimesFm
