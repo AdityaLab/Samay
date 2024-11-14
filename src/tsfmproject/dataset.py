@@ -180,19 +180,19 @@ class ChronosDataset(BaseDataset):
         self.dataset = self.data
         self.mode = mode
 
-    def process_covid_data(self):
+    def process_covid_data(self, start_date="2020-06-01", end_date="2021-07-31", freq='D'):
         us_columns = [col for col in self.data.columns if col.startswith('UNITED STATES')]
         df_us = self.data[['ds'] + us_columns]
 
         df_us.loc[:, 'ds'] = pd.to_datetime(df_us['ds'])
 
-        start_date = pd.Timestamp('2020-06-01')
-        end_date = pd.Timestamp('2021-07-31')
+        start_date = pd.Timestamp(start_date)
+        end_date = pd.Timestamp(end_date)
 
         df_us = df_us[(df_us['ds'] >= start_date) & (df_us['ds'] <= end_date)]
 
         df_us.set_index('ds', inplace=True)
-        df_us = df_us.resample('D').sum().reset_index()
+        df_us = df_us.resample(freq).sum().reset_index()
 
         processed_df = pd.DataFrame(columns=['unique_id', 'startdate', 'enddate', 'infected', 'dead'])
 
