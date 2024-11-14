@@ -4,7 +4,7 @@ import warnings
 import torch
 import torch.nn as nn
 
-from moment.momentfm.utils.masking import Masking
+from ...utils.masking import Masking
 
 
 class PositionalEmbedding(nn.Module):

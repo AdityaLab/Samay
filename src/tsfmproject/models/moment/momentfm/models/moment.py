@@ -9,12 +9,12 @@ from huggingface_hub import PyTorchModelHubMixin
 from torch import nn
 from transformers import T5Config, T5EncoderModel, T5Model
 
-from moment.momentfm.common import TASKS
-from moment.momentfm.data.base import TimeseriesOutputs
-from moment.momentfm.models.layers.embed import PatchEmbedding, Patching
-from moment.momentfm.models.layers.revin import RevIN
-from moment.momentfm.utils.masking import Masking
-from moment.momentfm.utils.utils import (
+from ..common import TASKS
+from ..data.base import TimeseriesOutputs
+from .layers.embed import PatchEmbedding, Patching
+from .layers.revin import RevIN
+from ..utils.masking import Masking
+from ..utils.utils import (
     NamespaceWithDefaults,
     get_anomaly_criterion,
     get_huggingface_model_dimensions,

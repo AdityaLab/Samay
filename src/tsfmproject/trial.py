@@ -1,12 +1,12 @@
-from model import TimesfmModel, MomentModel
-from dataset import TimesfmDataset, MomentDataset
+from .model import TimesfmModel, MomentModel
+from .dataset import TimesfmDataset, MomentDataset
 import torch
 import numpy as np
 
 
 def main():
     # dataset = TimesfmDataset(name="tycho", path='/nethome/sli999/data/Tycho/timesfm_US_covid_pivot.csv')
-    dataset = MomentDataset(name="ett", datetime_col='date', path='/nethome/sli999/TSFMProject/moment/data/ETTh1.csv')
+    dataset = MomentDataset(name="ett", datetime_col='date', path='/nethome/sli999/TSFMProject/src/tsfmproject/models/moment/data/ETTh1.csv')
 
     # repo = "google/timesfm-1.0-200m-pytorch"
     repo = "AutonLab/MOMENT-1-large"

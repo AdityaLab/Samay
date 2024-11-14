@@ -1,12 +1,10 @@
-import timesfm.src.timesfm as tfm
-from timesfm.src.timesfm import pytorch_patched_decoder as ppd
-from moment.momentfm.models.moment import MOMENT, MOMENTPipeline
+from .models.timesfm import timesfm as tfm
+from .models.timesfm.timesfm import pytorch_patched_decoder as ppd
+from .models.moment.momentfm.models.moment import MOMENT, MOMENTPipeline
 import numpy as np
 import pandas as pd
 import torch
 
-from .models.timesfm import timesfm as tfm
-from .models.timesfm.timesfm import pytorch_patched_decoder as ppd
 from .utils import get_least_used_gpu
 
 
@@ -24,13 +22,13 @@ class Basemodel:
         else:
             self.device = torch.device("cpu")
 
-    def finetune(self, dataloader, **kwargs):
+    def finetune(self, dataset, **kwargs):
         raise NotImplementedError
 
     def forecast(self, input, **kwargs):
         raise NotImplementedError
 
-    def evaluate(self, X, y):
+    def evaluate(self, dateset, **kwargs):
         pass
 
     def save(self, path):
@@ -49,7 +47,7 @@ class TimesfmModel(Basemodel):
 
         self.model = tfm.TimesFm(hparams=hparams, checkpoint=ckpt)
 
-    def finetune(self, dataloader, **kwargs):
+    def finetune(self, dataset, freeze_transformer=True, **kwargs):
         """
         Args:
             dataloader: torch.utils.data.DataLoader, input data
@@ -58,26 +56,31 @@ class TimesfmModel(Basemodel):
         """
         core_layer_tpl = self.model._model
         # Todo: whether add freq
-        FinetuneModel = ppd.PatchedDecoderFinetuneModel(core_layer_tpl=core_layer_tpl)
-        FinetuneModel.to(self.device)
-        FinetuneModel.train()
-        dataloader = dataloader.get_data_loader()
-        optimizer = torch.optim.Adam(FinetuneModel.parameters(), lr=1e-4)
+        FinetunedModel = ppd.PatchedDecoderFinetuneModel(core_layer_tpl=core_layer_tpl)
+        if freeze_transformer:
+            for param in FinetunedModel.core_layer.stacked_transformer.parameters():
+                param.requires_grad = False
+        FinetunedModel.to(self.device)
+        FinetunedModel.train()
+        dataloader = dataset.get_data_loader()
+        optimizer = torch.optim.Adam(FinetunedModel.parameters(), lr=1e-4)
         epoch = 10 if "epoch" not in kwargs else kwargs["epoch"]
         avg_loss = 0
         for epoch in range(epoch):
             for i, (inputs) in enumerate(dataloader):
-                inputs = dataloader.preprocess_train_batch(inputs)
+                inputs = dataset.preprocess(inputs)
                 inputs = {k: v.to(self.device) for k, v in inputs.items()}
                 optimizer.zero_grad()
-                outputs = FinetuneModel.compute_predictions(inputs)
-                loss = FinetuneModel.compute_loss(outputs, inputs)
+                outputs = FinetunedModel.compute_predictions(inputs) # b, n, seq_len, 1+quantiles
+                loss = FinetunedModel.compute_loss(outputs, inputs)
                 loss.backward()
                 optimizer.step()
                 avg_loss += loss.item()
             avg_loss /= len(dataloader)
             print(f"Epoch {epoch}, Loss: {avg_loss}")
-        return FinetuneModel
+        
+        self.model._model = FinetunedModel.core_layer
+        return self.model
 
     def forecast(self, input, **kwargs):
         """
@@ -90,6 +93,38 @@ class TimesfmModel(Basemodel):
                 (# inputs,  # forecast horizon, 1 + # quantiles).
         """
         return self.model.forecast(input)
+    
+    def evaluate(self, dataset, **kwargs):
+        dataloader = dataset.get_data_loader()
+        trues, preds, histories, losses = [], [], [], []
+        with torch.no_grad():
+            for i, (inputs) in enumerate(dataloader):
+                inputs = dataset.preprocess(inputs)
+                input_ts = inputs["input_ts"]
+                input_ts = np.squeeze(input_ts)
+                actual_ts = inputs["actual_ts"].detach().cpu().numpy()
+                actual_ts = np.squeeze(actual_ts)
+
+                output, _ = self.model.forecast(input_ts)
+                output = output[:, 0:actual_ts.shape[1]]
+
+                loss = np.mean((output - actual_ts) ** 2)
+                losses.append(loss.item())
+                trues.append(actual_ts)
+                preds.append(output)
+                histories.append(input_ts)
+
+        losses = np.array(losses)
+        average_loss = np.average(losses)
+        trues = np.stack(trues, axis=0)
+        preds = np.stack(preds, axis=0)
+        histories = np.stack(histories, axis=0)
+
+        return average_loss, trues, preds, histories
+
+                
+        
+        
 
 
 class ChronosModel(Basemodel):
@@ -119,9 +154,9 @@ class MomentModel(Basemodel):
 
     def finetune(self, dataset, **kwargs):
         # arguments
-        max_lr = 1e-4 if 'max_lr' not in kwargs else kwargs['max_lr']
-        max_epoch = 2 if 'max_epoch' not in kwargs else kwargs['max_epoch']
-        max_norm = 5.0 if 'max_norm' not in kwargs else kwargs['max_norm']
+        max_lr = 1e-4 if 'lr' not in kwargs else kwargs['lr']
+        max_epoch = 2 if 'epoch' not in kwargs else kwargs['epoch']
+        max_norm = 5.0 if 'norm' not in kwargs else kwargs['norm']
 
         dataloader = dataset.get_data_loader()
         criterion = torch.nn.MSELoss()
@@ -169,6 +204,35 @@ class MomentModel(Basemodel):
             scheduler.step()
 
         return self.model
+    
+    def evaluate(self, dataset):
+        dataloader = dataset.get_data_loader()
+        criterion = torch.nn.MSELoss()
+        self.model.eval()
+        trues, preds, histories, losses = [], [], [], []
+        with torch.no_grad():
+            for i, data in enumerate(dataloader):
+                # unpack the data
+                timeseries, forecast, input_mask = data
+                # Move the data to the GPU
+                timeseries = timeseries.float().to(self.device)
+                input_mask = input_mask.to(self.device)
+                forecast = forecast.float().to(self.device)
+
+                output = self.model(x_enc=timeseries, input_mask=input_mask)
+                loss = criterion(output.forecast, forecast)
+                losses.append(loss.item())
+                trues.append(forecast.detach().cpu().numpy())
+                preds.append(output.forecast.detach().cpu().numpy())
+                histories.append(timeseries.detach().cpu().numpy())
+
+        losses = np.array(losses)
+        average_loss = np.average(losses)
+        trues = np.concatenate(trues, axis=0)
+        preds = np.concatenate(preds, axis=0)
+        histories = np.concatenate(histories, axis=0)
+
+        return average_loss, trues, preds, histories
 
 
 

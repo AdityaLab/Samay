@@ -3,7 +3,6 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader
 from sklearn.preprocessing import StandardScaler
-from timesfm.src.timesfm.data_loader import TimeSeriesdata
 import numpy as np
 from datasets import load_dataset
 from torch.utils.data import DataLoader
@@ -88,7 +87,7 @@ class TimesfmDataset(BaseDataset):
     def __init__(self, name=None,
                 datetime_col='ds',
                 path=None,
-                batch_size=16,
+                batchsize=16,
                 mode='train',
                 boundaries=(0, 0, 0),
                 context_len=128,
@@ -96,7 +95,7 @@ class TimesfmDataset(BaseDataset):
                 freq='h', 
                 normalize=True, 
                 **kwargs):
-        super().__init__(name=name, datetime_col=datetime_col, path=path, batchsize=batch_size, mode=mode)
+        super().__init__(name=name, datetime_col=datetime_col, path=path, batchsize=batchsize, mode=mode)
         self.context_len = context_len
         self.horizon_len = horizon_len
         self.freq = freq
@@ -123,7 +122,7 @@ class TimesfmDataset(BaseDataset):
             test_range=[self.boundaries[1], self.boundaries[2]],
             hist_len=self.context_len,
             pred_len=self.horizon_len,
-            batch_size=self.batch_size,
+            batch_size=self.batchsize,
             freq=self.freq,
             normalize=self.normalize,
             epoch_len=None,
@@ -138,13 +137,13 @@ class TimesfmDataset(BaseDataset):
 
     def get_data_loader(self):
         if self.mode == "train":
-            return DataLoader(self.dataset, batch_size=self.batch_size, shuffle=True)
+            return DataLoader(self.dataset, batch_size=self.batchsize, shuffle=True)
         else:
-            return DataLoader(self.dataset, batch_size=self.batch_size, shuffle=False)
+            return DataLoader(self.dataset, shuffle=False)
 
     def preprocess_train_batch(self, data):
-        past_ts = data[0].reshape(self.batch_size * len(self.ts_cols), -1)
-        actual_ts = data[3].reshape(self.batch_size * len(self.ts_cols), -1)
+        past_ts = data[0].reshape(self.batchsize * len(self.ts_cols), -1)
+        actual_ts = data[3].reshape(self.batchsize * len(self.ts_cols), -1)
         return {"input_ts": past_ts, "actual_ts": actual_ts}
 
     def preprocess_eval_batch(self, data):
@@ -153,7 +152,10 @@ class TimesfmDataset(BaseDataset):
         return {"input_ts": past_ts, "actual_ts": actual_ts}
 
     def preprocess(self, data):
-        pass
+        if self.mode == "train":
+            return self.preprocess_train_batch(data)
+        else:
+            return self.preprocess_eval_batch(data)
 
 
 class ChronosDataset(BaseDataset):
