@@ -2,20 +2,8 @@
 
 Contains repos for the projects. Each repo is a seperate folder.
 
-## Setup for development
+# Todo
 
-1. Install uv:
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
+## Moment
 
-2. Install dependecies and package
-```bash
-uv sync
-```
-
-To add any dependency: `uv add <dependency>` or `uv add <dependency> --dev`
-
-## Running programs
-
-You can run programs as `uv run python ....` or `uv run ipython` where the prefix `uv run` is required to run the program in the virtual environment.
+no zero-shot forecasting source code or checkpoints
