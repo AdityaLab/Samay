@@ -1,13 +1,20 @@
-from src.tsfmproject.model import ChronosModel
-from src.tsfmproject.dataset import ChronosDataset
+
 import torch
 import numpy as np
 import os
+import sys
 
+src_path = os.path.abspath(os.path.join("src"))
+if src_path not in sys.path:
+    sys.path.insert(0, src_path)
+
+from tsfmproject.model import ChronosModel
+from tsfmproject.dataset import ChronosDataset
+from tsfmproject.visualization import ForecastVisualization
 
 def main():
-    Chdataset = ChronosDataset(name="tycho", path='data/dataset/timesfm_covid_pivot.csv')
-    Chdataset.process_covid_data()
+    Chdataset = ChronosDataset(name="tycho", path='data/dataset/timesfm_covid_pivot.csv', datetime_col='ds', freq='D')
+    Chdataset.preprocess()
     data = Chdataset.dataset
     data_loc = './src/tsfmproject/models/chronosforecasting/data/us_data.arrow'
     offset = -60
@@ -50,8 +57,8 @@ def main():
     metrics = ['RMSE', 'MAPE']
     model = ch.load_model(model_dir, model_type)
     ch.result_logger.info(f"Model loaded from {model_dir}")
-    for column_id in column_list:
-        results[column_id] = ch.evaluate(data_train[column_id].values, data_test[column_id].values, abs(offset), column_id, metrics)
+    eval_results, trues, preds, histories = ch.evaluate(data_train, data_test, metrics)
+    visualization = ForecastVisualization(trues, preds, histories)
     
     # print(results)
 

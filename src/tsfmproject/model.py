@@ -1,8 +1,10 @@
 import pandas as pd
+import numpy as np
 import torch
 import logging
 import glob
 import os
+import sys
 from pathlib import Path
 from transformers import AutoModelForSeq2SeqLM, AutoModelForCausalLM
 from sklearn.metrics import mean_squared_error, mean_absolute_percentage_error
@@ -122,7 +124,7 @@ class ChronosModel(Basemodel):
                 'model_type': 'seq2seq',
                 'random_init': False,
                 'tie_embeddings': False,
-                'output_dir': './src/tsfmproject/models/chronosforecasting/output/finetuning/',
+                'output_dir': os.path.join(sys.path[0],'./tsfmproject/models/chronosforecasting/output/finetuning/'),
                 'tf32': True,
                 'torch_compile': True,
                 'tokenizer_class': 'MeanScaleUniformBins',
@@ -148,7 +150,7 @@ class ChronosModel(Basemodel):
         self.evaluation_logger = self.setup_logger("evaluation")
 
     def setup_logger(self, log_type):
-        log_dir = Path('./src/tsfmproject/models/chronosforecasting/output/') / log_type
+        log_dir = Path(os.path.join(sys.path[0],'./tsfmproject/models/chronosforecasting/output/') )/ log_type
         log_dir.mkdir(parents=True, exist_ok=True)
 
         log_files = sorted(log_dir.glob(f"{log_type}_*.json"), key=os.path.getmtime)
@@ -172,7 +174,7 @@ class ChronosModel(Basemodel):
         self.model = ChronosPipeline.from_pretrained(model_dir, model_type=model_type)
         self.result_logger.info(f"Model loaded from {model_dir}")
 
-    def get_latest_run_dir(self, base_dir="./src/tsfmproject/models/chronosforecasting/output/finetuning/"):
+    def get_latest_run_dir(self, base_dir=os.path.join(sys.path[0],"./tsfmproject/models/chronosforecasting/output/finetuning/")):
         run_dirs = glob.glob(os.path.join(base_dir, "run-*"))
         if not run_dirs:
             raise FileNotFoundError("No run directories found.")
@@ -197,30 +199,55 @@ class ChronosModel(Basemodel):
             **finetune_config
         )
 
-    def evaluate(self, fit_data, test_data, prediction_length, region_label="US", metrics = ['RMSE', 'MAPE']):
-        predictions = self.forecast(fit_data, prediction_length=prediction_length)
+    def evaluate(self, train_data, test_data, metrics=['RMSE', 'MAPE']):
+        """
+        Evaluate the model on the given train and test data.
 
-        results = {
-            'column_id': region_label,
-            'num_samples': len(predictions),
-            'predictions': predictions[0],
-            'eval_results': {}
-        }
+        Args:
+            train_data (pd.DataFrame): The training data.
+            test_data (pd.DataFrame): The testing data.
+            offset (int): The offset for slicing the data.
+            metrics (list): List of metrics to evaluate.
 
-        if 'RMSE' in metrics:
-            results['eval_results']['RMSE'] = mean_squared_error(test_data, predictions[0], squared=False)
-        if 'MAPE' in metrics:
-            results['eval_results']['MAPE'] = mean_absolute_percentage_error(test_data, predictions[0])
+        Returns:
+            dict: Evaluation results for each column.
+            dict: True values for each column.
+            dict: Predictions for each column.
+            dict: Histories for each column.
+        """
+        eval_results = []
+        true_values = []
+        predictions = []
+        histories = []
 
-        self.evaluation_logger.info(results)
+        for column_id in train_data.columns:
+            train_values = train_data[column_id].values
+            test_values = np.array(test_data[column_id].values)
 
-        return results
+            # Assuming the model has a predict method
+            pred_values = self.forecast(train_values, prediction_length=len(test_values))
+
+            eval = {}
+            for metric in metrics:
+                if metric == 'RMSE':
+                    eval[metric] = np.mean(np.power(test_values - pred_values, 2))
+                elif metric == 'MAPE':
+                    eval[metric] = mean_absolute_percentage_error(test_values, pred_values)
+                else:
+                    raise ValueError(f"Unsupported metric: {metric}")
+            eval_results.append(eval)
+            true_values.append(test_values)
+            predictions.append(pred_values)
+            histories.append(train_values)
+
+        return eval_results, true_values, predictions, histories
 
     def forecast(self, input, **kwargs):
         context = torch.tensor(input)
         prediction_length = kwargs.get('prediction_length', 64)
-        predictions = self.model.predict(context, prediction_length=prediction_length).squeeze().tolist()
-        return predictions
+        predictions = self.model.predict(context, prediction_length=prediction_length).squeeze()
+        pred_values = np.quantile(predictions.numpy(), [0.5], axis=0).squeeze()
+        return pred_values
 
 
 if __name__ == "__main__":

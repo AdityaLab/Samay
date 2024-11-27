@@ -24,7 +24,7 @@ import pandas as pd
 
 from utilsforecast.processing import make_future_dataframe
 
-from timesfm.src.timesfm import xreg_lib
+from . import xreg_lib
 
 Category = xreg_lib.Category
 XRegMode = xreg_lib.XRegMode

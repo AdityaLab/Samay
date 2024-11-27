@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import torch
 from datasets import load_dataset
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 import os
 from typing import List, Tuple, Union
 from pathlib import Path
@@ -14,8 +14,8 @@ from .models.timesfm.timesfm.data_loader import TimeSeriesdata
 
 # function for specific dataset to download and preprocess data, returning path
 # BaseDataset class call the specific function decided by "name" argument
-class BaseDataset:
-    def __init__(self, name=None, datetime_col="ds", path=None, **kwargs):
+class BaseDataset():
+    def __init__(self, name=None, datetime_col=None, path=None, batchsize=8, mode='train', **kwargs):
         """
         Args:
             name: str, dataset name
@@ -23,6 +23,8 @@ class BaseDataset:
         """
         self.name = name
         self.datetime_col = datetime_col
+        self.batchsize = batchsize
+        self.mode = mode
         if path:
             self.data_path = path
         else:
@@ -62,6 +64,46 @@ def get_tycho_dataset():
     return data_path
 
 
+def get_ett_dataset():
+    """
+    Download and preprocess ETTh dataset
+    Returns:
+        data_path: str, path to the preprocessed data
+    """
+    repo_id = "username/ett"
+    # download data
+    data = load_dataset(repo_id, cache_dir="data/ETTh")
+    data_path = "data/ETTh/ETTh.csv"
+
+    return data_path
+
+def get_ecg5000_dataset():
+    """
+    Download and preprocess ECG5000 dataset
+    Returns:
+        data_path: str, path to the preprocessed data
+    """
+    repo_id = "username/ECG5000"
+    # download data
+    data = load_dataset(repo_id, cache_dir="data/ECG5000")
+    data_path = "data/ECG5000/ECG5000.csv"
+
+    return data_path
+
+def get_tiltABP2_dataset():
+    """
+    Download and preprocess tiltABP2 dataset
+    Returns:
+        data_path: str, path to the preprocessed data
+    """
+    repo_id = "username/tiltABP2"
+    # download data
+    data = load_dataset(repo_id, cache_dir="data/tiltABP2")
+    data_path = "data/tiltABP2/tiltABP2.csv"
+
+    return data_path
+
+
 class TimesfmDataset(BaseDataset):
     """
     Dataset class for TimesFM model
@@ -70,29 +112,23 @@ class TimesfmDataset(BaseDataset):
     input_ts: np.ndarray, historical time series data
     actual_ts: np.ndarray, actual time series data
     """
-
-    def __init__(
-        self,
-        name=None,
-        datetime_col="ds",
-        path=None,
-        boundaries=(0, 0, 0),
-        context_len=128,
-        horizon_len=32,
-        batch_size=16,
-        freq="h",
-        normalize=True,
-        mode="train",
-        **kwargs,
-    ):
-        super().__init__(name=name, datetime_col=datetime_col, path=path)
+    def __init__(self, name=None,
+                datetime_col='ds',
+                path=None,
+                batchsize=16,
+                mode='train',
+                boundaries=(0, 0, 0),
+                context_len=128,
+                horizon_len=32, 
+                freq='h', 
+                normalize=True, 
+                **kwargs):
+        super().__init__(name=name, datetime_col=datetime_col, path=path, batchsize=batchsize, mode=mode)
         self.context_len = context_len
         self.horizon_len = horizon_len
-        self.batch_size = batch_size
         self.freq = freq
         self.normalize = normalize
         self.data = pd.read_csv(self.data_path)
-        self.mode = mode
         if boundaries == (0, 0, 0):
             # Default boundaries: train 60%, val 20%, test 20%
             self.boundaries = [
@@ -114,7 +150,7 @@ class TimesfmDataset(BaseDataset):
             test_range=[self.boundaries[1], self.boundaries[2]],
             hist_len=self.context_len,
             pred_len=self.horizon_len,
-            batch_size=self.batch_size,
+            batch_size=self.batchsize,
             freq=self.freq,
             normalize=self.normalize,
             epoch_len=None,
@@ -129,13 +165,13 @@ class TimesfmDataset(BaseDataset):
 
     def get_data_loader(self):
         if self.mode == "train":
-            return DataLoader(self.dataset, batch_size=self.batch_size, shuffle=True)
+            return DataLoader(self.dataset, batch_size=self.batchsize, shuffle=True)
         else:
-            return DataLoader(self.dataset, batch_size=self.batch_size, shuffle=False)
+            return DataLoader(self.dataset, shuffle=False)
 
     def preprocess_train_batch(self, data):
-        past_ts = data[0].reshape(self.batch_size * len(self.ts_cols), -1)
-        actual_ts = data[3].reshape(self.batch_size * len(self.ts_cols), -1)
+        past_ts = data[0].reshape(self.batchsize * len(self.ts_cols), -1)
+        actual_ts = data[3].reshape(self.batchsize * len(self.ts_cols), -1)
         return {"input_ts": past_ts, "actual_ts": actual_ts}
 
     def preprocess_eval_batch(self, data):
@@ -144,7 +180,10 @@ class TimesfmDataset(BaseDataset):
         return {"input_ts": past_ts, "actual_ts": actual_ts}
 
     def preprocess(self, data):
-        pass
+        if self.mode == "train":
+            return self.preprocess_train_batch(data)
+        else:
+            return self.preprocess_eval_batch(data)
 
 
 class ChronosDataset(BaseDataset):
@@ -166,7 +205,7 @@ class ChronosDataset(BaseDataset):
         horizon_len=32,
         batch_size=16,
         freq="h",
-        normalize=True,
+        normalize=False,
         mode="train",
         **kwargs,
     ):
@@ -177,8 +216,49 @@ class ChronosDataset(BaseDataset):
         self.freq = freq
         self.normalize = normalize
         self.data = pd.read_csv(self.data_path)
+        # set datetime_col as index and remove it from columns
+        self.data[self.datetime_col] = pd.to_datetime(self.data[self.datetime_col])
+        self.data = self.data.set_index(self.datetime_col)
+
         self.dataset = self.data
         self.mode = mode
+
+    def preprocess(self, start_date=None, end_date=None, freq=None, operation='sum', **kwargs):
+        """
+        Preprocess the dataset by clipping based on start_date and end_date,
+        and resampling the data based on frequency change.
+
+        Args:
+            start_date (str): The start date to clip the dataset.
+            end_date (str): The end date to clip the dataset.
+            freq (str): The frequency to resample the dataset.
+        """
+        if start_date:
+            start_date = pd.Timestamp(start_date)
+            self.dataset = self.dataset[self.dataset.index >= start_date]
+        
+        if end_date:
+            end_date = pd.Timestamp(end_date)
+            self.dataset = self.dataset[self.dataset.index <= end_date]
+        
+        if freq:
+            if operation == 'sum':
+                self.dataset = self.dataset.resample(freq).sum()
+            elif operation == 'mean':
+                self.dataset = self.dataset.resample(freq).mean()
+            elif operation == 'pad':
+                self.dataset = self.dataset.resample(freq).pad()
+            elif operation == 'ffill':
+                self.dataset = self.dataset.resample(freq).ffill()
+            elif operation == 'bfill':
+                self.dataset = self.dataset.resample(freq).bfill()
+            else:
+                raise ValueError(f"Unsupported resampling operation: {operation}")
+
+        # Normalize the dataset if required
+        if self.normalize:
+            self.dataset = (self.dataset - self.dataset.mean()) / self.dataset.std()
+        
 
     def process_covid_data(self, start_date="2020-06-01", end_date="2021-07-31", freq='D'):
         us_columns = [col for col in self.data.columns if col.startswith('UNITED STATES')]
