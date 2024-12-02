@@ -16,7 +16,7 @@ More models will be added soon...
 You can add the package to your project by running the following command:
 
 ```bash
-pip install https://github.com/AdityaLab/Samay.git
+pip install git+https://github.com/AdityaLab/Samay.git
 ```
 
 ### Development workflow
