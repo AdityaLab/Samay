@@ -75,7 +75,7 @@ avg_loss, trues, preds, histories = tfm.evaluate(val_dataset)
 
 ### Support
 
-Tested on Python 3.12, 3.13 on Linux and MacOS. Supports NVIDIA GPUs.
+Tested on Python 3.12, 3.13 on Linux (CPU + GPU) and MacOS (CPU). Supports NVIDIA GPUs.
 Support for Windows and Apple Silicon GPUs is planned.
 
 ## Citation
