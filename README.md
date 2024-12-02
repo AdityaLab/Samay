@@ -1,4 +1,4 @@
-# Time-series Foundational Models Library Monorepo
+# Samay: Time-series Foundational Models Library
 
 Package for training and evaluating time-series foundational models.
 
