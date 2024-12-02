@@ -3,10 +3,13 @@
 Package for training and evaluating time-series foundational models.
 
 Current repository contains the following models:
-1. TimesFM
-2. MOMENT
-3. LPTM
-4. Chronos
+
+1. [TimesFM](https://arxiv.org/html/2310.10688v2)
+2. [MOMENT](https://arxiv.org/abs/2402.03885)
+3. [LPTM](https://openreview.net/forum?id=vMMzjCr5Zj)
+4. [Chronos](https://arxiv.org/abs/2403.07815)
+
+More models will be added soon...
 
 ## Installation
 
