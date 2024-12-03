@@ -4,7 +4,7 @@ Package for training and evaluating time-series foundational models.
 
 Current repository contains the following models:
 
-1. [LPTM](https://openreview.net/forum?id=vMMzjCr5Zj)
+1. [LPTM](https://arxiv.org/abs/2311.11413)
 2. [MOMENT](https://arxiv.org/abs/2402.03885)
 3. [TimesFM](https://arxiv.org/html/2310.10688v2)
 4. [Chronos](https://arxiv.org/abs/2403.07815)
