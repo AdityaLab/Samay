@@ -1,6 +1,6 @@
 from .models.timesfm import timesfm as tfm
 from .models.timesfm.timesfm import pytorch_patched_decoder as ppd
-from .models.moment.momentfm.models.moment import MOMENT, MOMENTPipeline
+from .models.moment.momentfm.models.moment import MOMENTPipeline
 import numpy as np
 import pandas as pd
 import torch
