@@ -15,13 +15,13 @@ class ForecastVisualization(BaseVisualization):
         super().__init__(trues, preds)
         self.histories = np.array(histories)
 
-    def plot(self, channel_idx=1, time_index=None):
+    def plot(self, channel_idx=1, time_index=1):
         #channel_idx = np.random.randint(0, self.trues.shape[1])
-        time_index = np.random.randint(0, self.trues.shape[0])
+        # time_index = np.random.randint(0, self.trues.shape[0])
 
-        history = self.histories[channel_idx, :]
-        true = self.trues[channel_idx, :]
-        pred = self.preds[channel_idx,1, :]
+        history = self.histories[time_index, channel_idx, :]
+        true = self.trues[time_index, channel_idx, :]
+        pred = self.preds[time_index, channel_idx, :]
 
         plt.figure(figsize=(12, 4))
         plt.plot(range(len(history)), history, label='History', c='darkblue')

@@ -145,9 +145,9 @@ class ChronosModel(Basemodel):
                 'seed': 42
             }
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = None
         self.result_logger = self.setup_logger("results")
         self.evaluation_logger = self.setup_logger("evaluation")
+        self.model = self.load_model(model_dir=repo)
 
     def setup_logger(self, log_type):
         log_dir = Path(os.path.join(sys.path[0],'./tsfmproject/models/chronosforecasting/output/') )/ log_type
@@ -181,7 +181,12 @@ class ChronosModel(Basemodel):
         latest_run_dir = max(run_dirs, key=os.path.getmtime)
         return latest_run_dir
 
-    def finetune(self, training_data_paths, probability_list=None, **kwargs):
+    def finetune(self, dataset, probability_list=None, **kwargs):
+        
+        # Convert dataset to arrow format
+        data_loc = os.path.join(sys.path[0],'./tsfmproject/models/chronosforecasting/data/data.arrow')
+        time_series_list = [np.array(dataset.dataset[column].values) for column in dataset.ts_cols]
+        dataset.convert_to_arrow(data_loc, time_series=time_series_list, start_date=dataset.dataset.index[0])
         # Use default probability_list if None
         if probability_list is None:
             probability_list = [1]
@@ -193,13 +198,13 @@ class ChronosModel(Basemodel):
 
         # Call the train_model function with the combined configuration
         finetune.train_model(
-            training_data_paths=training_data_paths,
+            training_data_paths=[data_loc],
             probability=probability_list,
             logger=self.result_logger,
             **finetune_config
         )
 
-    def evaluate(self, train_data, test_data, metrics=['RMSE', 'MAPE']):
+    def evaluate(self, dataset, metrics=['MSE'], **kwargs):
         """
         Evaluate the model on the given train and test data.
 
@@ -215,39 +220,59 @@ class ChronosModel(Basemodel):
             dict: Predictions for each column.
             dict: Histories for each column.
         """
-        eval_results = []
+        data = dataset.dataset
+        context_len = dataset.context_len
+        horizon_len = dataset.horizon_len
+        total_len = context_len + horizon_len
+        stride = kwargs.get('stride', 1)
+        quantiles = kwargs.get('quantiles', [0.1, 0.5, 0.9])
+
+        eval_windows = []
         true_values = []
         predictions = []
         histories = []
+        means = []
 
-        for column_id in train_data.columns:
-            train_values = train_data[column_id].values
-            test_values = np.array(test_data[column_id].values)
-
-            # Assuming the model has a predict method
-            pred_values = self.forecast(train_values, prediction_length=len(test_values))
-
+        for start in range(0, len(data) - total_len + 1, stride):
+            window = data[start:start + total_len]
+            context = window[:context_len].to_numpy().transpose()
+            actual = window[context_len:].to_numpy().transpose()
+            input = [torch.tensor(ts) for i, ts in enumerate(context)]
+            prediction = self.model.predict(context=input, prediction_length=horizon_len, num_samples=20)
+            pred_median = np.median(prediction, axis=1)
+            pred_values = np.quantile(prediction, q=[0.1,0.5,0.9], axis=1).transpose(1,0,2)
+            pred_values = pred_values.squeeze()
+            # pred_values = pred_values.permute(0, 2, 1).numpy().squeeze()
+            # mean1 = mean.numpy().squeeze()
             eval = {}
             for metric in metrics:
-                if metric == 'RMSE':
-                    eval[metric] = np.mean(np.power(test_values - pred_values, 2))
+                if metric == 'MSE':
+                    # flatten the arrays
+
+                    eval[metric] = np.mean((actual - pred_median) ** 2).item()
                 elif metric == 'MAPE':
-                    eval[metric] = mean_absolute_percentage_error(test_values, pred_values)
+                    eval[metric] = mean_absolute_percentage_error(actual.flatten(), mean1.flatten())
                 else:
                     raise ValueError(f"Unsupported metric: {metric}")
-            eval_results.append(eval)
-            true_values.append(test_values)
+            eval_windows.append(eval)
+            true_values.append(actual)
             predictions.append(pred_values)
-            histories.append(train_values)
+            histories.append(context)
 
-        return eval_results, true_values, predictions, histories
+        # get average evaluation results from all windows
+        eval_results = {}
+        for metric in metrics:
+            eval_results[metric] = np.mean([eval[metric] for eval in eval_windows])
+
+
+        return np.array(eval_results), np.array(true_values), np.array(predictions), np.array(histories)
 
     def forecast(self, input, **kwargs):
         context = torch.tensor(input)
         prediction_length = kwargs.get('prediction_length', 64)
         predictions = self.model.predict(context, prediction_length=prediction_length).squeeze()
-        pred_values = np.quantile(predictions.numpy(), [0.5], axis=0).squeeze()
-        return pred_values
+        pred_values = np.quantile(predictions.numpy(), [0.5, 0.1, 0.9], axis=-2)
+        return predictions, pred_values
 
 
 if __name__ == "__main__":

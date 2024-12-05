@@ -204,7 +204,10 @@ class ChronosDataset(BaseDataset):
         context_len=128,
         horizon_len=32,
         batch_size=16,
-        freq="h",
+        freq = None,
+        start_date=None,
+        end_date=None,
+        operation='sum',
         normalize=False,
         mode="train",
         **kwargs,
@@ -213,15 +216,59 @@ class ChronosDataset(BaseDataset):
         self.context_len = context_len
         self.horizon_len = horizon_len
         self.batch_size = batch_size
-        self.freq = freq
+        self.mode = mode
         self.normalize = normalize
         self.data = pd.read_csv(self.data_path)
         # set datetime_col as index and remove it from columns
         self.data[self.datetime_col] = pd.to_datetime(self.data[self.datetime_col])
         self.data = self.data.set_index(self.datetime_col)
-
+        self.freq = pd.infer_freq(self.data.index)
         self.dataset = self.data
-        self.mode = mode
+
+        if start_date:
+            start_date = pd.Timestamp(start_date)
+            self.dataset = self.dataset[self.dataset.index >= start_date]
+        
+        if end_date:
+            end_date = pd.Timestamp(end_date)
+            self.dataset = self.dataset[self.dataset.index <= end_date]
+        
+        if freq:
+            if operation == 'sum':
+                self.dataset = self.dataset.resample(freq).sum()
+            elif operation == 'mean':
+                self.dataset = self.dataset.resample(freq).mean()
+            elif operation == 'pad':
+                self.dataset = self.dataset.resample(freq).pad()
+            elif operation == 'ffill':
+                self.dataset = self.dataset.resample(freq).ffill()
+            elif operation == 'bfill':
+                self.dataset = self.dataset.resample(freq).bfill()
+            else:
+                raise ValueError(f"Unsupported resampling operation: {operation}")
+
+        # Normalize the dataset if required
+        if self.normalize:
+            self.dataset = (self.dataset - self.dataset.mean()) / self.dataset.std()
+
+        if boundaries == (0, 0, 0):
+            # Default boundaries: train 60%, val 20%, test 20%
+            self.boundaries = [
+                int(len(self.data)-self.context_len-self.horizon_len*20),
+                int(len(self.data)-self.context_len-self.horizon_len*20),
+                len(self.data) - 1,
+            ]
+        else:
+            self.boundaries = boundaries
+        # split the data based on boundaries 
+        if self.mode == "train":
+            self.dataset = self.dataset.iloc[: self.boundaries[0]]
+        elif self.mode == "val":
+            self.dataset = self.dataset.iloc[self.boundaries[0] : self.boundaries[1]]
+        else:
+            self.dataset = self.dataset.iloc[self.boundaries[1] :]
+        self.ts_cols = [col for col in self.dataset.columns if col != self.datetime_col]
+
 
     def preprocess(self, start_date=None, end_date=None, freq=None, operation='sum', **kwargs):
         """
@@ -335,7 +382,8 @@ class ChronosDataset(BaseDataset):
             dataset = [
                 {"start": start_date, "target": ts, "freq": freq} for ts in time_series
             ]
-
+        # create the directory and files mentioned in path, if not present
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         ArrowWriter(compression=compression).write_to_file(
             dataset,
             path=path,
