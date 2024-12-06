@@ -76,8 +76,8 @@ avg_loss, trues, preds, histories = lptm.evaluate(val_dataset)
 #### Loading  Model
 
 ```python
-from tsfmproject.model import TimesfmModel
-from tsfmproject.dataset import TimesfmDataset
+from samay.model import TimesfmModel
+from samay.dataset import TimesfmDataset
 
 repo = "google/timesfm-1.0-200m-pytorch"
 config = {
