@@ -15,13 +15,13 @@ More models will be added soon...
 
 You can add the package to your project by running the following command:
 
-To run LPTM run the following command:
+To use LPTM run the following command:
 
 ```bash
 pip install git+https://github.com/AdityaLab/Samay.git@LPTM
 ```
 
-To install all the models run:
+To use all the other models run:
 ```bash
 pip install git+https://github.com/AdityaLab/Samay.git
 ```
@@ -36,9 +36,6 @@ To develop on the project, you can clone the repository and install the package 
 
 ## Clone repo
 git clone https://github.com/AdityaLab/Samay.git
-
-## To develop on the LPTM model
-git checkout LPTM
 
 ## Install uv
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -89,6 +86,8 @@ avg_loss, trues, preds, histories = lptm.evaluate(val_dataset)
 ```
 
 ### TimesFM
+
+Install the package: `pip install git+https://github.com/AdityaLab/Samay.git`.
 
 #### Loading  Model
 
