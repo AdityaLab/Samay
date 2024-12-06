@@ -15,15 +15,30 @@ More models will be added soon...
 
 You can add the package to your project by running the following command:
 
+To run LPTM run the following command:
+
+```bash
+pip install git+https://github.com/AdityaLab/Samay.git@LPTM
+```
+
+To install all the models run:
 ```bash
 pip install git+https://github.com/AdityaLab/Samay.git
 ```
+
+
 
 ### Development workflow
 
 To develop on the project, you can clone the repository and install the package in editable mode:
 
 ```bash
+
+## Clone repo
+git clone https://github.com/AdityaLab/Samay.git
+
+## To develop on the LPTM model
+git checkout LPTM
 
 ## Install uv
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -37,6 +52,8 @@ uv sync
 ## Usage Example
 
 ### LPTM
+
+_Note:_ Use the LPTM branch for best results `pip install git+https://github.com/AdityaLab/Samay.git@LPTM`.
 
 #### Loading  Model
 
