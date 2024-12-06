@@ -1,0 +1,15 @@
+[package]
+name = "selection"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ndarray = { version = "0.16.1", features = [
+    "rayon",
+    "blas",
+    "matrixmultiply-threading",
+] }
+pyo3 = { version = "0.23", features = ["extension-module"] }
+
+[lib]
+crate-type = ["cdylib"]

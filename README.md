@@ -29,7 +29,7 @@ To develop on the project, you can clone the repository and install the package 
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ## Install dependencies
-uv sync
+uv sync --reinstall
 ```
 
 
