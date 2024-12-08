@@ -17,6 +17,53 @@ from .models.moment.momentfm.utils.data import load_from_tsfile
 from .utils import get_multivariate_data
 
 
+class TimeSeriesDataset(Dataset):
+    """
+    A PyTorch Dataset for sliding window extraction from time series data.
+    """
+    def __init__(self, data, context_len, horizon_len, stride=-1):
+        """
+        Initialize the dataset with sliding window logic.
+
+        Args:
+            data (pd.DataFrame): The input time series data.
+            context_len (int): Length of the context window.
+            horizon_len (int): Length of the forecast horizon.
+            stride (int): Step size for sliding the window.
+        """
+        self.data = data
+        self.context_len = context_len
+        self.horizon_len = horizon_len
+        self.total_len = context_len + horizon_len
+        self.stride = stride
+
+        if(self.stride == -1):
+            self.stride = self.horizon_len
+
+        # Generate start indices for sliding windows
+        self.indices = [
+            start
+            for start in range(0, len(data) - self.total_len + 1, self.stride)
+        ]
+
+    def __len__(self):
+        return len(self.indices)
+
+    def __getitem__(self, idx):
+        start = self.indices[idx]
+        window = self.data.iloc[start : start + self.total_len]
+
+        # Extract context and actuals, and convert to Torch tensors
+        context = torch.tensor(window.iloc[: self.context_len].to_numpy().transpose(), dtype=torch.float32)
+        actual = torch.tensor(window.iloc[self.context_len :].to_numpy().transpose(), dtype=torch.float32)
+        start_date = window.index[0]
+
+        # # Return the input as a list of tensors (one for each column)
+        # input_list = [context[i] for i in range(context.shape[0])]
+
+        return context, actual
+
+
 # function for specific dataset to download and preprocess data, returning path
 # BaseDataset class call the specific function decided by "name" argument
 class BaseDataset():
@@ -259,8 +306,8 @@ class ChronosDataset(BaseDataset):
         if boundaries == (0, 0, 0):
             # Default boundaries: train 60%, val 20%, test 20%
             self.boundaries = [
-                int(len(self.data)-self.context_len-self.horizon_len*20),
-                int(len(self.data)-self.context_len-self.horizon_len*20),
+                int(len(self.data)*0.8),
+                int(len(self.data)*0.8),
                 len(self.data) - 1,
             ]
         else:
@@ -268,11 +315,18 @@ class ChronosDataset(BaseDataset):
         # split the data based on boundaries 
         if self.mode == "train":
             self.dataset = self.dataset.iloc[: self.boundaries[0]]
+            self.ts_cols = [col for col in self.dataset.columns if col != self.datetime_col]
         elif self.mode == "val":
             self.dataset = self.dataset.iloc[self.boundaries[0] : self.boundaries[1]]
+            self.ts_cols = [col for col in self.dataset.columns if col != self.datetime_col]
         else:
             self.dataset = self.dataset.iloc[self.boundaries[1] :]
-        self.ts_cols = [col for col in self.dataset.columns if col != self.datetime_col]
+            self.ts_cols = [col for col in self.dataset.columns if col != self.datetime_col]
+            self.dataset = TimeSeriesDataset(self.dataset, self.context_len, self.horizon_len)
+        
+
+        
+
 
 
     def preprocess(self, start_date=None, end_date=None, freq=None, operation='sum', **kwargs):

@@ -9,6 +9,7 @@ from pathlib import Path
 from transformers import AutoModelForSeq2SeqLM, AutoModelForCausalLM
 from sklearn.metrics import mean_squared_error, mean_absolute_percentage_error
 from .models.chronosforecasting.scripts.jsonlogger import JsonFileHandler, JsonFormatter
+from torch.utils.data import Dataset, DataLoader
 
 
 from .models.timesfm import timesfm as tfm
@@ -188,6 +189,7 @@ class ChronosModel(Basemodel):
                 'seed': 42
             }
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # self.device = torch.device("cuda")
         self.result_logger = self.setup_logger("results")
         self.evaluation_logger = self.setup_logger("evaluation")
         self.model = self.load_model(model_dir=repo)
@@ -214,7 +216,7 @@ class ChronosModel(Basemodel):
         return logger
 
     def load_model(self, model_dir: str = "amazon/chronos-t5-small", model_type: str = "seq2seq"):
-        self.model = ChronosPipeline.from_pretrained(model_dir, model_type=model_type)
+        self.model = ChronosPipeline.from_pretrained(model_dir, model_type=model_type, device_map=self.device, torch_dtype=torch.float32)
         self.result_logger.info(f"Model loaded from {model_dir}")
 
     def get_latest_run_dir(self, base_dir=os.path.join(sys.path[0],"./tsfmproject/models/chronosforecasting/output/finetuning/")):
@@ -228,6 +230,7 @@ class ChronosModel(Basemodel):
         
         # Convert dataset to arrow format
         data_loc = os.path.join(sys.path[0],'./tsfmproject/models/chronosforecasting/data/data.arrow')
+        
         time_series_list = [np.array(dataset.dataset[column].values) for column in dataset.ts_cols]
         dataset.convert_to_arrow(data_loc, time_series=time_series_list, start_date=dataset.dataset.index[0])
         # Use default probability_list if None
@@ -263,52 +266,69 @@ class ChronosModel(Basemodel):
             dict: Predictions for each column.
             dict: Histories for each column.
         """
-        data = dataset.dataset
+        # data = dataset.dataset
         context_len = dataset.context_len
         horizon_len = dataset.horizon_len
         total_len = context_len + horizon_len
-        stride = kwargs.get('stride', 1)
         quantiles = kwargs.get('quantiles', [0.1, 0.5, 0.9])
+        batch_size = kwargs.get('batch_size', 8)
+
+        dataloader = DataLoader(dataset.dataset, batch_size=batch_size, shuffle=False, num_workers=0)
 
         eval_windows = []
         true_values = []
         predictions = []
         histories = []
-        means = []
 
-        for start in range(0, len(data) - total_len + 1, stride):
-            window = data[start:start + total_len]
-            context = window[:context_len].to_numpy().transpose()
-            actual = window[context_len:].to_numpy().transpose()
-            input = [torch.tensor(ts) for i, ts in enumerate(context)]
-            prediction = self.model.predict(context=input, prediction_length=horizon_len, num_samples=20)
-            pred_median = np.median(prediction, axis=1)
-            pred_values = np.quantile(prediction, q=[0.1,0.5,0.9], axis=1).transpose(1,0,2)
-            pred_values = pred_values.squeeze()
-            # pred_values = pred_values.permute(0, 2, 1).numpy().squeeze()
-            # mean1 = mean.numpy().squeeze()
-            eval = {}
-            for metric in metrics:
-                if metric == 'MSE':
-                    # flatten the arrays
+        # self.model.to('cuda')  # Move model to GPU
+        with torch.no_grad():
+            for i, (history, actual) in enumerate(dataloader):
+                # context = context.to('cuda')
+                # actual = actual.to('cuda')
+                actual = actual.squeeze().numpy()
+                history = history.squeeze()
+                history_stack = history.reshape(-1, context_len)
+                prediction = self.model.predict(context=history_stack, prediction_length=64, num_samples=20)
+                pred_median = np.median(prediction, axis=1)
+                pred_median = pred_median.reshape(actual.shape[0], actual.shape[1], horizon_len)
 
-                    eval[metric] = np.mean((actual - pred_median) ** 2).item()
-                elif metric == 'MAPE':
-                    eval[metric] = mean_absolute_percentage_error(actual.flatten(), mean1.flatten())
-                else:
-                    raise ValueError(f"Unsupported metric: {metric}")
-            eval_windows.append(eval)
-            true_values.append(actual)
-            predictions.append(pred_values)
-            histories.append(context)
+            
+                # pred_median = np.median(prediction, axis=1)
+                # pred_values = np.quantile(prediction, q=quantiles, axis=1).transpose(1, 0, 2).squeeze()
+                # pred_values = prediction.squeeze().numpy()
+
+                # eval = {}
+                # for metric in metrics:
+                #     if metric == 'MSE':
+                #         eval[metric] = np.mean((actual - pred_values) ** 2)
+                #     elif metric == 'MAPE':
+                #         eval[metric] = mean_absolute_percentage_error(actual.cpu().numpy().flatten(), pred_median.flatten())
+                #     else:
+                #         raise ValueError(f"Unsupported metric: {metric}")
+                
+                # eval_windows.append(eval)
+                true_values.append(actual)
+                predictions.append(pred_median)
+                histories.append(history)
+
+        true_values = np.concatenate(true_values, axis=0)
+        predictions = np.concatenate(predictions, axis=0)
+        histories = np.concatenate(histories, axis=0)
 
         # get average evaluation results from all windows
         eval_results = {}
         for metric in metrics:
-            eval_results[metric] = np.mean([eval[metric] for eval in eval_windows])
+            if metric == 'MSE':
+                eval_results[metric] = np.mean((true_values - predictions) ** 2)
+            elif metric == 'MASE':
+                forecast_error = np.mean(np.abs(true_values - predictions))
+                naive_error = np.mean(np.abs(true_values[:,:,1: ] - true_values[:, :, :-1]))
+                if naive_error == 0:
+                    eval_results[metric] = np.nan
+                else:
+                    eval_results[metric] = forecast_error / naive_error
 
-
-        return np.array(eval_results), np.array(true_values), np.array(predictions), np.array(histories)
+        return eval_results, true_values, predictions, histories
 
     def forecast(self, input, **kwargs):
         context = torch.tensor(input)
