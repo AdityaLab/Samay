@@ -363,10 +363,10 @@ class ChronosModel(Basemodel):
             for i, (history, actual) in enumerate(dataloader):
                 # context = context.to('cuda')
                 # actual = actual.to('cuda')
-                actual = actual.squeeze().numpy()
+                actual = actual.squeeze().detach().cpu().numpy()
                 history = history.squeeze()
                 history_stack = history.reshape(-1, context_len)
-                prediction = self.model.predict(context=history_stack, prediction_length=64, num_samples=20)
+                prediction = self.model.predict(context=history_stack, prediction_length=64, num_samples=20).detach().cpu().numpy()
                 pred_median = np.median(prediction, axis=1)
                 pred_median = pred_median.reshape(actual.shape[0], actual.shape[1], horizon_len)
 
@@ -375,17 +375,17 @@ class ChronosModel(Basemodel):
                 # pred_values = np.quantile(prediction, q=quantiles, axis=1).transpose(1, 0, 2).squeeze()
                 # pred_values = prediction.squeeze().numpy()
 
-                eval = {}
+                eval = []
                 for metric in metrics:
                     if metric == 'MSE':
-                        eval[metric] = np.mean((actual - pred_median) ** 2)
+                        eval.append(np.mean((actual - pred_median) ** 2))
                     elif metric == 'MASE':
                         forecast_error = np.mean(np.abs(actual - pred_median))
                         naive_error = np.mean(np.abs(actual[:, :, 1:] - actual[:, :, :-1]))
                         if naive_error == 0:
-                            eval[metric] = np.inf
+                            eval.append(np.inf)
                         else:
-                            eval[metric] = forecast_error / naive_error
+                            eval.append(forecast_error / naive_error)
 
                     else:
                         raise ValueError(f"Unsupported metric: {metric}")
@@ -400,9 +400,10 @@ class ChronosModel(Basemodel):
         histories = np.concatenate(histories, axis=0)
 
         # get average evaluation results from all windows
+        eval_windows = np.mean(np.array(eval_windows), axis=0)
         eval_results = {}
-        for metric in metrics:
-            eval_results[metric] = np.mean([eval[metric] for eval in eval_windows])
+        for i in range(len(metrics)):
+            eval_results[metrics[i]] = eval_windows[i]
 
         return eval_results, true_values, predictions, histories
 
