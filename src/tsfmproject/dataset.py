@@ -10,12 +10,58 @@ import os
 from typing import List, Tuple, Union
 from pathlib import Path
 from gluonts.dataset.arrow import ArrowWriter
+from sklearn.preprocessing import StandardScaler
 
 
 from .models.timesfm.timesfm.data_loader import TimeSeriesdata
 from .models.moment.momentfm.utils.data import load_from_tsfile
 from .utils import get_multivariate_data
 
+
+# class TimeSeriesDataset(Dataset):
+#     """
+#     A PyTorch Dataset for sliding window extraction from time series data.
+#     """
+#     def __init__(self, data, boundary1, boundary2, context_len, horizon_len, stride=-1):
+#         """
+#         Initialize the dataset with sliding window logic.
+
+#         Args:
+#             data (pd.DataFrame): The input time series data.
+#             context_len (int): Length of the context window.
+#             horizon_len (int): Length of the forecast horizon.
+#             stride (int): Step size for sliding the window.
+#         """
+#         self.data = data
+#         self.context_len = context_len
+#         self.horizon_len = horizon_len
+#         self.total_len = context_len + horizon_len
+#         self.stride = stride
+
+#         if(self.stride == -1):
+#             self.stride = self.horizon_len
+
+#         # Generate start indices for sliding windows
+#         self.indices = [
+#             start
+#             for start in range(boundary1, boundary2 - self.total_len + 1, self.stride)
+#         ]
+
+#     def __len__(self):
+#         return len(self.indices)
+
+#     def __getitem__(self, idx):
+#         start = self.indices[idx]
+#         window = self.data.iloc[ : start + self.total_len]
+
+#         # Extract context and actuals, and convert to Torch tensors
+#         context = torch.tensor(window.iloc[: -self.horizon_len].to_numpy().transpose(), dtype=torch.float32)
+#         actual = torch.tensor(window.iloc[-self.horizon_len :].to_numpy().transpose(), dtype=torch.float32)
+
+#         # # Return the input as a list of tensors (one for each column)
+#         # input_list = [context[i] for i in range(context.shape[0])]
+
+#         return context, actual
 
 class TimeSeriesDataset(Dataset):
     """
@@ -260,7 +306,7 @@ class ChronosDataset(BaseDataset):
         start_date=None,
         end_date=None,
         operation='sum',
-        normalize=False,
+        normalize=True,
         mode="train",
         **kwargs,
     ):
@@ -276,6 +322,7 @@ class ChronosDataset(BaseDataset):
         self.data = self.data.set_index(self.datetime_col)
         self.freq = pd.infer_freq(self.data.index)
         self.dataset = self.data
+        self.ts_cols = [col for col in self.dataset.columns if col != self.datetime_col]
 
         if start_date:
             start_date = pd.Timestamp(start_date)
@@ -284,7 +331,10 @@ class ChronosDataset(BaseDataset):
         if end_date:
             end_date = pd.Timestamp(end_date)
             self.dataset = self.dataset[self.dataset.index <= end_date]
-        
+
+        self.dataset = self.dataset.ffill()
+        self.dataset = self.dataset.bfill()
+
         if freq:
             if operation == 'sum':
                 self.dataset = self.dataset.resample(freq).sum()
@@ -299,10 +349,6 @@ class ChronosDataset(BaseDataset):
             else:
                 raise ValueError(f"Unsupported resampling operation: {operation}")
 
-        # Normalize the dataset if required
-        if self.normalize:
-            self.dataset = (self.dataset - self.dataset.mean()) / self.dataset.std()
-
         if boundaries == (0, 0, 0):
             # Default boundaries: train 60%, val 20%, test 20%
             self.boundaries = [
@@ -312,16 +358,22 @@ class ChronosDataset(BaseDataset):
             ]
         else:
             self.boundaries = boundaries
+
+        # Normalize the dataset if required
+        if self.normalize:
+            scaler = StandardScaler()
+            scalar = scaler.fit(self.dataset.iloc[: self.boundaries[1]])
+            data_normalized = scaler.transform(self.dataset)
+            self.dataset = pd.DataFrame(data_normalized, columns=self.dataset.columns, index=self.dataset.index)
+
+        
         # split the data based on boundaries 
         if self.mode == "train":
             self.dataset = self.dataset.iloc[: self.boundaries[0]]
-            self.ts_cols = [col for col in self.dataset.columns if col != self.datetime_col]
         elif self.mode == "val":
             self.dataset = self.dataset.iloc[self.boundaries[0] : self.boundaries[1]]
-            self.ts_cols = [col for col in self.dataset.columns if col != self.datetime_col]
         else:
-            self.dataset = self.dataset.iloc[self.boundaries[1] :]
-            self.ts_cols = [col for col in self.dataset.columns if col != self.datetime_col]
+            self.dataset = self.dataset.iloc[self.boundaries[1] : ]
             self.dataset = TimeSeriesDataset(self.dataset, self.context_len, self.horizon_len)
         
 

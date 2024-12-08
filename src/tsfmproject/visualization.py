@@ -3,9 +3,9 @@ import matplotlib.pyplot as plt
 
 class BaseVisualization:
     def __init__(self, trues, preds, labels=None):
-        self.trues = np.array(trues)
-        self.preds = np.array(preds)
-        self.labels = np.array(labels) if labels is not None else None
+        self.trues = trues
+        self.preds = preds
+        # self.labels = np.array(labels) if labels is not None else None
 
     def plot(self):
         raise NotImplementedError("Subclasses should implement this method")
@@ -13,19 +13,19 @@ class BaseVisualization:
 class ForecastVisualization(BaseVisualization):
     def __init__(self, trues, preds, histories):
         super().__init__(trues, preds)
-        self.histories = np.array(histories)
+        self.histories = histories
 
     def plot(self, channel_idx=1, time_index=1):
         #channel_idx = np.random.randint(0, self.trues.shape[1])
         # time_index = np.random.randint(0, self.trues.shape[0])
 
-        history = self.histories[time_index, channel_idx, :]
-        true = self.trues[time_index, channel_idx, :]
-        pred = self.preds[time_index, channel_idx, :]
+        history = self.histories[time_index][channel_idx, :]
+        true = self.trues[time_index][channel_idx, :]
+        pred = self.preds[time_index][channel_idx, :]
 
         plt.figure(figsize=(12, 4))
-        plt.plot(range(len(history)), history, label='History', c='darkblue')
-        offset = len(history)
+        plt.plot(range(len(history[-2*len(pred):])), history[-2*len(pred):], label='History', c='darkblue')
+        offset = len(history[-2*len(pred):]) 
         plt.plot(range(offset, offset + len(true)), true, label='Ground Truth', color='darkblue', linestyle='--', alpha=0.5)
         plt.plot(range(offset, offset + len(pred)), pred, label='Forecast', color='red', linestyle='--')
         plt.title(f"Forecast Visualization -- (idx={time_index}, channel={channel_idx})", fontsize=18)

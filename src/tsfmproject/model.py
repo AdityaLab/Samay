@@ -250,6 +250,84 @@ class ChronosModel(Basemodel):
             **finetune_config
         )
 
+    # def evaluate(self, dataset, metrics=['MSE'], **kwargs):
+    #     """
+    #     Evaluate the model on the given train and test data.
+
+    #     Args:
+    #         train_data (pd.DataFrame): The training data.
+    #         test_data (pd.DataFrame): The testing data.
+    #         offset (int): The offset for slicing the data.
+    #         metrics (list): List of metrics to evaluate.
+
+    #     Returns:
+    #         dict: Evaluation results for each column.
+    #         dict: True values for each column.
+    #         dict: Predictions for each column.
+    #         dict: Histories for each column.
+    #     """
+    #     # data = dataset.dataset
+    #     context_len = dataset.context_len
+    #     horizon_len = dataset.horizon_len
+    #     total_len = context_len + horizon_len
+    #     quantiles = kwargs.get('quantiles', [0.1, 0.5, 0.9])
+    #     batch_size = kwargs.get('batch_size', 8)
+
+    #     dataloader = DataLoader(dataset.dataset, batch_size=1, shuffle=False, num_workers=0)
+
+    #     eval_windows = []
+    #     true_values = []
+    #     predictions = []
+    #     histories = []
+
+    #     # self.model.to('cuda')  # Move model to GPU
+    #     with torch.no_grad():
+    #         for i, (history, actual) in enumerate(dataloader):
+    #             # context = context.to('cuda')
+    #             # actual = actual.to('cuda')
+    #             actual = actual.squeeze().numpy()
+    #             history = history.squeeze()
+    #             history_stack = [history[i] for i in range(history.shape[0])]
+    #             prediction = self.model.predict(context=history_stack, prediction_length=horizon_len, num_samples=20)
+    #             pred_median = np.median(prediction, axis=1)
+    #             # pred_median = pred_median.reshape(actual.shape[0], actual.shape[1], horizon_len)
+
+            
+    #             # pred_median = np.median(prediction, axis=1)
+    #             # pred_values = np.quantile(prediction, q=quantiles, axis=1).transpose(1, 0, 2).squeeze()
+    #             # pred_values = prediction.squeeze().numpy()
+
+    #             eval = {}
+    #             for metric in metrics:
+    #                 if metric == 'MSE':
+    #                     eval[metric] = np.mean((actual - pred_median) ** 2)
+    #                 elif metric == 'MASE':
+    #                     forecast_error = np.mean(np.abs(actual - pred_median))
+    #                     naive_error = np.mean(np.abs(actual[:, 1:] - actual[:, :-1]))
+    #                     if naive_error == 0:
+    #                         eval[metric] = np.inf
+    #                     else:
+    #                         eval[metric] = forecast_error / naive_error
+
+    #                 else:
+    #                     raise ValueError(f"Unsupported metric: {metric}")
+                
+    #             eval_windows.append(eval)
+    #             true_values.append(actual)
+    #             predictions.append(pred_median)
+    #             histories.append(history)
+
+    #     # true_values = np.concatenate(true_values, axis=0)
+    #     # predictions = np.concatenate(predictions, axis=0)
+    #     # histories = np.concatenate(histories, axis=0)
+
+    #     # get average evaluation results from all windows
+    #     eval_results = {}
+    #     for metric in metrics:
+    #         eval_results[metric] = np.average([eval[metric] for eval in eval_windows])
+
+    #     return eval_results, true_values, predictions, histories
+
     def evaluate(self, dataset, metrics=['MSE'], **kwargs):
         """
         Evaluate the model on the given train and test data.
@@ -297,16 +375,22 @@ class ChronosModel(Basemodel):
                 # pred_values = np.quantile(prediction, q=quantiles, axis=1).transpose(1, 0, 2).squeeze()
                 # pred_values = prediction.squeeze().numpy()
 
-                # eval = {}
-                # for metric in metrics:
-                #     if metric == 'MSE':
-                #         eval[metric] = np.mean((actual - pred_values) ** 2)
-                #     elif metric == 'MAPE':
-                #         eval[metric] = mean_absolute_percentage_error(actual.cpu().numpy().flatten(), pred_median.flatten())
-                #     else:
-                #         raise ValueError(f"Unsupported metric: {metric}")
+                eval = {}
+                for metric in metrics:
+                    if metric == 'MSE':
+                        eval[metric] = np.mean((actual - pred_median) ** 2)
+                    elif metric == 'MASE':
+                        forecast_error = np.mean(np.abs(actual - pred_median))
+                        naive_error = np.mean(np.abs(actual[:, :, 1:] - actual[:, :, :-1]))
+                        if naive_error == 0:
+                            eval[metric] = np.inf
+                        else:
+                            eval[metric] = forecast_error / naive_error
+
+                    else:
+                        raise ValueError(f"Unsupported metric: {metric}")
                 
-                # eval_windows.append(eval)
+                eval_windows.append(eval)
                 true_values.append(actual)
                 predictions.append(pred_median)
                 histories.append(history)
@@ -318,15 +402,7 @@ class ChronosModel(Basemodel):
         # get average evaluation results from all windows
         eval_results = {}
         for metric in metrics:
-            if metric == 'MSE':
-                eval_results[metric] = np.mean((true_values - predictions) ** 2)
-            elif metric == 'MASE':
-                forecast_error = np.mean(np.abs(true_values - predictions))
-                naive_error = np.mean(np.abs(true_values[:,:,1: ] - true_values[:, :, :-1]))
-                if naive_error == 0:
-                    eval_results[metric] = np.nan
-                else:
-                    eval_results[metric] = forecast_error / naive_error
+            eval_results[metric] = np.mean([eval[metric] for eval in eval_windows])
 
         return eval_results, true_values, predictions, histories
 
