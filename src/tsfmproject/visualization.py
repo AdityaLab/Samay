@@ -15,20 +15,24 @@ class ForecastVisualization(BaseVisualization):
         super().__init__(trues, preds)
         self.histories = histories
 
-    def plot(self, channel_idx=1, time_index=1):
+    def plot(self, channel_idx=1, time_idx=1, crop_history=False):
         #channel_idx = np.random.randint(0, self.trues.shape[1])
-        # time_index = np.random.randint(0, self.trues.shape[0])
+        # time_idx = np.random.randint(0, self.trues.shape[0])
 
-        history = self.histories[time_index][channel_idx, :]
-        true = self.trues[time_index][channel_idx, :]
-        pred = self.preds[time_index][channel_idx, :]
+        history = self.histories[time_idx][channel_idx, :]
+        true = self.trues[time_idx][channel_idx, :]
+        pred = self.preds[time_idx][channel_idx, :]
+
+        if crop_history:
+            length_to_crop = 3*len(true) if len(history) > 3*len(true) else len(history)
+            history = history[-length_to_crop:]
 
         plt.figure(figsize=(12, 4))
-        plt.plot(range(len(history[-2*len(pred):])), history[-2*len(pred):], label='History', c='darkblue')
-        offset = len(history[-2*len(pred):]) 
+        plt.plot(range(len(history[])), history[], label='History', c='darkblue')
+        offset = len(history[]) 
         plt.plot(range(offset, offset + len(true)), true, label='Ground Truth', color='darkblue', linestyle='--', alpha=0.5)
         plt.plot(range(offset, offset + len(pred)), pred, label='Forecast', color='red', linestyle='--')
-        plt.title(f"Forecast Visualization -- (idx={time_index}, channel={channel_idx})", fontsize=18)
+        plt.title(f"Forecast Visualization -- (idx={time_idx}, channel={channel_idx})", fontsize=18)
         plt.xlabel('Time', fontsize=14)
         plt.ylabel('Value', fontsize=14)
         plt.legend(fontsize=14)
