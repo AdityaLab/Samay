@@ -18,7 +18,7 @@ from .models.timesfm.timesfm.data_loader import TimeSeriesdata
 from .models.moment.momentfm.utils.data import load_from_tsfile
 from .utils import get_multivariate_data
 
-
+# for full length history/ context data wrapping
 # class TimeSeriesDataset(Dataset):
 #     """
 #     A PyTorch Dataset for sliding window extraction from time series data.
@@ -64,6 +64,7 @@ from .utils import get_multivariate_data
 
 #         return context, actual
 
+# for fixed length history/ context data wrapping
 class TimeSeriesDataset(Dataset):
     """
     A PyTorch Dataset for sliding window extraction from time series data.
