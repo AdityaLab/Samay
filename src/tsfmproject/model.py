@@ -11,17 +11,18 @@ from sklearn.metrics import mean_squared_error, mean_absolute_percentage_error
 from .models.chronosforecasting.scripts.jsonlogger import JsonFileHandler, JsonFormatter
 from torch.utils.data import Dataset, DataLoader
 
+from typing import Generator, Optional
+
 
 from .models.timesfm import timesfm as tfm
 from .models.timesfm.timesfm import pytorch_patched_decoder as ppd
 from .models.chronosforecasting.chronos import chronos
 from chronos import ChronosPipeline
 from .models.chronosforecasting.scripts import finetune
+from .models.uni2ts.model.moirai import MoiraiForecast, MoiraiModule
+from .models.uni2ts.model.moirai_moe import MoiraiMoEForecast, MoiraiMoEModule
 
 from .models.moment.momentfm.models.moment import MOMENT, MOMENTPipeline
-import numpy as np
-import pandas as pd
-import torch
 
 from .utils import get_least_used_gpu
 
@@ -363,8 +364,8 @@ class ChronosModel(Basemodel):
             for i, (history, actual) in enumerate(dataloader):
                 # context = context.to('cuda')
                 # actual = actual.to('cuda')
-                actual = actual.squeeze().detach().cpu().numpy()
-                history = history.squeeze()
+                actual = actual.detach().cpu().numpy()
+                history = history
                 history_stack = history.reshape(-1, context_len)
                 prediction = self.model.predict(context=history_stack, prediction_length=64, num_samples=20).detach().cpu().numpy()
                 pred_median = np.median(prediction, axis=1)
@@ -626,6 +627,108 @@ class MomentModel(Basemodel):
             labels = np.concatenate(labels)
             return accuracy, embeddings, labels
 
+
+class MoiraiTSModel(Basemodel):
+    def __init__(self, config=None, repo=None, model_type="moirai-moe", model_size="small", **kwargs):
+        super().__init__(config=config, repo=repo)
+        self.horizon_len = config.get("horizon_len", 32)
+        self.context_len = config.get("context_len", 128)
+        self.patch_size = config.get("patch_size", 16)
+        self.batch_size = config.get("batch_size", 16)
+        self.num_samples = config.get("num_samples", 100)
+        self.target_dim = config.get("target_dim", 1)
+        self.feat_dynamic_real_dim = config.get("feat_dynamic_real_dim", 0)
+        self.past_feat_dynamic_real_dim = config.get("past_feat_dynamic_real_dim", 0)
+        self.model_type = model_type
+
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        if model_type == "moirai":
+            if self.repo is None:
+                self.repo = f"Salesforce/moirai-1.1-R-{model_size}"
+            self.model = MoiraiForecast(
+                module=MoiraiModule.from_pretrained(self.repo),
+                prediction_length=self.horizon_len,
+                context_length=self.context_len,
+                patch_size=self.patch_size,
+                num_samples=self.num_samples,
+                target_dim=self.target_dim,
+                feat_dynamic_real_dim=self.feat_dynamic_real_dim,
+                past_feat_dynamic_real_dim=self.past_feat_dynamic_real_dim,
+            )
+        elif model_type == "moirai-moe":
+            if self.repo is None:
+                self.repo = f"Salesforce/moirai-moe-1.0-R-{model_size}"
+            self.model = MoiraiMoEForecast(
+                module=MoiraiMoEModule.from_pretrained(self.repo),
+                prediction_length=self.horizon_len,
+                context_length=self.context_len,
+                patch_size=self.patch_size,
+                num_samples=self.num_samples,
+                target_dim=self.target_dim,
+                feat_dynamic_real_dim=self.feat_dynamic_real_dim,
+                past_feat_dynamic_real_dim=self.past_feat_dynamic_real_dim,
+            )
+        self.model.to(self.device)
+
+
+    def evaluate(self, dataset, metrics=['MSE'], **kwargs):
+        predictor = self.model.create_predictor(batch_size=self.batch_size)
+        forecast = predictor.predict(dataset.dataset.input)
+
+        input_it = iter(dataset.dataset.input)
+        label_it = iter(dataset.dataset.label)
+        forecast_it = iter(forecast)
+
+        trues = {}
+        preds = {}
+        histories = {}
+        eval_windows = []
+        
+        with torch.no_grad():
+            for (input, label, forecast) in zip(input_it, label_it, forecast_it):
+                true_values = np.array(label["target"])
+                past_values = np.array(input["target"])
+                pred_values = np.median(forecast.samples, axis=0)
+                length = len(past_values)
+                
+                eval = []
+                for metric in metrics:
+                    if metric == 'MSE':
+                        eval.append(mean_squared_error(true_values, pred_values))
+                    elif metric == 'MASE':
+                        forecast_error = np.mean(np.abs(true_values - pred_values))
+                        naive_error = np.mean(np.abs(true_values[1:] - true_values[:-1]))
+                        if naive_error == 0:
+                            eval.append(np.inf)
+                        else:
+                            eval.append(forecast_error / naive_error)
+                    else:
+                        raise ValueError(f"Unsupported metric: {metric}")
+                eval_windows.append(eval)
+
+                if length not in histories.keys():
+                    histories[length] = []
+                    trues[length] = []
+                    preds[length] = []
+                histories[length].append(past_values)
+                trues[length].append(true_values)
+                preds[length].append(pred_values)        
+        
+        eval_windows = np.mean(np.array(eval_windows), axis=0)
+        eval_results = {}
+        for i in range(len(metrics)):
+            eval_results[metrics[i]] = eval_windows[i]
+        
+        histories = [np.array(histories[key]) for key in histories.keys()]
+        trues = [np.array(trues[key]) for key in trues.keys()]
+        preds = [np.array(preds[key]) for key in preds.keys()]
+
+        return eval_results, trues, preds, histories
+
+
+
+        
 
 
 

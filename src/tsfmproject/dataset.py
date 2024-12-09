@@ -10,7 +10,8 @@ import os
 from typing import List, Tuple, Union
 from pathlib import Path
 from gluonts.dataset.arrow import ArrowWriter
-from sklearn.preprocessing import StandardScaler
+from gluonts.dataset.pandas import PandasDataset
+from gluonts.dataset.split import split as ts_split
 
 
 from .models.timesfm.timesfm.data_loader import TimeSeriesdata
@@ -288,9 +289,9 @@ class ChronosDataset(BaseDataset):
     """
     Dataset class for Chronos model
     Data Format:
-    Dict with keys:
-    input_ts: np.ndarray, historical time series data
-    actual_ts: np.ndarray, actual time series data
+    Tuple of 2 elements:
+    input/context: np.ndarray, historical time series data
+    actual: np.ndarray, actual time series data
     """
 
     def __init__(
@@ -377,7 +378,9 @@ class ChronosDataset(BaseDataset):
             self.dataset = TimeSeriesDataset(self.dataset, self.context_len, self.horizon_len)
         
 
-        
+    def get_data_loader(self):
+        if self.mode == "test":
+            return DataLoader(self.dataset, batch_size=self.batch_size, shuffle=False)
 
 
 
@@ -418,58 +421,6 @@ class ChronosDataset(BaseDataset):
             self.dataset = (self.dataset - self.dataset.mean()) / self.dataset.std()
         
 
-    def process_covid_data(self, start_date="2020-06-01", end_date="2021-07-31", freq='D'):
-        us_columns = [col for col in self.data.columns if col.startswith('UNITED STATES')]
-        df_us = self.data[['ds'] + us_columns]
-
-        df_us.loc[:, 'ds'] = pd.to_datetime(df_us['ds'])
-
-        start_date = pd.Timestamp(start_date)
-        end_date = pd.Timestamp(end_date)
-
-        df_us = df_us[(df_us['ds'] >= start_date) & (df_us['ds'] <= end_date)]
-
-        df_us.set_index('ds', inplace=True)
-        df_us = df_us.resample(freq).sum().reset_index()
-
-        processed_df = pd.DataFrame(columns=['unique_id', 'startdate', 'enddate', 'infected', 'dead'])
-
-        for col in us_columns:
-            if col.endswith('_Unspecified'):
-                region = col.replace('_Unspecified', '')
-                infected_series = df_us[['ds', col]].copy()
-                infected_series.columns = ['enddate', 'infected']
-                infected_series['unique_id'] = region
-                infected_series['startdate'] = df_us['ds'].min()
-
-                dead_col = region + '_Dead'
-                if dead_col in df_us.columns:
-                    infected_series['dead'] = df_us[dead_col].values
-
-                if infected_series['infected'].sum() > 0:
-                    infected_series['dead'] = infected_series['dead'].clip(lower=0)
-                    processed_df = pd.concat([processed_df, infected_series], ignore_index=True)
-        
-        infected_df = processed_df.pivot(index='enddate', columns='unique_id', values='infected')
-        dead_df = processed_df.pivot(index='enddate', columns='unique_id', values='dead')
-
-        infected_df.columns = [f"{col}_infected" for col in infected_df.columns]
-        dead_df.columns = [f"{col}_dead" for col in dead_df.columns]
-
-        self.dataset = pd.concat([infected_df, dead_df], axis=1)
-
-        
-
-    def pivot_timeseries(self, df: pd.DataFrame) -> pd.DataFrame:
-        infected_df = df.pivot(index='enddate', columns='unique_id', values='infected')
-        dead_df = df.pivot(index='enddate', columns='unique_id', values='dead')
-
-        infected_df.columns = [f"{col}_infected" for col in infected_df.columns]
-        dead_df.columns = [f"{col}_dead" for col in dead_df.columns]
-
-        pivoted_df = pd.concat([infected_df, dead_df], axis=1)
-
-        return pivoted_df
 
     def convert_to_arrow(
         self,
@@ -663,3 +614,98 @@ class MomentDataset(BaseDataset):
         return labels
 
         
+class MoiraiDataset(BaseDataset):
+    """
+    Dataset class for Moirai model
+    Data Format:
+    
+    """
+
+    def __init__(
+        self,
+        name=None,
+        datetime_col="ds",
+        path=None,
+        boundaries=(0, 0, 0),
+        context_len=128,
+        horizon_len=32,
+        patch_size="auto",
+        batch_size=16,
+        freq = None,
+        start_date=None,
+        end_date=None,
+        operation='mean',
+        normalize=True,
+        mode="train",
+        **kwargs,
+    ):
+        super().__init__(name=name, datetime_col=datetime_col, path=path)
+        self.context_len = context_len
+        self.horizon_len = horizon_len
+        self.patch_size = patch_size
+        self.batch_size = batch_size
+        self.mode = mode
+        self.normalize = normalize
+        self.data = pd.read_csv(self.data_path)
+        # set datetime_col as index and remove it from columns
+        self.data[self.datetime_col] = pd.to_datetime(self.data[self.datetime_col])
+        self.data = self.data.set_index(self.datetime_col)
+        self.freq = pd.infer_freq(self.data.index)
+        self.dataset = self.data
+        self.ts_cols = [col for col in self.dataset.columns if col != self.datetime_col]
+
+        if start_date:
+            start_date = pd.Timestamp(start_date)
+            self.dataset = self.dataset[self.dataset.index >= start_date]
+        
+        if end_date:
+            end_date = pd.Timestamp(end_date)
+            self.dataset = self.dataset[self.dataset.index <= end_date]
+
+        self.dataset = self.dataset.ffill()
+        self.dataset = self.dataset.bfill()
+
+        if freq:
+            if operation == 'sum':
+                self.dataset = self.dataset.resample(freq).sum()
+            elif operation == 'mean':
+                self.dataset = self.dataset.resample(freq).mean()
+            elif operation == 'pad':
+                self.dataset = self.dataset.resample(freq).pad()
+            elif operation == 'ffill':
+                self.dataset = self.dataset.resample(freq).ffill()
+            elif operation == 'bfill':
+                self.dataset = self.dataset.resample(freq).bfill()
+            else:
+                raise ValueError(f"Unsupported resampling operation: {operation}")
+
+        if boundaries == (0, 0, 0):
+            # Default boundaries: train 60%, val 20%, test 20%
+            self.boundaries = [
+                int(len(self.data)*0.8),
+                int(len(self.data)*0.8),
+                len(self.data),
+            ]
+        else:
+            self.boundaries = boundaries
+
+        # Normalize the dataset if required
+        if self.normalize:
+            scaler = StandardScaler()
+            scalar = scaler.fit(self.dataset.iloc[: self.boundaries[1]])
+            data_normalized = scaler.transform(self.dataset)
+            self.dataset = pd.DataFrame(data_normalized, columns=self.dataset.columns, index=self.dataset.index)
+
+        test_offset = self.boundaries[2] - self.boundaries[1]
+        self.dataset = PandasDataset(dict(self.dataset))
+
+        train_template, test_template = ts_split(self.dataset, offset=-test_offset)
+
+        
+        # split the data based on boundaries 
+        if self.mode == "train":
+            self.dataset = train_template
+        elif self.mode == "val":
+            self.dataset = train_template
+        else:
+            self.dataset = test_template.generate_instances(prediction_length=self.horizon_len, windows=test_offset//self.horizon_len, distance=self.horizon_len)

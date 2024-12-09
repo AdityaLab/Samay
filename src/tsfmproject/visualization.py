@@ -28,8 +28,8 @@ class ForecastVisualization(BaseVisualization):
             history = history[-length_to_crop:]
 
         plt.figure(figsize=(12, 4))
-        plt.plot(range(len(history[])), history[], label='History', c='darkblue')
-        offset = len(history[]) 
+        plt.plot(range(len(history)), history, label='History', c='darkblue')
+        offset = len(history) 
         plt.plot(range(offset, offset + len(true)), true, label='Ground Truth', color='darkblue', linestyle='--', alpha=0.5)
         plt.plot(range(offset, offset + len(pred)), pred, label='Forecast', color='red', linestyle='--')
         plt.title(f"Forecast Visualization -- (idx={time_idx}, channel={channel_idx})", fontsize=18)
