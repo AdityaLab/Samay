@@ -3,6 +3,7 @@ import sys
 import torch
 import numpy as np
 import pandas as pd
+import gc
 
 src_path = os.path.abspath(os.path.join("src"))
 if src_path not in sys.path:
@@ -13,7 +14,7 @@ from tsfmproject.dataset import TimesfmDataset, ChronosDataset, MoiraiDataset
 from tsfmproject.utils import load_args
 
 
-DATASET_LIST = ["electricity", "exchange_rate", "illness", "traffic", "weather"]
+DATASET_LIST = ["exchange_rate", "illness", "weather"]
 DATASET_PATH = ["data" + "/{dataset}/{dataset}.csv".format(dataset=dataset) for dataset in DATASET_LIST]
 
 
@@ -78,34 +79,42 @@ if __name__ == "__main__":
     #     update_leaderboard(dataset, model_name, metrics, leaderboard_path)
 
     # Evaluate Chronos model
-    arg_path = "config/chronos.json"
-    model_name = "Chronos"
-    args = load_args(arg_path)
-    chronos = ChronosModel(config=args["config"], repo=args["repo"])
-    chronos.load_model()
-
-    for dataset, dataset_path in zip(DATASET_LIST, DATASET_PATH):
-        print(f"Evaluating {model_name} on dataset: {dataset}")
-        torch.cuda.empty_cache()
-        val_dataset = ChronosDataset(name=dataset, datetime_col="date", path=dataset_path,
-                                     mode="test", context_len=args["config"]["context_len"],
-                                     horizon_len=args["config"]["horizon_len"], normalize=False)
-        eval_results, _, _, _ = chronos.evaluate(val_dataset, batch_size=8, metrics=["MSE", "MASE"])
-        metrics = {"MSE": eval_results["MSE"], "MASE": eval_results["MASE"]}
-        update_leaderboard(dataset, model_name, metrics, leaderboard_path)
-
-    # # Evaluate Moirai model
-    # arg_path = "config/moirai.json"
-    # model_name = "Moirai"
+    # arg_path = "config/chronos.json"
+    # model_name = "Chronos"
     # args = load_args(arg_path)
-    # moirai = MoiraiTSModel(config=args["config"], repo=args["repo"], model_type=args["model_type"], model_size=args["model_size"])
+    # chronos = ChronosModel(config=args["config"], repo=args["repo"])
+    # chronos.load_model()
 
     # for dataset, dataset_path in zip(DATASET_LIST, DATASET_PATH):
     #     print(f"Evaluating {model_name} on dataset: {dataset}")
     #     torch.cuda.empty_cache()
-    #     val_dataset = MoiraiDataset(name=dataset, datetime_col="date", path=dataset_path,
-    #                                 mode="test", context_len=args["config"]["context_len"],
-    #                                 horizon_len=args["config"]["horizon_len"], normalize=False)
-    #     eval_results, _, _, _ = moirai.evaluate(val_dataset, metrics=["MSE", "MASE"])
+    #     val_dataset = ChronosDataset(name=dataset, datetime_col="date", path=dataset_path,
+    #                                  mode="test", context_len=args["config"]["context_len"],
+    #                                  horizon_len=args["config"]["horizon_len"], normalize=False)
+    #     eval_results, _, _, _ = chronos.evaluate(val_dataset, batch_size=8, metrics=["MSE", "MASE"])
     #     metrics = {"MSE": eval_results["MSE"], "MASE": eval_results["MASE"]}
     #     update_leaderboard(dataset, model_name, metrics, leaderboard_path)
+        
+    # del chronos
+    # torch.cuda.empty_cache()
+    # gc.collect()
+
+
+    # Evaluate Moirai model
+    arg_path = "config/moirai.json"
+    model_name = "Moirai"
+    args = load_args(arg_path)
+    moirai = MoiraiTSModel(config=args["config"], repo=args["repo"], model_type=args["config"]["model_type"], model_size=args["config"]["model_size"])
+
+    for dataset, dataset_path in zip(DATASET_LIST, DATASET_PATH):
+        print(f"Evaluating {model_name} on dataset: {dataset}")
+        torch.cuda.empty_cache()
+        val_dataset = MoiraiDataset(name=dataset, datetime_col="date", path=dataset_path,
+                                    mode="test", context_len=args["config"]["context_len"],
+                                    horizon_len=args["config"]["horizon_len"], normalize=False)
+        eval_results, _, _, _ = moirai.evaluate(val_dataset, metrics=["MSE", "MASE"])
+        metrics = {"MSE": eval_results["MSE"], "MASE": eval_results["MASE"]}
+        update_leaderboard(dataset, model_name, metrics, leaderboard_path)
+    del chronos
+    torch.cuda.empty_cache()
+    gc.collect()
