@@ -76,6 +76,9 @@ class TimesfmModel(Basemodel):
         Returns:
             FinetuneModel: ppd.PatchedDecoderFinetuneModel, finetuned model
         """
+        lr = 1e-4 if 'lr' not in kwargs else kwargs['lr']
+        epoch = 10 if 'epoch' not in kwargs else kwargs['epoch']
+
         core_layer_tpl = self.model._model
         # Todo: whether add freq
         FinetunedModel = ppd.PatchedDecoderFinetuneModel(core_layer_tpl=core_layer_tpl)
@@ -85,8 +88,8 @@ class TimesfmModel(Basemodel):
         FinetunedModel.to(self.device)
         FinetunedModel.train()
         dataloader = dataset.get_data_loader()
-        optimizer = torch.optim.Adam(FinetunedModel.parameters(), lr=1e-4)
-        epoch = 10 if "epoch" not in kwargs else kwargs["epoch"]
+        optimizer = torch.optim.Adam(FinetunedModel.parameters(), lr=lr)
+
         avg_loss = 0
         for epoch in range(epoch):
             for i, (inputs) in enumerate(dataloader):
@@ -123,9 +126,9 @@ class TimesfmModel(Basemodel):
             for i, (inputs) in enumerate(dataloader):
                 inputs = dataset.preprocess(inputs)
                 input_ts = inputs["input_ts"]
-                input_ts = np.squeeze(input_ts)
+                input_ts = np.squeeze(input_ts, axis=0)
                 actual_ts = inputs["actual_ts"].detach().cpu().numpy()
-                actual_ts = np.squeeze(actual_ts)
+                actual_ts = np.squeeze(actual_ts, axis=0)
 
                 output, _ = self.model.forecast(input_ts)
                 output = output[:, 0:actual_ts.shape[1]]
@@ -138,9 +141,9 @@ class TimesfmModel(Basemodel):
 
         losses = np.array(losses)
         average_loss = np.average(losses)
-        trues = np.stack(trues, axis=0)
-        preds = np.stack(preds, axis=0)
-        histories = np.stack(histories, axis=0)
+        trues = np.concatenate(trues, axis=0).reshape(-1, dataset.num_ts, trues[-1].shape[-1])
+        preds = np.concatenate(preds, axis=0).reshape(-1, dataset.num_ts, preds[-1].shape[-1])
+        histories = np.concatenate(histories, axis=0).reshape(-1, dataset.num_ts, histories[-1].shape[-1])
 
         return average_loss, trues, preds, histories
 
@@ -430,7 +433,7 @@ class MomentModel(Basemodel):
     def finetune(self, dataset, task_name="forecasting", **kwargs):
         # arguments
         max_lr = 1e-4 if 'lr' not in kwargs else kwargs['lr']
-        max_epoch = 2 if 'epoch' not in kwargs else kwargs['epoch']
+        max_epoch = 5 if 'epoch' not in kwargs else kwargs['epoch']
         max_norm = 5.0 if 'norm' not in kwargs else kwargs['norm']
         mask_ratio = 0.25 if 'mask_ratio' not in kwargs else kwargs['mask_ratio']
 

@@ -1,0 +1,8 @@
+{
+    "repo": "AutonLab/MOMENT-1-large",
+    "config": {
+        "task_name": "classification",
+        "n_channels": 1,
+        "num_class": 5
+    }
+}

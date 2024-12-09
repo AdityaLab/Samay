@@ -2,6 +2,7 @@ import subprocess
 
 import numpy as np
 import pandas as pd
+import json
 from .models.moment.momentfm.utils.data import load_from_tsfile
 
 def get_least_used_gpu():
@@ -90,6 +91,13 @@ def get_multivariate_data(dataframe, label_col="label"):
     # reshape data into (num_samples, num_channels, num_timesteps)
     data = dataframe.values.reshape(-1, num_channels, num_timesteps)
     return data, labels
+
+def load_args(file_path):
+    """
+    Load arguments from a file.
+    """
+    with open(file_path, "r") as file:
+        return json.load(file)
 
 
 if __name__ == "__main__":

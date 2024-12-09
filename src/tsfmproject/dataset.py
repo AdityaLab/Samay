@@ -221,12 +221,14 @@ class TimesfmDataset(BaseDataset):
                 horizon_len=32, 
                 freq='h', 
                 normalize=True, 
+                stride=10,
                 **kwargs):
         super().__init__(name=name, datetime_col=datetime_col, path=path, batchsize=batchsize, mode=mode)
         self.context_len = context_len
         self.horizon_len = horizon_len
         self.freq = freq
         self.normalize = normalize
+        self.stride = stride
         self.data = pd.read_csv(self.data_path)
         if boundaries == (0, 0, 0):
             # Default boundaries: train 60%, val 20%, test 20%
@@ -256,8 +258,9 @@ class TimesfmDataset(BaseDataset):
             holiday=False,
             permute=False,
         )
+        self.num_ts = len(self.ts_cols)
         if self.mode == "train":
-            tfset = tfdtl.torch_dataset(mode="train", shift=1)
+            tfset = tfdtl.torch_dataset(mode="train", shift=self.stride)
         else:
             tfset = tfdtl.torch_dataset(mode="test", shift=self.horizon_len)
         self.dataset = tfset

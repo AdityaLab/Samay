@@ -1,0 +1,12 @@
+{
+    "repo": "AutonLab/MOMENT-1-large",
+    "config": {
+        "task_name": "forecasting",
+        "forecast_horizon": 192,
+        "head_dropout": 0.1,
+        "weight_decay": 0,
+        "freeze_encoder": true, 
+        "freeze_embedder": true,
+        "freeze_head": false
+    }
+}
