@@ -17,7 +17,6 @@ from ..utils.masking import Masking
 from ..utils.utils import (
     NamespaceWithDefaults,
     get_anomaly_criterion,
-    get_huggingface_model_dimensions,
 )
 
 SUPPORTED_HUGGINGFACE_MODELS = [

@@ -1,7 +1,6 @@
 import os
 import random
 from argparse import Namespace
-from typing import NamedTuple
 
 import numpy as np
 import torch

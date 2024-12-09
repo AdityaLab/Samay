@@ -1,32 +1,25 @@
-import pandas as pd
-import numpy as np
-import torch
-import logging
 import glob
+import logging
 import os
 import sys
 from pathlib import Path
-from transformers import AutoModelForSeq2SeqLM, AutoModelForCausalLM
-from sklearn.metrics import mean_squared_error, mean_absolute_percentage_error
+
+import numpy as np
+import pandas as pd
+import torch
+from chronos import ChronosPipeline
+from sklearn.metrics import mean_squared_error
+from torch.utils.data import DataLoader
+
+from .models.chronosforecasting.scripts import finetune
 from .models.chronosforecasting.scripts.jsonlogger import JsonFileHandler, JsonFormatter
-from torch.utils.data import Dataset, DataLoader
-
-from typing import Generator, Optional
-
-
+from .models.moment.momentfm.models.moment import MOMENTPipeline
+from .models.moment.momentfm.utils.masking import Masking
 from .models.timesfm import timesfm as tfm
 from .models.timesfm.timesfm import pytorch_patched_decoder as ppd
-from .models.chronosforecasting.chronos import chronos
-from chronos import ChronosPipeline
-from .models.chronosforecasting.scripts import finetune
 from .models.uni2ts.model.moirai import MoiraiForecast, MoiraiModule
 from .models.uni2ts.model.moirai_moe import MoiraiMoEForecast, MoiraiMoEModule
-
-from .models.moment.momentfm.models.moment import MOMENT, MOMENTPipeline
-
 from .utils import get_least_used_gpu
-
-from .models.moment.momentfm.utils.masking import Masking
 
 
 class Basemodel:
@@ -76,8 +69,8 @@ class TimesfmModel(Basemodel):
         Returns:
             FinetuneModel: ppd.PatchedDecoderFinetuneModel, finetuned model
         """
-        lr = 1e-4 if 'lr' not in kwargs else kwargs['lr']
-        epoch = 10 if 'epoch' not in kwargs else kwargs['epoch']
+        lr = 1e-4 if "lr" not in kwargs else kwargs["lr"]
+        epoch = 10 if "epoch" not in kwargs else kwargs["epoch"]
 
         core_layer_tpl = self.model._model
         # Todo: whether add freq
@@ -96,14 +89,16 @@ class TimesfmModel(Basemodel):
                 inputs = dataset.preprocess(inputs)
                 inputs = {k: v.to(self.device) for k, v in inputs.items()}
                 optimizer.zero_grad()
-                outputs = FinetunedModel.compute_predictions(inputs) # b, n, seq_len, 1+quantiles
+                outputs = FinetunedModel.compute_predictions(
+                    inputs
+                )  # b, n, seq_len, 1+quantiles
                 loss = FinetunedModel.compute_loss(outputs, inputs)
                 loss.backward()
                 optimizer.step()
                 avg_loss += loss.item()
             avg_loss /= len(dataloader)
             print(f"Epoch {epoch}, Loss: {avg_loss}")
-        
+
         self.model._model = FinetunedModel.core_layer
         return self.model
 
@@ -118,7 +113,7 @@ class TimesfmModel(Basemodel):
                 (# inputs,  # forecast horizon, 1 + # quantiles).
         """
         return self.model.forecast(input)
-    
+
     def evaluate(self, dataset, **kwargs):
         dataloader = dataset.get_data_loader()
         trues, preds, histories, losses = [], [], [], []
@@ -131,7 +126,7 @@ class TimesfmModel(Basemodel):
                 actual_ts = np.squeeze(actual_ts, axis=0)
 
                 output, _ = self.model.forecast(input_ts)
-                output = output[:, 0:actual_ts.shape[1]]
+                output = output[:, 0 : actual_ts.shape[1]]
 
                 loss = np.mean((output - actual_ts) ** 2)
                 losses.append(loss.item())
@@ -141,15 +136,17 @@ class TimesfmModel(Basemodel):
 
         losses = np.array(losses)
         average_loss = np.average(losses)
-        trues = np.concatenate(trues, axis=0).reshape(-1, dataset.num_ts, trues[-1].shape[-1])
-        preds = np.concatenate(preds, axis=0).reshape(-1, dataset.num_ts, preds[-1].shape[-1])
-        histories = np.concatenate(histories, axis=0).reshape(-1, dataset.num_ts, histories[-1].shape[-1])
+        trues = np.concatenate(trues, axis=0).reshape(
+            -1, dataset.num_ts, trues[-1].shape[-1]
+        )
+        preds = np.concatenate(preds, axis=0).reshape(
+            -1, dataset.num_ts, preds[-1].shape[-1]
+        )
+        histories = np.concatenate(histories, axis=0).reshape(
+            -1, dataset.num_ts, histories[-1].shape[-1]
+        )
 
         return average_loss, trues, preds, histories
-
-                
-        
-        
 
 
 class ChronosModel(Basemodel):
@@ -157,56 +154,65 @@ class ChronosModel(Basemodel):
         super().__init__(config=config, repo=repo)
         if self.config is None:
             self.config = {
-                'context_length': 512,
-                'prediction_length': 64,
-                'min_past': 64,
-                'max_steps': 100,
-                'save_steps': 25,
-                'log_steps': 5,
-                'per_device_train_batch_size': 32,
-                'learning_rate': 1e-3,
-                'optim': 'adamw_torch_fused',
-                'shuffle_buffer_length': 100,
-                'gradient_accumulation_steps': 2,
-                'model_id': 'amazon/chronos-t5-small',
-                'model_type': 'seq2seq',
-                'random_init': False,
-                'tie_embeddings': False,
-                'output_dir': os.path.join(sys.path[0],'./tsfmproject/models/chronosforecasting/output/finetuning/'),
-                'tf32': True,
-                'torch_compile': True,
-                'tokenizer_class': 'MeanScaleUniformBins',
-                'tokenizer_kwargs': {'low_limit': -15.0, 'high_limit': 15.0},
-                'n_tokens': 4096,
-                'n_special_tokens': 2,
-                'pad_token_id': 0,
-                'eos_token_id': 1,
-                'use_eos_token': True,
-                'lr_scheduler_type': 'linear',
-                'warmup_ratio': 0.0,
-                'dataloader_num_workers': 1,
-                'max_missing_prop': 0.9,
-                'num_samples': 10,
-                'temperature': 1.0,
-                'top_k': 50,
-                'top_p': 1.0,
-                'seed': 42
+                "context_length": 512,
+                "prediction_length": 64,
+                "min_past": 64,
+                "max_steps": 100,
+                "save_steps": 25,
+                "log_steps": 5,
+                "per_device_train_batch_size": 32,
+                "learning_rate": 1e-3,
+                "optim": "adamw_torch_fused",
+                "shuffle_buffer_length": 100,
+                "gradient_accumulation_steps": 2,
+                "model_id": "amazon/chronos-t5-small",
+                "model_type": "seq2seq",
+                "random_init": False,
+                "tie_embeddings": False,
+                "output_dir": os.path.join(
+                    sys.path[0],
+                    "./tsfmproject/models/chronosforecasting/output/finetuning/",
+                ),
+                "tf32": True,
+                "torch_compile": True,
+                "tokenizer_class": "MeanScaleUniformBins",
+                "tokenizer_kwargs": {"low_limit": -15.0, "high_limit": 15.0},
+                "n_tokens": 4096,
+                "n_special_tokens": 2,
+                "pad_token_id": 0,
+                "eos_token_id": 1,
+                "use_eos_token": True,
+                "lr_scheduler_type": "linear",
+                "warmup_ratio": 0.0,
+                "dataloader_num_workers": 1,
+                "max_missing_prop": 0.9,
+                "num_samples": 10,
+                "temperature": 1.0,
+                "top_k": 50,
+                "top_p": 1.0,
+                "seed": 42,
             }
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         # self.device = torch.device("cuda")
         self.result_logger = self.setup_logger("results")
         self.evaluation_logger = self.setup_logger("evaluation")
         self.model = self.load_model(model_dir=self.repo, model_type="seq2seq")
-        
 
     def setup_logger(self, log_type):
-        log_dir = Path(os.path.join(sys.path[0],'./tsfmproject/models/chronosforecasting/output/') )/ log_type
+        log_dir = (
+            Path(
+                os.path.join(
+                    sys.path[0], "./tsfmproject/models/chronosforecasting/output/"
+                )
+            )
+            / log_type
+        )
         log_dir.mkdir(parents=True, exist_ok=True)
 
         log_files = sorted(log_dir.glob(f"{log_type}_*.json"), key=os.path.getmtime)
         if log_files:
             latest_file = log_files[-1]
-            latest_index = int(latest_file.stem.split('_')[-1])
+            latest_index = int(latest_file.stem.split("_")[-1])
             new_index = latest_index + 1
         else:
             new_index = 1
@@ -220,11 +226,23 @@ class ChronosModel(Basemodel):
         logger.addHandler(json_handler)
         return logger
 
-    def load_model(self, model_dir: str = "amazon/chronos-t5-small", model_type: str = "seq2seq"):
-        self.model = ChronosPipeline.from_pretrained(model_dir, model_type=model_type, device_map=self.device, torch_dtype=torch.float32)
+    def load_model(
+        self, model_dir: str = "amazon/chronos-t5-small", model_type: str = "seq2seq"
+    ):
+        self.model = ChronosPipeline.from_pretrained(
+            model_dir,
+            model_type=model_type,
+            device_map=self.device,
+            torch_dtype=torch.float32,
+        )
         self.result_logger.info(f"Model loaded from {model_dir}")
 
-    def get_latest_run_dir(self, base_dir=os.path.join(sys.path[0],"./tsfmproject/models/chronosforecasting/output/finetuning/")):
+    def get_latest_run_dir(
+        self,
+        base_dir=os.path.join(
+            sys.path[0], "./tsfmproject/models/chronosforecasting/output/finetuning/"
+        ),
+    ):
         run_dirs = glob.glob(os.path.join(base_dir, "run-*"))
         if not run_dirs:
             raise FileNotFoundError("No run directories found.")
@@ -232,12 +250,17 @@ class ChronosModel(Basemodel):
         return latest_run_dir
 
     def finetune(self, dataset, probability_list=None, **kwargs):
-        
         # Convert dataset to arrow format
-        data_loc = os.path.join(sys.path[0],'./tsfmproject/models/chronosforecasting/data/data.arrow')
-        
-        time_series_list = [np.array(dataset.dataset[column].values) for column in dataset.ts_cols]
-        dataset.convert_to_arrow(data_loc, time_series=time_series_list, start_date=dataset.dataset.index[0])
+        data_loc = os.path.join(
+            sys.path[0], "./tsfmproject/models/chronosforecasting/data/data.arrow"
+        )
+
+        time_series_list = [
+            np.array(dataset.dataset[column].values) for column in dataset.ts_cols
+        ]
+        dataset.convert_to_arrow(
+            data_loc, time_series=time_series_list, start_date=dataset.dataset.index[0]
+        )
         # Use default probability_list if None
         if probability_list is None:
             probability_list = [1]
@@ -252,7 +275,7 @@ class ChronosModel(Basemodel):
             training_data_paths=[data_loc],
             probability=probability_list,
             logger=self.result_logger,
-            **finetune_config
+            **finetune_config,
         )
 
     # def evaluate(self, dataset, metrics=['MSE'], **kwargs):
@@ -297,7 +320,6 @@ class ChronosModel(Basemodel):
     #             pred_median = np.median(prediction, axis=1)
     #             # pred_median = pred_median.reshape(actual.shape[0], actual.shape[1], horizon_len)
 
-            
     #             # pred_median = np.median(prediction, axis=1)
     #             # pred_values = np.quantile(prediction, q=quantiles, axis=1).transpose(1, 0, 2).squeeze()
     #             # pred_values = prediction.squeeze().numpy()
@@ -316,7 +338,7 @@ class ChronosModel(Basemodel):
 
     #                 else:
     #                     raise ValueError(f"Unsupported metric: {metric}")
-                
+
     #             eval_windows.append(eval)
     #             true_values.append(actual)
     #             predictions.append(pred_median)
@@ -333,7 +355,7 @@ class ChronosModel(Basemodel):
 
     #     return eval_results, true_values, predictions, histories
 
-    def evaluate(self, dataset, metrics=['MSE'], **kwargs):
+    def evaluate(self, dataset, metrics=["MSE"], **kwargs):
         """
         Evaluate the model on the given train and test data.
 
@@ -353,10 +375,12 @@ class ChronosModel(Basemodel):
         context_len = dataset.context_len
         horizon_len = dataset.horizon_len
         total_len = context_len + horizon_len
-        quantiles = kwargs.get('quantiles', [0.1, 0.5, 0.9])
-        batch_size = kwargs.get('batch_size', 8)
+        quantiles = kwargs.get("quantiles", [0.1, 0.5, 0.9])
+        batch_size = kwargs.get("batch_size", 8)
 
-        dataloader = DataLoader(dataset.dataset, batch_size=batch_size, shuffle=False, num_workers=0)
+        dataloader = DataLoader(
+            dataset.dataset, batch_size=batch_size, shuffle=False, num_workers=0
+        )
 
         eval_windows = []
         true_values = []
@@ -371,22 +395,34 @@ class ChronosModel(Basemodel):
                 actual = actual.detach().cpu().numpy()
                 history = history
                 history_stack = history.reshape(-1, context_len)
-                prediction = self.model.predict(context=history_stack, prediction_length=horizon_len, num_samples=20).detach().cpu().numpy()
+                prediction = (
+                    self.model.predict(
+                        context=history_stack,
+                        prediction_length=horizon_len,
+                        num_samples=20,
+                    )
+                    .detach()
+                    .cpu()
+                    .numpy()
+                )
                 pred_median = np.median(prediction, axis=1)
-                pred_median = pred_median.reshape(actual.shape[0], actual.shape[1], horizon_len)
+                pred_median = pred_median.reshape(
+                    actual.shape[0], actual.shape[1], horizon_len
+                )
 
-            
                 # pred_median = np.median(prediction, axis=1)
                 # pred_values = np.quantile(prediction, q=quantiles, axis=1).transpose(1, 0, 2).squeeze()
                 # pred_values = prediction.squeeze().numpy()
 
                 eval = []
                 for metric in metrics:
-                    if metric == 'MSE':
+                    if metric == "MSE":
                         eval.append(np.mean((actual - pred_median) ** 2))
-                    elif metric == 'MASE':
+                    elif metric == "MASE":
                         forecast_error = np.mean(np.abs(actual - pred_median))
-                        naive_error = np.mean(np.abs(actual[:, :, 1:] - actual[:, :, :-1]))
+                        naive_error = np.mean(
+                            np.abs(actual[:, :, 1:] - actual[:, :, :-1])
+                        )
                         if naive_error == 0:
                             eval.append(np.inf)
                         else:
@@ -394,7 +430,7 @@ class ChronosModel(Basemodel):
 
                     else:
                         raise ValueError(f"Unsupported metric: {metric}")
-                
+
                 eval_windows.append(eval)
                 true_values.append(actual)
                 predictions.append(pred_median)
@@ -414,8 +450,10 @@ class ChronosModel(Basemodel):
 
     def forecast(self, input, **kwargs):
         context = torch.tensor(input)
-        prediction_length = kwargs.get('prediction_length', 64)
-        predictions = self.model.predict(context, prediction_length=prediction_length).squeeze()
+        prediction_length = kwargs.get("prediction_length", 64)
+        predictions = self.model.predict(
+            context, prediction_length=prediction_length
+        ).squeeze()
         pred_values = np.quantile(predictions.numpy(), [0.5, 0.1, 0.9], axis=-2)
         return predictions, pred_values
 
@@ -425,18 +463,15 @@ class MomentModel(Basemodel):
         super().__init__(config=config, repo=repo)
         if not repo:
             raise ValueError("Moment model requires a repository")
-        self.model = MOMENTPipeline.from_pretrained(
-            repo, 
-            model_kwargs=self.config
-        )
+        self.model = MOMENTPipeline.from_pretrained(repo, model_kwargs=self.config)
         self.model.init()
 
     def finetune(self, dataset, task_name="forecasting", **kwargs):
         # arguments
-        max_lr = 1e-4 if 'lr' not in kwargs else kwargs['lr']
-        max_epoch = 5 if 'epoch' not in kwargs else kwargs['epoch']
-        max_norm = 5.0 if 'norm' not in kwargs else kwargs['norm']
-        mask_ratio = 0.25 if 'mask_ratio' not in kwargs else kwargs['mask_ratio']
+        max_lr = 1e-4 if "lr" not in kwargs else kwargs["lr"]
+        max_epoch = 5 if "epoch" not in kwargs else kwargs["epoch"]
+        max_norm = 5.0 if "norm" not in kwargs else kwargs["norm"]
+        mask_ratio = 0.25 if "mask_ratio" not in kwargs else kwargs["mask_ratio"]
 
         if task_name == "imputation" or task_name == "detection":
             mask_generator = Masking(mask_ratio=mask_ratio)
@@ -450,7 +485,9 @@ class MomentModel(Basemodel):
         scaler = torch.amp.GradScaler()
 
         total_steps = len(dataloader) * max_epoch
-        scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=max_lr, total_steps=total_steps, pct_start=0.3)
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer, max_lr=max_lr, total_steps=total_steps, pct_start=0.3
+        )
         self.model.to(self.device)
         self.model.train()
 
@@ -464,7 +501,7 @@ class MomentModel(Basemodel):
                     timeseries = timeseries.float().to(self.device)
                     input_mask = input_mask.to(self.device)
                     forecast = forecast.float().to(self.device)
-                    with torch.amp.autocast(device_type='cuda'):
+                    with torch.amp.autocast(device_type="cuda"):
                         output = self.model(x_enc=timeseries, input_mask=input_mask)
                     loss = criterion(output.forecast, forecast)
 
@@ -476,9 +513,17 @@ class MomentModel(Basemodel):
                     timeseries = timeseries.reshape(-1, 1, timeseries.shape[-1])
                     input_mask = input_mask.to(self.device).long()
                     input_mask = input_mask.repeat_interleave(n_channels, axis=0)
-                    mask = mask_generator.generate_mask(x=timeseries, input_mask=input_mask).to(self.device).long()
-                    output = self.model(x_enc=timeseries, input_mask=input_mask, mask=mask)
-                    with torch.amp.autocast(device_type='cuda'):
+                    mask = (
+                        mask_generator.generate_mask(
+                            x=timeseries, input_mask=input_mask
+                        )
+                        .to(self.device)
+                        .long()
+                    )
+                    output = self.model(
+                        x_enc=timeseries, input_mask=input_mask, mask=mask
+                    )
+                    with torch.amp.autocast(device_type="cuda"):
                         recon_loss = criterion(output.reconstruction, timeseries)
                     observed_mask = input_mask * (1 - mask)
                     masked_loss = observed_mask * recon_loss
@@ -488,20 +533,30 @@ class MomentModel(Basemodel):
                     timeseries, input_mask, label = data
                     n_channels = timeseries.shape[1]
                     seq_len = timeseries.shape[-1]
-                    timeseries = timeseries.reshape(-1, 1, seq_len).float().to(self.device)
+                    timeseries = (
+                        timeseries.reshape(-1, 1, seq_len).float().to(self.device)
+                    )
                     input_mask = input_mask.to(self.device).long()
                     input_mask = input_mask.repeat_interleave(n_channels, axis=0)
-                    mask = mask_generator.generate_mask(x=timeseries, input_mask=input_mask).to(self.device).long()
-                    output = self.model(x_enc=timeseries, input_mask=input_mask, mask=mask)
-                    with torch.amp.autocast(device_type='cuda'):
+                    mask = (
+                        mask_generator.generate_mask(
+                            x=timeseries, input_mask=input_mask
+                        )
+                        .to(self.device)
+                        .long()
+                    )
+                    output = self.model(
+                        x_enc=timeseries, input_mask=input_mask, mask=mask
+                    )
+                    with torch.amp.autocast(device_type="cuda"):
                         loss = criterion(output.reconstruction, timeseries)
-                    
+
                 elif task_name == "classification":
                     timeseries, input_mask, label = data
                     timeseries = timeseries.to(self.device).float()
                     label = label.to(self.device).long()
                     output = self.model(x_enc=timeseries)
-                    with torch.amp.autocast(device_type='cuda'):
+                    with torch.amp.autocast(device_type="cuda"):
                         loss = criterion(output.logits, label)
 
                 optimizer.zero_grad(set_to_none=True)
@@ -524,7 +579,7 @@ class MomentModel(Basemodel):
             scheduler.step()
 
         return self.model
-    
+
     def evaluate(self, dataset, task_name="forecasting"):
         dataloader = dataset.get_data_loader()
         criterion = torch.nn.MSELoss()
@@ -535,7 +590,7 @@ class MomentModel(Basemodel):
             with torch.no_grad():
                 for i, data in enumerate(dataloader):
                     # unpack the data
-                    timeseries, input_mask, forecast  = data
+                    timeseries, input_mask, forecast = data
                     # Move the data to the GPU
                     timeseries = timeseries.float().to(self.device)
                     input_mask = input_mask.to(self.device)
@@ -555,7 +610,7 @@ class MomentModel(Basemodel):
             histories = np.concatenate(histories, axis=0)
 
             return average_loss, trues, preds, histories
-        
+
         elif task_name == "imputation":
             trues, preds, masks = [], [], []
             mask_generator = Masking(mask_ratio=0.25)
@@ -572,9 +627,19 @@ class MomentModel(Basemodel):
                     input_mask = input_mask.to(self.device).long()
                     input_mask = input_mask.repeat_interleave(n_channels, axis=0)
                     # print(timeseries.shape, input_mask.shape)
-                    mask = mask_generator.generate_mask(x=timeseries, input_mask=input_mask).to(self.device).long()
-                    output = self.model(x_enc=timeseries, input_mask=input_mask, mask=mask)
-                    reconstruction = output.reconstruction.reshape(-1, n_channels, timeseries.shape[-1])
+                    mask = (
+                        mask_generator.generate_mask(
+                            x=timeseries, input_mask=input_mask
+                        )
+                        .to(self.device)
+                        .long()
+                    )
+                    output = self.model(
+                        x_enc=timeseries, input_mask=input_mask, mask=mask
+                    )
+                    reconstruction = output.reconstruction.reshape(
+                        -1, n_channels, timeseries.shape[-1]
+                    )
                     mask = mask.reshape(-1, n_channels, timeseries.shape[-1])
                     preds.append(reconstruction.detach().cpu().numpy())
                     masks.append(mask.detach().cpu().numpy())
@@ -584,7 +649,7 @@ class MomentModel(Basemodel):
             masks = np.concatenate(masks, axis=0)
 
             return trues, preds, masks
-        
+
         elif task_name == "detection":
             trues, preds, labels = [], [], []
             with torch.no_grad():
@@ -605,7 +670,7 @@ class MomentModel(Basemodel):
             labels = np.concatenate(labels, axis=0).flatten()
 
             return trues, preds, labels
-        
+
         elif task_name == "classification":
             accuracy = 0
             total = 0
@@ -633,7 +698,14 @@ class MomentModel(Basemodel):
 
 
 class MoiraiTSModel(Basemodel):
-    def __init__(self, config=None, repo=None, model_type="moirai-moe", model_size="small", **kwargs):
+    def __init__(
+        self,
+        config=None,
+        repo=None,
+        model_type="moirai-moe",
+        model_size="small",
+        **kwargs,
+    ):
         super().__init__(config=config, repo=repo)
         self.horizon_len = config.get("horizon_len", 32)
         self.context_len = config.get("context_len", 128)
@@ -646,7 +718,7 @@ class MoiraiTSModel(Basemodel):
         self.model_type = model_type
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
+
         if model_type == "moirai":
             if self.repo is None:
                 self.repo = f"Salesforce/moirai-1.1-R-{model_size}"
@@ -675,8 +747,7 @@ class MoiraiTSModel(Basemodel):
             )
         self.model.to(self.device)
 
-
-    def evaluate(self, dataset, metrics=['MSE'], **kwargs):
+    def evaluate(self, dataset, metrics=["MSE"], **kwargs):
         predictor = self.model.create_predictor(batch_size=self.batch_size)
         forecast = predictor.predict(dataset.dataset.input)
 
@@ -688,21 +759,23 @@ class MoiraiTSModel(Basemodel):
         preds = {}
         histories = {}
         eval_windows = []
-        
+
         with torch.no_grad():
-            for (input, label, forecast) in zip(input_it, label_it, forecast_it):
+            for input, label, forecast in zip(input_it, label_it, forecast_it):
                 true_values = np.array(label["target"])
                 past_values = np.array(input["target"])
                 pred_values = np.median(forecast.samples, axis=0)
                 length = len(past_values)
-                
+
                 eval = []
                 for metric in metrics:
-                    if metric == 'MSE':
+                    if metric == "MSE":
                         eval.append(mean_squared_error(true_values, pred_values))
-                    elif metric == 'MASE':
+                    elif metric == "MASE":
                         forecast_error = np.mean(np.abs(true_values - pred_values))
-                        naive_error = np.mean(np.abs(true_values[1:] - true_values[:-1]))
+                        naive_error = np.mean(
+                            np.abs(true_values[1:] - true_values[:-1])
+                        )
                         if naive_error == 0:
                             eval.append(np.inf)
                         else:
@@ -717,24 +790,18 @@ class MoiraiTSModel(Basemodel):
                     preds[length] = []
                 histories[length].append(past_values)
                 trues[length].append(true_values)
-                preds[length].append(pred_values)        
-        
+                preds[length].append(pred_values)
+
         eval_windows = np.mean(np.array(eval_windows), axis=0)
         eval_results = {}
         for i in range(len(metrics)):
             eval_results[metrics[i]] = eval_windows[i]
-        
+
         histories = [np.array(histories[key]) for key in histories.keys()]
         trues = [np.array(trues[key]) for key in trues.keys()]
         preds = [np.array(preds[key]) for key in preds.keys()]
 
         return eval_results, trues, preds, histories
-
-
-
-        
-
-
 
 
 if __name__ == "__main__":

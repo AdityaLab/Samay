@@ -21,9 +21,9 @@ import numpy as np
 import torch
 from huggingface_hub import snapshot_download
 
-from tsfmproject.models.timesfm.timesfm import pytorch_patched_decoder as ppd
-from tsfmproject.models.timesfm.timesfm import timesfm_base
-from tsfmproject.utils import get_least_used_gpu
+from samay.models.timesfm.timesfm import pytorch_patched_decoder as ppd
+from samay.models.timesfm.timesfm import timesfm_base
+from samay.utils import get_least_used_gpu
 
 _TOL = 1e-6
 
