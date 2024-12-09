@@ -196,7 +196,8 @@ class ChronosModel(Basemodel):
         # self.device = torch.device("cuda")
         self.result_logger = self.setup_logger("results")
         self.evaluation_logger = self.setup_logger("evaluation")
-        self.model = self.load_model(model_dir=repo)
+        self.model = self.load_model(model_dir=self.repo, model_type="seq2seq")
+        
 
     def setup_logger(self, log_type):
         log_dir = Path(os.path.join(sys.path[0],'./tsfmproject/models/chronosforecasting/output/') )/ log_type
@@ -370,7 +371,7 @@ class ChronosModel(Basemodel):
                 actual = actual.detach().cpu().numpy()
                 history = history
                 history_stack = history.reshape(-1, context_len)
-                prediction = self.model.predict(context=history_stack, prediction_length=64, num_samples=20).detach().cpu().numpy()
+                prediction = self.model.predict(context=history_stack, prediction_length=horizon_len, num_samples=20).detach().cpu().numpy()
                 pred_median = np.median(prediction, axis=1)
                 pred_median = pred_median.reshape(actual.shape[0], actual.shape[1], horizon_len)
 
