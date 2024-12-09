@@ -21,7 +21,6 @@ from hydra.utils import call, instantiate
 from omegaconf import DictConfig
 from torch.utils.tensorboard import SummaryWriter
 
-from uni2ts.common import hydra_util  # noqa: hydra resolvers
 from uni2ts.eval_util.evaluation import evaluate_model
 
 

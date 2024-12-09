@@ -15,22 +15,16 @@
 
 import logging
 import os
-import re
 import shutil
-import time
 import warnings
-from copy import deepcopy
-from datetime import timedelta
 from pathlib import Path
-from typing import Any, Dict, Literal, Optional, Set, Union
+from typing import Optional, Union
 from weakref import proxy
 
 import lightning.pytorch as pl
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.utilities.rank_zero import (
     WarningCache,
-    rank_zero_info,
-    rank_zero_warn,
 )
 
 log = logging.getLogger(__name__)

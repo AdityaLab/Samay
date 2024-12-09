@@ -1,21 +1,24 @@
+import gc
 import os
 import sys
-import torch
+
 import numpy as np
 import pandas as pd
-import gc
+import torch
 
 src_path = os.path.abspath(os.path.join("src"))
 if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
-from tsfmproject.model import TimesfmModel, ChronosModel, MoiraiTSModel
-from tsfmproject.dataset import TimesfmDataset, ChronosDataset, MoiraiDataset
-from tsfmproject.utils import load_args
-
+from samay.dataset import MoiraiDataset
+from samay.model import MoiraiTSModel
+from samay.utils import load_args
 
 DATASET_LIST = ["exchange_rate", "illness", "weather"]
-DATASET_PATH = ["data" + "/{dataset}/{dataset}.csv".format(dataset=dataset) for dataset in DATASET_LIST]
+DATASET_PATH = [
+    "data" + "/{dataset}/{dataset}.csv".format(dataset=dataset)
+    for dataset in DATASET_LIST
+]
 
 
 def update_leaderboard(dataset_name, model_name, metrics, leaderboard_path):
@@ -24,13 +27,16 @@ def update_leaderboard(dataset_name, model_name, metrics, leaderboard_path):
     """
     if not os.path.exists(leaderboard_path):
         # Create the leaderboard with appropriate columns if it doesn't exist
-        columns = ["Dataset"] + [f"{model}_{metric}" for model in ["TimesFM", "Chronos", "Moirai"] 
-                                 for metric in metrics.keys()]
+        columns = ["Dataset"] + [
+            f"{model}_{metric}"
+            for model in ["TimesFM", "Chronos", "Moirai"]
+            for metric in metrics.keys()
+        ]
         df = pd.DataFrame(columns=columns)
         df.to_csv(leaderboard_path, encoding="utf-8", index=False)
     else:
         df = pd.read_csv(leaderboard_path)
-    
+
     # Ensure unique column names and reset index
     if not df.columns.is_unique:
         print("Duplicate columns detected. Fixing...")
@@ -94,24 +100,34 @@ if __name__ == "__main__":
     #     eval_results, _, _, _ = chronos.evaluate(val_dataset, batch_size=8, metrics=["MSE", "MASE"])
     #     metrics = {"MSE": eval_results["MSE"], "MASE": eval_results["MASE"]}
     #     update_leaderboard(dataset, model_name, metrics, leaderboard_path)
-        
+
     # del chronos
     # torch.cuda.empty_cache()
     # gc.collect()
-
 
     # Evaluate Moirai model
     arg_path = "config/moirai.json"
     model_name = "Moirai"
     args = load_args(arg_path)
-    moirai = MoiraiTSModel(config=args["config"], repo=args["repo"], model_type=args["config"]["model_type"], model_size=args["config"]["model_size"])
+    moirai = MoiraiTSModel(
+        config=args["config"],
+        repo=args["repo"],
+        model_type=args["config"]["model_type"],
+        model_size=args["config"]["model_size"],
+    )
 
     for dataset, dataset_path in zip(DATASET_LIST, DATASET_PATH):
         print(f"Evaluating {model_name} on dataset: {dataset}")
         torch.cuda.empty_cache()
-        val_dataset = MoiraiDataset(name=dataset, datetime_col="date", path=dataset_path,
-                                    mode="test", context_len=args["config"]["context_len"],
-                                    horizon_len=args["config"]["horizon_len"], normalize=False)
+        val_dataset = MoiraiDataset(
+            name=dataset,
+            datetime_col="date",
+            path=dataset_path,
+            mode="test",
+            context_len=args["config"]["context_len"],
+            horizon_len=args["config"]["horizon_len"],
+            normalize=False,
+        )
         eval_results, _, _, _ = moirai.evaluate(val_dataset, metrics=["MSE", "MASE"])
         metrics = {"MSE": eval_results["MSE"], "MASE": eval_results["MASE"]}
         update_leaderboard(dataset, model_name, metrics, leaderboard_path)

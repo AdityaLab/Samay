@@ -17,7 +17,6 @@ from enum import Enum
 from functools import partial
 from typing import Optional
 
-import torch
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LambdaLR, ReduceLROnPlateau
 

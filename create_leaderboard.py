@@ -1,6 +1,6 @@
-import os 
+import os
 import sys
-import torch
+
 import numpy as np
 import pandas as pd
 
@@ -8,13 +8,15 @@ src_path = os.path.abspath(os.path.join("src"))
 if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
-from tsfmproject.model import TimesfmModel, MomentModel
-from tsfmproject.dataset import TimesfmDataset, MomentDataset
-from tsfmproject.utils import load_args
-
+from samay.dataset import TimesfmDataset
+from samay.model import TimesfmModel
+from samay.utils import load_args
 
 DATASET_LIST = ["electricity", "exchange_rate", "illness", "traffic", "weather"]
-DATASET_PATH = ["data" + "/{dataset}/{dataset}.csv".format(dataset=dataset) for dataset in DATASET_LIST] 
+DATASET_PATH = [
+    "data" + "/{dataset}/{dataset}.csv".format(dataset=dataset)
+    for dataset in DATASET_LIST
+]
 
 
 if __name__ == "__main__":
@@ -37,8 +39,15 @@ if __name__ == "__main__":
             df = pd.DataFrame(columns=["Dataset\Model"])
             df.to_csv(leaderboard_path, encoding="utf-8", index=False)
         df = pd.read_csv(leaderboard_path)
-        val_dataset = TimesfmDataset(name="ett", datetime_col='date', path=dataset_path,
-                              mode='test', context_len=args["config"]["context_len"], horizon_len=args["config"]["horizon_len"], normalize=False)
+        val_dataset = TimesfmDataset(
+            name="ett",
+            datetime_col="date",
+            path=dataset_path,
+            mode="test",
+            context_len=args["config"]["context_len"],
+            horizon_len=args["config"]["horizon_len"],
+            normalize=False,
+        )
         avg_loss, trues, preds, histories = tfm.evaluate(val_dataset)
         MAE = np.mean(np.abs(trues - preds))
         print("MAE: ", MAE)
@@ -54,11 +63,3 @@ if __name__ == "__main__":
         print("Leaderboard updated and saved")
         print("Leaderboard: ")
         print(df)
-
-
-
-
-
-
-
-    

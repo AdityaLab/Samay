@@ -1,6 +1,5 @@
 import logging
 import json
-from pathlib import Path
 
 class JsonFileHandler(logging.Handler):
     def __init__(self, filename):

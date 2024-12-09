@@ -14,10 +14,10 @@
 #  limitations under the License.
 
 
-from tsfmproject.models.uni2ts.model.moirai.module import MoiraiModule
-from tsfmproject.models.uni2ts.model.moirai.pretrain import MoiraiPretrain
-from tsfmproject.models.uni2ts.model.moirai.finetune import MoiraiFinetune
-from tsfmproject.models.uni2ts.model.moirai.forecast import MoiraiForecast
+from samay.models.uni2ts.model.moirai.finetune import MoiraiFinetune
+from samay.models.uni2ts.model.moirai.forecast import MoiraiForecast
+from samay.models.uni2ts.model.moirai.module import MoiraiModule
+from samay.models.uni2ts.model.moirai.pretrain import MoiraiPretrain
 
 # from .finetune import MoiraiFinetune
 # from .forecast import MoiraiForecast

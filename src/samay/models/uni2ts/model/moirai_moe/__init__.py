@@ -12,10 +12,8 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-from tsfmproject.models.uni2ts.model.moirai_moe.module import MoiraiMoEModule
-from tsfmproject.models.uni2ts.model.moirai_moe.forecast import MoiraiMoEForecast
-
-
+from samay.models.uni2ts.model.moirai_moe.forecast import MoiraiMoEForecast
+from samay.models.uni2ts.model.moirai_moe.module import MoiraiMoEModule
 
 # from .forecast import MoiraiMoEForecast
 # from .module import MoiraiMoEModule

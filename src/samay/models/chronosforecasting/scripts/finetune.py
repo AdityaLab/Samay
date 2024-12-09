@@ -8,8 +8,6 @@ import re
 import sys
 import json
 import itertools
-import random
-from copy import deepcopy
 from pathlib import Path
 from functools import partial
 from typing import List, Iterator, Optional, Dict
@@ -149,7 +147,6 @@ def train_model(
     )
     logger.info(f"Mixing probabilities: {probability}")
 
-    from gluonts.transform import FilterTransformation
 
     def has_enough_observations(
         entry: dict, min_length: int = 0, max_missing_prop: float = 1.0

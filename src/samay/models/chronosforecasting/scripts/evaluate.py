@@ -2,8 +2,7 @@ import logging
 from pathlib import Path
 import torch
 from transformers import AutoModelForSeq2SeqLM, AutoModelForCausalLM
-from sklearn.metrics import mean_squared_error, mean_absolute_percentage_error, root_mean_squared_error
-import numpy as np
+from sklearn.metrics import mean_squared_error, mean_absolute_percentage_error
 from chronos import ChronosPipeline
 from json_logger import JsonFileHandler, JsonFormatter
 
