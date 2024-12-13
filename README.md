@@ -147,3 +147,6 @@ url={https://openreview.net/forum?id=vMMzjCr5Zj}
 }
 ```
 
+## Contact
+
+If you have any feedback or questions, you can contact us via email: hkamarthi3@gatech.edu.
