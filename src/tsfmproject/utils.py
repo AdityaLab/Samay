@@ -5,6 +5,7 @@ import pandas as pd
 import json
 from .models.moment.momentfm.utils.data import load_from_tsfile
 from datasets import load_from_disk 
+from matplotlib import pyplot as plt
 
 def get_least_used_gpu():
     """Get the least used GPU device."""
@@ -114,6 +115,60 @@ def arrow_to_csv(arrow_dir):
     pivot_df.to_csv(csv_file, index=False)
     print(f"Conversion complete for {arrow_dir}.")
 
+
+def visualize(task_name="forecasting", trues=None, preds=None, history=None, masks=None, **kwargs):
+    """
+    Visualize the data.
+    If task_name is "forecasting", trues, preds, and history should be provided, which channel_idx and time_idx are optional.
+    If task_name is "anomaly_detection", trues and preds should be provided, which start and end are optional.
+    If task_name is "imputation", trues, preds, and masks should be provided, which channel_idx and time_idx are optional.
+    """
+    trues = np.array(trues)
+    preds = np.array(preds)
+    if task_name == "forecasting":
+        histories = np.array(history)
+        channel_idx = np.random.randint(0, trues.shape[1]) if "channel_idx" not in kwargs else kwargs["channel_idx"]
+        time_idx = np.random.randint(0, trues.shape[0]) if "time_idx" not in kwargs else kwargs["time_idx"] 
+        history = histories[time_idx, channel_idx, :] 
+        true = trues[time_idx, channel_idx, :]
+        pred = preds[time_idx, channel_idx, :]
+        # Plotting the first time series from history
+        plt.plot(range(len(history)), history, label=f'History ({len(history)} timesteps)', c='darkblue')
+
+        # Plotting ground truth and prediction
+        num_forecasts = len(true)
+
+        offset = len(history)
+        plt.plot(range(offset, offset + len(true)), true, label=f'Ground Truth ({len(true)} timesteps)', color='darkblue', linestyle='--', alpha=0.5)
+        plt.plot(range(offset, offset + len(pred)), pred, label=f'Forecast ({len(pred)} timesteps)', color='red', linestyle='--')
+
+        plt.title(f"(idx={time_idx}, channel={channel_idx})", fontsize=18)
+        plt.xlabel('Time', fontsize=14)
+        plt.ylabel('Value', fontsize=14)
+        plt.legend(fontsize=14)
+        plt.show()
+
+    elif task_name == "anomaly_detection":
+        anomaly_scores = (trues - preds)**2
+        start = 0 if "start" not in kwargs else kwargs["start"]
+        end = 1000 if "end" not in kwargs else kwargs["end"]
+        plt.plot(trues[start:end], label="Observed", c='darkblue')
+        plt.plot(preds[start:end], label="Predicted", c='red')
+        plt.plot(anomaly_scores[start:end], label="Anomaly Score", c='black')
+        plt.legend(fontsize=16)
+        plt.show()
+
+    elif task_name == "imputation":
+        time_idx = np.random.randint(0, trues.shape[0]) if "time_idx" not in kwargs else kwargs["time_idx"]
+        channel_idx = np.random.randint(0, trues.shape[1]) if "channel_idx" not in kwargs else kwargs["channel_idx"]
+        fig, axs = plt.subplots(2, 1, figsize=(10, 5))
+        axs[0].set_title(f"Channel={channel_idx}")
+        axs[0].plot(trues[time_idx, channel_idx, :].squeeze(), label='Ground Truth', c='darkblue')
+        axs[0].plot(preds[time_idx, channel_idx, :].squeeze(), label='Predictions', c='red')
+        axs[0].legend(fontsize=16)
+
+        axs[1].imshow(np.tile(masks[np.newaxis, time_idx, channel_idx], reps=(8, 1)), cmap='binary')
+        plt.show()
 
 if __name__ == "__main__":
     # ts_path = "/nethome/sli999/TSFMProject/src/tsfmproject/models/moment/data/ECG5000_TRAIN.ts"
