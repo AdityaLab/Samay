@@ -1,8 +1,8 @@
 {
     "repo": "google/timesfm-1.0-200m-pytorch",
     "config": {
-        "context_len": 128,
-        "horizon_len": 64,
+        "context_len": 32,
+        "horizon_len": 32,
         "backend": "gpu",
         "per_core_batch_size": 32,
         "input_patch_len": 32,
