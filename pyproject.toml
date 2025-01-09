@@ -19,6 +19,8 @@ dependencies = [
     "typer-config>=1.4.2",
     "typer>=0.15.1",
     "utilsforecast>=0.2.7",
+    "datasets>=3.2.0",
+    "jax>=0.4.38",
 ]
 
 [build-system]
