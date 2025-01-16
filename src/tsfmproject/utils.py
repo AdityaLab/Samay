@@ -148,7 +148,7 @@ def visualize(task_name="forecasting", trues=None, preds=None, history=None, mas
         plt.legend(fontsize=14)
         plt.show()
 
-    elif task_name == "anomaly_detection":
+    elif task_name == "detection":
         anomaly_scores = (trues - preds)**2
         start = 0 if "start" not in kwargs else kwargs["start"]
         end = 1000 if "end" not in kwargs else kwargs["end"]

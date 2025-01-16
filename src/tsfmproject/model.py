@@ -5,8 +5,9 @@ import numpy as np
 import pandas as pd
 import torch
 
-from .utils import get_least_used_gpu
+from .utils import get_least_used_gpu, visualize
 from .models.moment.momentfm.utils.masking import Masking
+from .metric import *
 
 
 class Basemodel:
@@ -98,7 +99,7 @@ class TimesfmModel(Basemodel):
         """
         return self.model.forecast(input)
     
-    def evaluate(self, dataset, **kwargs):
+    def plot(self, dataset, **kwargs):
         dataloader = dataset.get_data_loader()
         trues, preds, histories, losses = [], [], [], []
         with torch.no_grad():
@@ -124,7 +125,63 @@ class TimesfmModel(Basemodel):
         preds = np.concatenate(preds, axis=0).reshape(-1, dataset.num_ts, preds[-1].shape[-1])
         histories = np.concatenate(histories, axis=0).reshape(-1, dataset.num_ts, histories[-1].shape[-1])
 
-        return average_loss, trues, preds, histories
+        visualize(task_name="forecasting", trues=trues, preds=preds, history=histories, **kwargs)
+
+        # return average_loss, trues, preds, histories
+
+
+    def evaluate(self, dataset, **kwargs):
+        dataloader = dataset.get_data_loader()
+        trues, preds, histories, quantiles, losses = [], [], [], [], []
+        with torch.no_grad():
+            for i, (inputs) in enumerate(dataloader):
+                inputs = dataset.preprocess(inputs)
+                input_ts = inputs["input_ts"]
+                input_ts = np.squeeze(input_ts, axis=0)
+                actual_ts = inputs["actual_ts"].detach().cpu().numpy()
+                actual_ts = np.squeeze(actual_ts, axis=0)
+
+                output, quantile_output = self.model.forecast(input_ts)
+                output = output[:, 0:actual_ts.shape[1]]
+                quantile_output = quantile_output[:, 0:actual_ts.shape[1]]
+
+                loss = np.mean((output - actual_ts) ** 2)
+                losses.append(loss.item())
+                trues.append(actual_ts)
+                preds.append(output)
+                histories.append(input_ts)
+                quantiles.append(quantile_output)
+
+        losses = np.array(losses)
+        average_loss = np.average(losses)
+        trues = np.concatenate(trues, axis=0).reshape(-1, dataset.num_ts, trues[-1].shape[-1])
+        print("trues shape", trues.shape)
+        preds = np.concatenate(preds, axis=0).reshape(-1, dataset.num_ts, preds[-1].shape[-1])
+        histories = np.concatenate(histories, axis=0).reshape(-1, dataset.num_ts, histories[-1].shape[-1])
+        quantiles = np.concatenate(quantiles, axis=0).reshape(-1, dataset.num_ts, quantiles[-1].shape[-1])
+        print("quantiles shape", quantiles.shape)
+
+        mse = MSE(trues, preds)
+        mae = MAE(trues, preds)
+        mase = MASE(trues, preds)
+        mape = MAPE(trues, preds)
+        rmse = RMSE(trues, preds)
+        nrmse = NRMSE(trues, preds)
+        smape = SMAPE(trues, preds)
+        msis = MSIS(trues, preds)
+        nd = ND(trues, preds)
+
+        return {
+            "mse": mse,
+            "mae": mae,
+            "mase": mase,
+            "mape": mape,
+            "rmse": rmse,
+            "nrmse": nrmse,
+            "smape": smape,
+            "msis": msis,
+            "nd": nd
+        }
 
                 
         
@@ -250,7 +307,7 @@ class MomentModel(Basemodel):
 
         return self.model
     
-    def evaluate(self, dataset, task_name="forecasting"):
+    def plot(self, dataset, task_name="forecasting"):
         dataloader = dataset.get_data_loader()
         criterion = torch.nn.MSELoss()
         self.model.to(self.device)
@@ -279,7 +336,9 @@ class MomentModel(Basemodel):
             preds = np.concatenate(preds, axis=0)
             histories = np.concatenate(histories, axis=0)
 
-            return average_loss, trues, preds, histories
+            visualize(task_name="forecasting", trues=trues, preds=preds, history=histories)
+
+            # return average_loss, trues, preds, histories
         
         elif task_name == "imputation":
             trues, preds, masks = [], [], []
@@ -308,7 +367,9 @@ class MomentModel(Basemodel):
             preds = np.concatenate(preds, axis=0)
             masks = np.concatenate(masks, axis=0)
 
-            return trues, preds, masks
+            visualize(task_name="imputation", trues=trues, preds=preds, masks=masks)
+
+            # return trues, preds, masks
         
         elif task_name == "detection":
             trues, preds, labels = [], [], []
@@ -329,32 +390,34 @@ class MomentModel(Basemodel):
             preds = np.concatenate(preds, axis=0).flatten()
             labels = np.concatenate(labels, axis=0).flatten()
 
-            return trues, preds, labels
-        
-        elif task_name == "classification":
-            accuracy = 0
-            total = 0
-            embeddings = []
-            labels = []
-            with torch.no_grad():
-                for i, data in enumerate(dataloader):
-                    # unpack the data
-                    timeseries, input_mask, label = data
-                    timeseries = timeseries.to(self.device).float()
-                    label = label.to(self.device).long()
-                    labels.append(label.detach().cpu().numpy())
-                    input_mask = input_mask.to(self.device).long()
-                    output = self.model(x_enc=timeseries, input_mask=input_mask)
-                    embedding = output.embeddings.mean(dim=1)
-                    embeddings.append(embedding.detach().cpu().numpy())
-                    _, predicted = torch.max(output.logits, 1)
-                    total += label.size(0)
-                    accuracy += (predicted == label).sum().item()
+            visualize(task_name="detection", trues=trues, preds=preds, labels=labels)
 
-            accuracy = accuracy / total
-            embeddings = np.concatenate(embeddings)
-            labels = np.concatenate(labels)
-            return accuracy, embeddings, labels
+            # return trues, preds, labels
+        
+        # elif task_name == "classification":
+        #     accuracy = 0
+        #     total = 0
+        #     embeddings = []
+        #     labels = []
+        #     with torch.no_grad():
+        #         for i, data in enumerate(dataloader):
+        #             # unpack the data
+        #             timeseries, input_mask, label = data
+        #             timeseries = timeseries.to(self.device).float()
+        #             label = label.to(self.device).long()
+        #             labels.append(label.detach().cpu().numpy())
+        #             input_mask = input_mask.to(self.device).long()
+        #             output = self.model(x_enc=timeseries, input_mask=input_mask)
+        #             embedding = output.embeddings.mean(dim=1)
+        #             embeddings.append(embedding.detach().cpu().numpy())
+        #             _, predicted = torch.max(output.logits, 1)
+        #             total += label.size(0)
+        #             accuracy += (predicted == label).sum().item()
+
+        #     accuracy = accuracy / total
+        #     embeddings = np.concatenate(embeddings)
+        #     labels = np.concatenate(labels)
+        #     return accuracy, embeddings, labels
 
 
 
