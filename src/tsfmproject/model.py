@@ -4,6 +4,7 @@ from .models.moment.momentfm.models.moment import MOMENT, MOMENTPipeline
 import numpy as np
 import pandas as pd
 import torch
+import json
 
 from .utils import get_least_used_gpu, visualize
 from .models.moment.momentfm.utils.masking import Masking
@@ -45,6 +46,7 @@ class TimesfmModel(Basemodel):
             try:
                 ckpt = tfm.TimesFmCheckpoint(huggingface_repo_id=repo)
             except:
+                ckpt = None
                 raise ValueError(f"Repository {repo} not found")
 
         self.model = tfm.TimesFm(hparams=hparams, checkpoint=ckpt)
@@ -158,7 +160,7 @@ class TimesfmModel(Basemodel):
         print("trues shape", trues.shape)
         preds = np.concatenate(preds, axis=0).reshape(-1, dataset.num_ts, preds[-1].shape[-1])
         histories = np.concatenate(histories, axis=0).reshape(-1, dataset.num_ts, histories[-1].shape[-1])
-        quantiles = np.concatenate(quantiles, axis=0).reshape(-1, dataset.num_ts, quantiles[-1].shape[-1])
+        quantiles = np.concatenate(quantiles, axis=0).reshape(quantiles[-1].shape[-1], -1, dataset.num_ts, quantiles[-1].shape[-2])
         print("quantiles shape", quantiles.shape)
 
         mse = MSE(trues, preds)
@@ -170,6 +172,7 @@ class TimesfmModel(Basemodel):
         smape = SMAPE(trues, preds)
         msis = MSIS(trues, preds)
         nd = ND(trues, preds)
+        mwsq = MeanWeightedSumQuantileLoss(trues, preds, quantiles)
 
         return {
             "mse": mse,
@@ -180,7 +183,8 @@ class TimesfmModel(Basemodel):
             "nrmse": nrmse,
             "smape": smape,
             "msis": msis,
-            "nd": nd
+            "nd": nd,
+            "mwsq": mwsq,
         }
 
                 
@@ -206,11 +210,16 @@ class MomentModel(Basemodel):
     def __init__(self, config=None, repo=None):
         super().__init__(config=config, repo=repo)
         if not repo:
-            raise ValueError("Moment model requires a repository")
-        self.model = MOMENTPipeline.from_pretrained(
-            repo, 
-            model_kwargs=self.config
-        )
+            # raise ValueError("Moment model requires a repository")
+            print("Initializing a new MOMENT model without pre-trained weights")
+            base_config = json.load(open("/nethome/sli999/TSFMProject/config/moment_base.json", "r"))
+            self.model = MOMENTPipeline(config=base_config , model_kwargs=self.config)
+        else:
+            print(f"Loading MOMENT model from {repo}")
+            self.model = MOMENTPipeline.from_pretrained(
+                repo, 
+                model_kwargs=self.config
+            )
         self.model.init()
 
     def finetune(self, dataset, task_name="forecasting", **kwargs):
@@ -418,6 +427,81 @@ class MomentModel(Basemodel):
         #     embeddings = np.concatenate(embeddings)
         #     labels = np.concatenate(labels)
         #     return accuracy, embeddings, labels
+
+    def evaluate(self, dataset, task_name="forecasting"):
+        dataloader = dataset.get_data_loader()
+        self.model.to(self.device)
+        self.model.eval()
+        if task_name == "forecasting":
+            criterion = torch.nn.MSELoss()
+            trues, preds, histories, losses = [], [], [], []
+            with torch.no_grad():
+                for i, data in enumerate(dataloader):
+                    # unpack the data
+                    timeseries, input_mask, forecast  = data
+                    # Move the data to the GPU
+                    timeseries = timeseries.float().to(self.device)
+                    input_mask = input_mask.to(self.device)
+                    forecast = forecast.float().to(self.device)
+
+                    output = self.model(x_enc=timeseries, input_mask=input_mask)
+                    loss = criterion(output.forecast, forecast)
+                    losses.append(loss.item())
+                    trues.append(forecast.detach().cpu().numpy())
+                    preds.append(output.forecast.detach().cpu().numpy())
+                    histories.append(timeseries.detach().cpu().numpy())
+
+            losses = np.array(losses)
+            trues = np.concatenate(trues, axis=0)
+            preds = np.concatenate(preds, axis=0)
+            histories = np.concatenate(histories, axis=0)
+
+            mse = MSE(trues, preds)
+            mae = MAE(trues, preds)
+            mase = MASE(trues, preds)
+            mape = MAPE(trues, preds)
+            rmse = RMSE(trues, preds)
+            nrmse = NRMSE(trues, preds)
+            smape = SMAPE(trues, preds)
+            msis = MSIS(trues, preds)
+            nd = ND(trues, preds)
+
+            return {
+                "mse": mse,
+                "mae": mae,
+                "mase": mase,
+                "mape": mape,
+                "rmse": rmse,
+                "nrmse": nrmse,
+                "smape": smape,
+                "msis": msis,
+                "nd": nd,
+            }
+        
+        elif task_name == "classification":
+            accuracy = 0
+            total = 0
+            embeddings = []
+            labels = []
+            with torch.no_grad():
+                for i, data in enumerate(dataloader):
+                    # unpack the data
+                    timeseries, input_mask, label = data
+                    timeseries = timeseries.to(self.device).float()
+                    label = label.to(self.device).long()
+                    labels.append(label.detach().cpu().numpy())
+                    input_mask = input_mask.to(self.device).long()
+                    output = self.model(x_enc=timeseries, input_mask=input_mask)
+                    embedding = output.embeddings.mean(dim=1)
+                    embeddings.append(embedding.detach().cpu().numpy())
+                    _, predicted = torch.max(output.logits, 1)
+                    total += label.size(0)
+                    accuracy += (predicted == label).sum().item()
+
+            accuracy = accuracy / total
+            embeddings = np.concatenate(embeddings)
+            labels = np.concatenate(labels)
+            return accuracy, embeddings, labels
 
 
 

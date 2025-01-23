@@ -59,10 +59,63 @@ def freq_map(freq: str):
     return 2
   else:
     raise ValueError(f"Invalid frequency: {freq}")
+  
+
+def strip_leading_nans(arr):
+  """
+  Removes contiguous NaN values from the beginning of a NumPy array.
+
+  Args:
+    arr: The input NumPy array.
+
+  Returns:
+    A new NumPy array with leading NaN values removed.
+    If the array is all NaNs or empty, returns an empty array.
+  """
+
+  isnan = np.isnan(arr)
+  first_valid_index = np.argmax(~isnan)
+  return arr[first_valid_index:]
+
+
+def linear_interpolation(arr):
+  """
+    Performs linear interpolation to fill NaN values in a 1D numpy array.
+
+    Args:
+        arr: The 1D numpy array containing NaN values.
+
+    Returns:
+        A new numpy array with NaN values filled using linear interpolation, 
+        or the original array if no NaNs are present. 
+        Returns None if the input is not a 1D array.
+        Returns the original array if there are no NaN values.
+    """
+
+  nans = np.isnan(arr)
+  if not np.any(nans):  # Check if there are any NaNs
+    return arr
+
+  def x(z):
+    return z.nonzero()[0]
+
+  nans_indices = x(nans)
+  non_nans_indices = x(~nans)
+  non_nans_values = arr[~nans]
+
+  try:
+    arr[nans] = np.interp(nans_indices, non_nans_indices, non_nans_values)
+  except ValueError:
+    if len(non_nans_values) > 0:
+      mu = np.nanmean(arr)
+    else:
+      mu = 0.0
+    arr = np.where(np.isfinite(arr), arr, mu)
+  return arr
 
 
 # Per time series normalization: forward.
-def normalize(batch):
+def _normalize(batch):
   stats = [
       (np.mean(x), np.where((w := np.std(x)) > _TOL, w, 1.0)) for x in batch
   ]
@@ -71,7 +124,7 @@ def normalize(batch):
 
 
 # Per time series normalization: inverse.
-def renormalize(batch, stats):
+def _renormalize(batch, stats):
   return [x * stat[1] + stat[0] for x, stat in zip(batch, stats)]
 
 
@@ -109,6 +162,9 @@ class TimesFmHparams:
   per_core_batch_size: int = 32
   backend: Literal["cpu", "gpu", "tpu"] = "cpu"
   quantiles: Sequence[float] | None = DEFAULT_QUANTILES
+  use_positional_embedding: bool = True
+  # Hparams beyond the model.
+  point_forecast_mode: Literal["mean", "median"] = "median"
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -125,11 +181,12 @@ class TimesFmCheckpoint:
     step: If provided, step of the checkpoint.
   """
 
-  version: str = "jax"
+  version: str = "torch"
   path: str | None = None
   huggingface_repo_id: str | None = None
   type: Any = None
   step: int | None = None
+  local_dir: str | None = None
 
 
 class TimesFmBase:
@@ -169,6 +226,7 @@ class TimesFmBase:
     self.backend = hparams.backend
     self.quantiles = hparams.quantiles
     self.num_heads = hparams.num_heads
+    self.use_pos_emb = hparams.use_positional_embedding
 
     # Rewrite these values in __post_init__ for SPMD.
     self.num_cores = 1
@@ -238,7 +296,7 @@ class TimesFmBase:
         pmap_pad,
     )
 
-  def forecast(
+  def _forecast(
       self,
       inputs: Sequence[Any],
       freq: Sequence[int] | None = None,
@@ -273,6 +331,88 @@ class TimesFmBase:
     ValueError: If the checkpoint is not properly loaded.
     """
     raise NotImplementedError("`forecast` is not implemented.")
+  
+  def forecast(
+      self,
+      inputs: Sequence[Any],
+      freq: Sequence[int] | None = None,
+      window_size: int | None = None,
+      forecast_context_len: int | None = None,
+      return_forecast_on_context: bool = False,
+      normalize: bool = False,
+  ) -> tuple[np.ndarray, np.ndarray]:
+    """Forecasts on a list of time series.
+
+    Args:
+      inputs: list of time series forecast contexts. Each context time series
+        should be in a format convertible to JTensor by `jnp.array`.
+      freq: frequency of each context time series. 0 for high frequency
+        (default), 1 for medium, and 2 for low. Notice this is different from
+        the `freq` required by `forecast_on_df`.
+      window_size: window size of trend + residual decomposition. If None then
+        we do not do decomposition.
+      forecast_context_len: optional max context length.
+      return_forecast_on_context: True to return the forecast on the context
+        when available, i.e. after the first input patch.
+      normalize: If True, then we normalize the inputs before forecasting and
+        the outputs are then renormalized to the original scale.
+
+    Returns:
+    A tuple for np.array:
+    - the mean forecast of size (# inputs, # forecast horizon),
+    - the full forecast (mean + quantiles) of size
+        (# inputs,  # forecast horizon, 1 + # quantiles).
+
+    Raises:
+    ValueError: If the checkpoint is not properly loaded.
+    """
+    stats = None
+
+    tmp_inputs = []
+    for each_input in inputs:
+      arr = np.array(each_input)
+      if not np.isfinite(arr).all():
+        arr = np.where(np.isfinite(arr), arr, np.nan)
+        arr = strip_leading_nans(arr)
+        arr = linear_interpolation(arr)
+      tmp_inputs.append(arr)
+
+    inputs = tmp_inputs
+    if normalize:
+      inputs, stats = _normalize(inputs)
+    mean_forecast, quantile_forecast = self._forecast(
+        inputs,
+        freq,
+        window_size,
+        forecast_context_len,
+        return_forecast_on_context,
+    )
+    if stats is not None:
+      stats = np.array(stats)
+      mu = stats[:, 0]
+      sigma = stats[:, 1]
+      mean_forecast = mean_forecast * sigma[:, None] + mu[:, None]
+      quantile_forecast = (quantile_forecast * sigma[:, None, None] +
+                           mu[:, None, None])
+    if self.hparams.point_forecast_mode == "mean":
+      return mean_forecast, quantile_forecast
+    elif self.hparams.point_forecast_mode == "median":
+      if self._median_index == -1:
+        for i, quantile in enumerate(self.quantiles):
+          if quantile == 0.5:
+            self._median_index = i
+            break
+        if self._median_index == -1:
+          raise ValueError("Median (0.5) is not found in the model quantiles:"
+                           f" {self.quantiles}. Please check the hparams.")
+      return (
+          quantile_forecast[:, :, 1 + self._median_index],
+          quantile_forecast,
+      )
+    else:
+      raise ValueError(
+          "Unsupported point forecast mode:"
+          f" {self.hparams.point_forecast_mode}. Use 'mean' or 'median'.")
 
   def forecast_with_covariates(
       self,
@@ -407,7 +547,7 @@ class TimesFmBase:
       ]
       per_instance_stats = None
       if normalize_xreg_target_per_input:
-        targets, per_instance_stats = normalize(targets)
+        targets, per_instance_stats = _normalize(targets)
       xregs = xreg_lib.BatchedInContextXRegLinear(
           targets=targets,
           train_lens=train_lens,
@@ -430,7 +570,7 @@ class TimesFmBase:
           assert_covariate_shapes=True,
       )
       if normalize_xreg_target_per_input:
-        xregs = renormalize(xregs, per_instance_stats)
+        xregs = _renormalize(xregs, per_instance_stats)
       outputs = [
           (mean_output[self._horizon_start:(self._horizon_start + test_len)] +
            xreg)
@@ -445,7 +585,7 @@ class TimesFmBase:
       ]
       per_instance_stats = None
       if normalize_xreg_target_per_input:
-        targets, per_instance_stats = normalize(targets)
+        targets, per_instance_stats = _normalize(targets)
       xregs, xregs_on_context, _, _, _ = xreg_lib.BatchedInContextXRegLinear(
           targets=targets,
           train_lens=train_lens,
@@ -483,7 +623,7 @@ class TimesFmBase:
           for mean_output, test_len, xreg in zip(mean_outputs, test_lens, xregs)
       ]
       if normalize_xreg_target_per_input:
-        outputs = renormalize(outputs, per_instance_stats)
+        outputs = _renormalize(outputs, per_instance_stats)
 
     return outputs, xregs
 

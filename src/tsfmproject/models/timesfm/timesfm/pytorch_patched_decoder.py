@@ -57,6 +57,8 @@ class TimesFMConfig:
   dtype: str = "bfloat32"
   # use positional embedding
   use_positional_embedding: bool = True
+  # use positional embedding
+  use_positional_embedding: bool = True
 
 
 def _masked_mean_std(

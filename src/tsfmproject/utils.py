@@ -132,11 +132,14 @@ def visualize(task_name="forecasting", trues=None, preds=None, history=None, mas
         history = histories[time_idx, channel_idx, :] 
         true = trues[time_idx, channel_idx, :]
         pred = preds[time_idx, channel_idx, :]
+
+        num_history = len(history)
+
+        # Set figure size proportional to the number of forecasts
+        plt.figure(figsize=(0.02 * num_history, 5))
+
         # Plotting the first time series from history
         plt.plot(range(len(history)), history, label=f'History ({len(history)} timesteps)', c='darkblue')
-
-        # Plotting ground truth and prediction
-        num_forecasts = len(true)
 
         offset = len(history)
         plt.plot(range(offset, offset + len(true)), true, label=f'Ground Truth ({len(true)} timesteps)', color='darkblue', linestyle='--', alpha=0.5)
