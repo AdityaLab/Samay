@@ -7,7 +7,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
-from chronos import ChronosPipeline
+# from chronos import ChronosPipeline
+from .models.chronosforecasting.chronos.chronos import ChronosPipeline
 from sklearn.metrics import mean_squared_error
 from torch.utils.data import DataLoader
 

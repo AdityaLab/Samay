@@ -25,21 +25,21 @@ from jaxtyping import Bool, Float, Int
 from torch import nn
 from torch.distributions import Distribution
 
-from uni2ts.loss.packed import (
+from samay.models.uni2ts.loss.packed import (
     PackedDistributionLoss,
     PackedLoss,
     PackedNLLLoss,
     PackedPointLoss,
 )
-from uni2ts.module.norm import RMSNorm
-from uni2ts.module.position import (
+from samay.models.uni2ts.module.norm import RMSNorm
+from samay.models.uni2ts.module.position import (
     BinaryAttentionBias,
     LearnedEmbedding,
     LearnedProjection,
 )
-from uni2ts.module.ts_embed import MultiInSizeLinear, MultiOutSizeLinear
-from uni2ts.optim import SchedulerType, get_scheduler
-from uni2ts.transform import (
+from samay.models.uni2ts.module.ts_embed import MultiInSizeLinear, MultiOutSizeLinear
+from samay.models.uni2ts.optim import SchedulerType, get_scheduler
+from samay.models.uni2ts.transform import (
     AddObservedMask,
     AddTimeIndex,
     AddVariateIndex,
