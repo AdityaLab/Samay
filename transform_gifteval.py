@@ -88,8 +88,11 @@ if __name__ == "__main__":
                 timestamps = timestamps.union(current_timestamps)
 
             series_data[f"series_{series_id}"] = pd.Series(target, index=current_timestamps)
+            # fill in missing values in target with previous value        
 
         df = pd.DataFrame(series_data, index=timestamps).reset_index()
+        df.ffill(inplace=True)
+        df.fillna(0, inplace=True)
 
         df.rename(columns={"index": "timestamp"}, inplace=True)
 

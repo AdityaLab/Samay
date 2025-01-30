@@ -135,6 +135,7 @@ class TimesfmModel(Basemodel):
     def evaluate(self, dataset, **kwargs):
         dataloader = dataset.get_data_loader()
         trues, preds, histories, quantiles, losses = [], [], [], [], []
+
         with torch.no_grad():
             for i, (inputs) in enumerate(dataloader):
                 inputs = dataset.preprocess(inputs)
@@ -157,11 +158,9 @@ class TimesfmModel(Basemodel):
         losses = np.array(losses)
         average_loss = np.average(losses)
         trues = np.concatenate(trues, axis=0).reshape(-1, dataset.num_ts, trues[-1].shape[-1])
-        print("trues shape", trues.shape)
         preds = np.concatenate(preds, axis=0).reshape(-1, dataset.num_ts, preds[-1].shape[-1])
         histories = np.concatenate(histories, axis=0).reshape(-1, dataset.num_ts, histories[-1].shape[-1])
         quantiles = np.concatenate(quantiles, axis=0).reshape(quantiles[-1].shape[-1], -1, dataset.num_ts, quantiles[-1].shape[-2])
-        print("quantiles shape", quantiles.shape)
 
         mse = MSE(trues, preds)
         mae = MAE(trues, preds)
@@ -172,7 +171,8 @@ class TimesfmModel(Basemodel):
         smape = SMAPE(trues, preds)
         msis = MSIS(trues, preds)
         nd = ND(trues, preds)
-        mwsq = MeanWeightedSumQuantileLoss(trues, preds, quantiles)
+        mwsq = MWSQ(trues, preds, quantiles)
+        crps = CRPS(trues, preds, quantiles)
 
         return {
             "mse": mse,
@@ -185,6 +185,7 @@ class TimesfmModel(Basemodel):
             "msis": msis,
             "nd": nd,
             "mwsq": mwsq,
+            "crps": crps,
         }
 
                 

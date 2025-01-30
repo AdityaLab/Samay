@@ -1,0 +1,122 @@
+import os 
+import sys
+import numpy as np
+import pandas as pd
+
+
+src_path = os.path.abspath(os.path.join("src"))
+if src_path not in sys.path:
+    sys.path.insert(0, src_path)
+
+from tsfmproject.model import TimesfmModel, MomentModel
+from tsfmproject.dataset import TimesfmDataset, MomentDataset
+from tsfmproject.utils import load_args
+from tsfmproject.metric import *
+
+
+ECON_NAMES = {
+    "m4_yearly": ["Y"],
+    "m4_quarterly": ["Q"],
+    "m4_monthly": ["M"],
+    "m4_weekly": ["W"],
+    "m4_daily": ["D"],
+    "m4_hourly": ["H"],
+}
+
+SALES_NAMES = {
+    "car_parts_with_missing": ['M'],
+    "hierarchical_sales": ['D', 'W'],
+    "restaurant": ['D'],
+}
+
+MODEL_NAMES = ["timesfm"    ]
+MODEL_CONTEXT_LEN = {
+    "timesfm": 32,
+    "moment": 512
+}
+
+
+def calc_pred_and_context_len(freq):
+    # split feq into base and multiplier
+    base = freq[-1]
+    mult = int(freq[:-1]) if len(freq) > 1 else 1
+    if base == 'Y':
+        pred_len = 4
+        context_len = MODEL_CONTEXT_LEN["timesfm"]
+    elif base == 'Q':
+        pred_len = 4
+        context_len = MODEL_CONTEXT_LEN["timesfm"]
+    elif base == 'M':
+        pred_len = 12 // mult
+        context_len = MODEL_CONTEXT_LEN["timesfm"]
+    elif base == 'W':
+        pred_len = 4 // mult
+        context_len = MODEL_CONTEXT_LEN["timesfm"]
+    elif base == 'D':
+        pred_len = 7 // mult
+        context_len = MODEL_CONTEXT_LEN["timesfm"]
+    elif base == 'H':
+        pred_len = 24 // mult
+        context_len = 2 * MODEL_CONTEXT_LEN["timesfm"]
+    elif base == 'S':
+        pred_len = 60 // mult
+        context_len = 4 * MODEL_CONTEXT_LEN["timesfm"]
+    else:
+        raise ValueError(f"Invalid frequency: {freq}")
+    return pred_len, context_len
+    
+    
+
+if __name__ == "__main__":
+    model_name = MODEL_NAMES[0]
+    # create csv file for leaderboard if not already created
+    csv_path = f"leaderboard/{model_name}.csv"
+
+    if not os.path.exists(csv_path):
+        df = pd.DataFrame(columns=["dataset", "mse", "mae", "mase", "mape", "rmse", "nrmse", "smape", "msis", "nd", "mwsq", "crps"])
+        df.to_csv(csv_path, index=False)
+
+    if model_name == "timesfm":
+        arg_path = "config/timesfm.json"
+        args = load_args(arg_path)
+    elif model_name == "moment":
+        arg_path = "config/moment_forecast.json"
+        args = load_args(arg_path)
+
+    NAMES = ECON_NAMES | SALES_NAMES
+
+
+
+    for dataset_name, freqs in NAMES.items():
+        for freq in freqs:
+            pred_len, context_len = calc_pred_and_context_len(freq)
+            args["config"]["horizon_len"] = pred_len
+            args["config"]["context_len"] = context_len
+            if len(freqs) == 1:
+                dataset_path = f"data/gifteval/{dataset_name}/data.csv"
+            else:
+                dataset_path = f"data/gifteval/{dataset_name}/{freq}/data.csv"
+            print(f"Creating leaderboard for dataset: {dataset_name}, context_len: {context_len}, horizon_len: {pred_len}")
+            if model_name == "timesfm":
+                model = TimesfmModel(**args)
+                dataset = TimesfmDataset(datetime_col='timestamp', path=dataset_path, mode='test', context_len=args["config"]["context_len"], horizon_len=args["config"]["horizon_len"], normalize=False)
+                metrics = model.evaluate(dataset)
+
+            elif model_name == "moment":
+                model = MomentModel(**args)
+                dataset = MomentDataset(datetime_col='timestamp', path=dataset_path, mode='test', context_len=args["config"]["context_len"], horizon_len=args["config"]["horizon_len"], normalize=False)
+                train_dataset = MomentDataset(datetime_col='timestamp', path=dataset_path, mode='train', context_len=args["config"]["context_len"], horizon_len=args["config"]["horizon_len"], normalize=False)
+                finetuned_model = model.finetune(train_dataset, task_name="forecasting")
+                metrics = model.evaluate(dataset, task_name="forecasting")
+
+            df = pd.read_csv(csv_path)
+            if dataset_name in df["dataset"].values:
+                df.loc[df["dataset"] == dataset_name, list(metrics.keys())] = list(metrics.values())
+            else:
+                new_row = pd.DataFrame([{**{"dataset": dataset_name}, **metrics}])
+                print(new_row)
+                df = pd.concat([df, new_row], ignore_index=True)
+
+            df.to_csv(csv_path, index=False)
+
+            

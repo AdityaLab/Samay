@@ -132,10 +132,10 @@ class TimesfmDataset(BaseDataset):
         self.stride = stride
         self.data = pd.read_csv(self.data_path)
         if boundaries == (0, 0, 0):
-            # Default boundaries: train 60%, val 20%, test 20%
+            # Default boundaries: train 50%, val 20%, test 30%
             self.boundaries = [
-                int(len(self.data) * 0.6),
-                int(len(self.data) * 0.8),
+                int(len(self.data) * 0.5),
+                int(len(self.data) * 0.7),
                 len(self.data) - 1,
             ]
         else:
@@ -260,9 +260,9 @@ class MomentDataset(BaseDataset):
         self.df = pd.read_csv(self.data_path)
 
         if self.boundaries[0] == 0:
-            self.boundaries[0] = int(len(self.df) * 0.6)
+            self.boundaries[0] = int(len(self.df) * 0.5)
         if self.boundaries[1] == 0:
-            self.boundaries[1] = int(len(self.df) * 0.8)
+            self.boundaries[1] = int(len(self.df) * 0.7)
         if self.boundaries[2] == 0:
             self.boundaries[2] = int(len(self.df) - 1)
 
