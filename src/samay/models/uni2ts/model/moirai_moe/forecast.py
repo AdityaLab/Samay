@@ -35,8 +35,8 @@ from gluonts.transform import (
 from gluonts.transform.split import TFTInstanceSplitter
 from jaxtyping import Bool, Float, Int
 
-from uni2ts.common.torch_util import safe_div
-from uni2ts.loss.packed import PackedNLLLoss as _PackedNLLLoss
+from samay.models.uni2ts.common.torch_util import safe_div
+from samay.models.uni2ts.loss.packed import PackedNLLLoss as _PackedNLLLoss
 
 from .module import MoiraiMoEModule
 

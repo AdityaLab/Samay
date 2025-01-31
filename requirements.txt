@@ -1,4 +1,6 @@
 matplotlib
+lightning
+pillow
 torch
 chronos
 uni2ts
