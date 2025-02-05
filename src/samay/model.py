@@ -17,8 +17,8 @@ from .models.moment.momentfm.models.moment import MOMENTPipeline
 from .models.moment.momentfm.utils.masking import Masking
 from .models.timesfm import timesfm as tfm
 from .models.timesfm.timesfm import pytorch_patched_decoder as ppd
-from .models.uni2ts.model.moirai import MoiraiForecast, MoiraiModule
-from .models.uni2ts.model.moirai_moe import MoiraiMoEForecast, MoiraiMoEModule
+# from .models.uni2ts.model.moirai import MoiraiForecast, MoiraiModule
+# from .models.uni2ts.model.moirai_moe import MoiraiMoEForecast, MoiraiMoEModule
 from .utils import get_least_used_gpu
 
 
@@ -149,6 +149,79 @@ class TimesfmModel(Basemodel):
         return average_loss, trues, preds, histories
 
 
+class LPTMModel(Basemodel):
+    def __init__(self, config=None, repo=None, hparams=None, ckpt=None, **kwargs):
+        super().__init__(config=config, repo=repo)
+        hparams = tfm.TimesFmHparams(**self.config)
+        if repo:
+            try:
+                ckpt = tfm.TimesFmCheckpoint(huggingface_repo_id=repo)
+            except:
+                raise ValueError(f"Repository {repo} not found")
+
+        self.model = tfm.TimesFm(hparams=hparams, checkpoint=ckpt)
+
+    def finetune(self, dataset, freeze_transformer=True, **kwargs):
+        core_layer_tpl = self.model._model
+        FinetunedModel = ppd.PatchedDecoderFinetuneModel(core_layer_tpl=core_layer_tpl)
+        if freeze_transformer:
+            for param in FinetunedModel.core_layer.stacked_transformer.parameters():
+                param.requires_grad = False
+        FinetunedModel.to(self.device)
+        FinetunedModel.train()
+        dataloader = dataset.get_data_loader()
+        optimizer = torch.optim.Adam(FinetunedModel.parameters(), lr=1e-4)
+        epoch = 10 if "epoch" not in kwargs else kwargs["epoch"]
+        avg_loss = 0
+        for epoch in range(epoch):
+            for i, (inputs) in enumerate(dataloader):
+                inputs = dataset.preprocess(inputs)
+                inputs = {k: v.to(self.device) for k, v in inputs.items()}
+                optimizer.zero_grad()
+                outputs = FinetunedModel.compute_predictions(inputs)
+                loss = FinetunedModel.compute_loss(outputs, inputs)
+                loss.backward()
+                optimizer.step()
+                avg_loss += loss.item()
+            avg_loss /= len(dataloader)
+            print(f"Epoch {epoch}, Loss: {avg_loss}")
+
+        self.model._model = FinetunedModel.core_layer
+        return self.model
+
+    def forecast(self, input, **kwargs):
+        return self.model.forecast(input)
+
+    def evaluate(self, dataset, **kwargs):
+        dataloader = dataset.get_data_loader()
+        trues, preds, histories, losses = [], [], [], []
+        with torch.no_grad():
+            for i, (inputs) in enumerate(dataloader):
+                inputs = dataset.preprocess(inputs)
+                input_ts = inputs["input_ts"]
+                input_ts = np.squeeze(input_ts)
+                actual_ts = inputs["actual_ts"].detach().cpu().numpy()
+                actual_ts = np.squeeze(actual_ts)
+
+                output, _ = self.model.forecast(input_ts)
+                output = output[:, 0 : actual_ts.shape[1]]
+
+                loss = np.mean((output - actual_ts) ** 2)
+                losses.append(loss.item())
+                trues.append(actual_ts)
+                preds.append(output)
+                histories.append(input_ts)
+
+        losses = np.array(losses)
+        average_loss = np.average(losses)
+        trues = np.stack(trues, axis=0)
+        preds = np.stack(preds, axis=0)
+        histories = np.stack(histories, axis=0)
+
+        return average_loss, trues, preds, histories
+
+
+
 class ChronosModel(Basemodel):
     def __init__(self, config=None, repo=None):
         super().__init__(config=config, repo=repo)
@@ -171,7 +244,7 @@ class ChronosModel(Basemodel):
                 "tie_embeddings": False,
                 "output_dir": os.path.join(
                     sys.path[0],
-                    "./tsfmproject/models/chronosforecasting/output/finetuning/",
+                    "./chronostout/",
                 ),
                 "tf32": True,
                 "torch_compile": True,
@@ -191,9 +264,8 @@ class ChronosModel(Basemodel):
                 "top_k": 50,
                 "top_p": 1.0,
                 "seed": 42,
+                "device": self.device
             }
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        # self.device = torch.device("cuda")
         self.result_logger = self.setup_logger("results")
         self.evaluation_logger = self.setup_logger("evaluation")
         self.model = self.load_model(model_dir=self.repo, model_type="seq2seq")
@@ -202,7 +274,7 @@ class ChronosModel(Basemodel):
         log_dir = (
             Path(
                 os.path.join(
-                    sys.path[0], "./tsfmproject/models/chronosforecasting/output/"
+                    sys.path[0], "./chronostout/"
                 )
             )
             / log_type
@@ -252,7 +324,7 @@ class ChronosModel(Basemodel):
     def finetune(self, dataset, probability_list=None, **kwargs):
         # Convert dataset to arrow format
         data_loc = os.path.join(
-            sys.path[0], "./tsfmproject/models/chronosforecasting/data/data.arrow"
+            sys.path[0], "./chronostout/data.arrow"
         )
 
         time_series_list = [

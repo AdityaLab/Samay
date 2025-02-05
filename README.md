@@ -42,10 +42,8 @@ git clone https://github.com/AdityaLab/Samay.git
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ## Install dependencies
-uv sync
+uv sync --reinstall
 ```
-
-
 
 ## Usage Example
 
