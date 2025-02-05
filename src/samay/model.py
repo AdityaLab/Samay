@@ -21,6 +21,7 @@ from samay.models.timesfm.timesfm import pytorch_patched_decoder as ppd
 from samay.models.uni2ts.model.moirai import MoiraiForecast, MoiraiModule
 from samay.models.uni2ts.model.moirai_moe import MoiraiMoEForecast, MoiraiMoEModule
 from samay.utils import get_least_used_gpu
+from samay.dataset import MoiraiDataset
 
 
 class Basemodel:
@@ -720,7 +721,7 @@ class MoiraiTSModel(Basemodel):
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        if model_type == "moirai":
+        if model_type == "moirai": # standard moirai
             if self.repo is None:
                 self.repo = f"Salesforce/moirai-1.1-R-{model_size}"
             self.model = MoiraiForecast(
@@ -733,7 +734,7 @@ class MoiraiTSModel(Basemodel):
                 feat_dynamic_real_dim=self.feat_dynamic_real_dim,
                 past_feat_dynamic_real_dim=self.past_feat_dynamic_real_dim,
             )
-        elif model_type == "moirai-moe":
+        elif model_type == "moirai-moe": # moirai with Mixture of Experts
             if self.repo is None:
                 self.repo = f"Salesforce/moirai-moe-1.0-R-{model_size}"
             self.model = MoiraiMoEForecast(
@@ -748,7 +749,19 @@ class MoiraiTSModel(Basemodel):
             )
         self.model.to(self.device)
 
-    def evaluate(self, dataset, metrics=["MSE"], **kwargs):
+    def evaluate(self, dataset:MoiraiDataset, metrics=["MSE"], **kwargs):
+        """For a given test dataset, we evaluate the model using the given metrics.
+
+        Args:
+            dataset (MoiraiDataset): Dataset to evaluate the model on.
+            metrics (list, optional): Metrics you want to evaluate the model on. Defaults to ["MSE"].
+
+        Raises:
+            ValueError: Any metric other than "MSE" or "MASE is not supported.
+
+        Returns:
+            dict, list(np.array), list(np.array), list(np.array): returns the evaluation results, true values, predictions and histories.
+        """
         predictor = self.model.create_predictor(batch_size=self.batch_size)
         forecast = predictor.predict(dataset.dataset.input)
 
@@ -762,7 +775,9 @@ class MoiraiTSModel(Basemodel):
         histories = {}
         eval_windows = []
 
-        with torch.no_grad():
+        with torch.no_grad(): # No need to compute gradients
+
+            # Iterate over each window
             for input, label, forecast in zip(input_it, label_it, forecast_it):
                 true_values = np.array(label["target"])
                 past_values = np.array(input["target"])
@@ -773,12 +788,12 @@ class MoiraiTSModel(Basemodel):
                 for metric in metrics:
                     if metric == "MSE":
                         eval.append(mean_squared_error(true_values, pred_values))
+                    
+                    # MASE = current model's MAE / naive model's MAE
                     elif metric == "MASE":
                         forecast_error = np.mean(np.abs(true_values - pred_values))
-                        naive_error = np.mean(
-                            np.abs(true_values[1:] - true_values[:-1])
-                        )
-                        if naive_error == 0:
+                        naive_error = np.mean(np.abs(true_values[1:] - true_values[:-1]))
+                        if naive_error == 0: # Avoid division by zero
                             eval.append(np.inf)
                         else:
                             eval.append(forecast_error / naive_error)
@@ -786,6 +801,7 @@ class MoiraiTSModel(Basemodel):
                         raise ValueError(f"Unsupported metric: {metric}")
                 eval_windows.append(eval)
 
+                # Update history, true values and predictions
                 if length not in histories.keys():
                     histories[length] = []
                     trues[length] = []
@@ -799,6 +815,7 @@ class MoiraiTSModel(Basemodel):
         for i in range(len(metrics)):
             eval_results[metrics[i]] = eval_windows[i]
 
+        # Convert to numpy arrays
         histories = [np.array(histories[key]) for key in histories.keys()]
         trues = [np.array(trues[key]) for key in trues.keys()]
         preds = [np.array(preds[key]) for key in preds.keys()]
