@@ -17,8 +17,8 @@ from .models.moment.momentfm.models.moment import MOMENTPipeline
 from .models.moment.momentfm.utils.masking import Masking
 from .models.timesfm import timesfm as tfm
 from .models.timesfm.timesfm import pytorch_patched_decoder as ppd
-from .models.uni2ts.model.moirai import MoiraiForecast, MoiraiModule
-from .models.uni2ts.model.moirai_moe import MoiraiMoEForecast, MoiraiMoEModule
+# from .models.uni2ts.model.moirai import MoiraiForecast, MoiraiModule
+# from .models.uni2ts.model.moirai_moe import MoiraiMoEForecast, MoiraiMoEModule
 from .utils import get_least_used_gpu
 
 
@@ -221,6 +221,7 @@ class LPTMModel(Basemodel):
         return average_loss, trues, preds, histories
 
 
+
 class ChronosModel(Basemodel):
     def __init__(self, config=None, repo=None):
         super().__init__(config=config, repo=repo)
@@ -243,7 +244,7 @@ class ChronosModel(Basemodel):
                 "tie_embeddings": False,
                 "output_dir": os.path.join(
                     sys.path[0],
-                    "./tsfmproject/models/chronosforecasting/output/finetuning/",
+                    "./chronostout/",
                 ),
                 "tf32": True,
                 "torch_compile": True,
@@ -263,9 +264,8 @@ class ChronosModel(Basemodel):
                 "top_k": 50,
                 "top_p": 1.0,
                 "seed": 42,
+                "device": self.device
             }
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        # self.device = torch.device("cuda")
         self.result_logger = self.setup_logger("results")
         self.evaluation_logger = self.setup_logger("evaluation")
         self.model = self.load_model(model_dir=self.repo, model_type="seq2seq")
@@ -274,7 +274,7 @@ class ChronosModel(Basemodel):
         log_dir = (
             Path(
                 os.path.join(
-                    sys.path[0], "./tsfmproject/models/chronosforecasting/output/"
+                    sys.path[0], "./chronostout/"
                 )
             )
             / log_type
@@ -324,7 +324,7 @@ class ChronosModel(Basemodel):
     def finetune(self, dataset, probability_list=None, **kwargs):
         # Convert dataset to arrow format
         data_loc = os.path.join(
-            sys.path[0], "./tsfmproject/models/chronosforecasting/data/data.arrow"
+            sys.path[0], "./chronostout/data.arrow"
         )
 
         time_series_list = [
