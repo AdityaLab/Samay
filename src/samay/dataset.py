@@ -649,13 +649,15 @@ class MoiraiDataset(BaseDataset):
     """
     Dataset class for Moirai model
     Data Format:
-    
+    Dict with keys:
+    input_ts: np.ndarray, historical time series data
+    actual_ts: np.ndarray, actual time series data    
     """
 
     def __init__(
         self,
         name=None,
-        datetime_col="ds",
+        datetime_col="date",
         path=None,
         boundaries=(0, 0, 0),
         context_len=128,
@@ -670,7 +672,7 @@ class MoiraiDataset(BaseDataset):
         mode="train",
         **kwargs,
     ):
-        super().__init__(name=name, datetime_col=datetime_col, path=path)
+        super().__init__(name=name, datetime_col=datetime_col, path=path, batchsize=batch_size, mode=mode)
         self.context_len = context_len
         self.horizon_len = horizon_len
         self.patch_size = patch_size
@@ -678,13 +680,15 @@ class MoiraiDataset(BaseDataset):
         self.mode = mode
         self.normalize = normalize
         self.data = pd.read_csv(self.data_path)
+
         # set datetime_col as index and remove it from columns
         self.data[self.datetime_col] = pd.to_datetime(self.data[self.datetime_col])
         self.data = self.data.set_index(self.datetime_col)
         self.freq = pd.infer_freq(self.data.index)
         self.dataset = self.data
         self.ts_cols = [col for col in self.dataset.columns if col != self.datetime_col]
-
+        
+        # When considering a subset of the data
         if start_date:
             start_date = pd.Timestamp(start_date)
             self.dataset = self.dataset[self.dataset.index >= start_date]
@@ -692,10 +696,12 @@ class MoiraiDataset(BaseDataset):
         if end_date:
             end_date = pd.Timestamp(end_date)
             self.dataset = self.dataset[self.dataset.index <= end_date]
-
+        
+        # Fill missing values
         self.dataset = self.dataset.ffill()
-        self.dataset = self.dataset.bfill()
+        self.dataset = self.dataset.bfill() # ensures the first row has no NaN values
 
+        # Resample the data if required
         if freq:
             if operation == 'sum':
                 self.dataset = self.dataset.resample(freq).sum()
@@ -710,33 +716,38 @@ class MoiraiDataset(BaseDataset):
             else:
                 raise ValueError(f"Unsupported resampling operation: {operation}")
 
+        # Boundaries for train, val, test split
         if boundaries == (0, 0, 0):
             # Default boundaries: train 60%, val 20%, test 20%
             self.boundaries = [
                 int(len(self.data)*0.8),
                 int(len(self.data)*0.8),
-                len(self.data),
+                len(self.data) - 1,
             ]
         else:
             self.boundaries = boundaries
 
         # Normalize the dataset if required
         if self.normalize:
+            print("Normalizing the dataset")
             scaler = StandardScaler()
-            scalar = scaler.fit(self.dataset.iloc[: self.boundaries[1]])
+            scaler = scaler.fit(self.dataset.iloc[: self.boundaries[1]])
             data_normalized = scaler.transform(self.dataset)
             self.dataset = pd.DataFrame(data_normalized, columns=self.dataset.columns, index=self.dataset.index)
 
         test_offset = self.boundaries[2] - self.boundaries[1]
-        self.dataset = PandasDataset(dict(self.dataset))
+        self.dataset = PandasDataset(dict(self.dataset)) # convert to GluonTS dataset
 
+        # Both these objects have all the time series (multivariate)
         train_template, test_template = ts_split(self.dataset, offset=-test_offset)
-
         
         # split the data based on boundaries 
         if self.mode == "train":
             self.dataset = train_template
         elif self.mode == "val":
-            self.dataset = train_template
+            self.dataset = test_template
         else:
-            self.dataset = test_template.generate_instances(prediction_length=self.horizon_len, windows=test_offset//self.horizon_len, distance=self.horizon_len)
+            # Splits the test series into windows of length horizon_len
+            self.dataset = test_template.generate_instances(prediction_length=self.horizon_len,
+                                                            windows=test_offset//self.horizon_len,
+                                                            distance=self.horizon_len)

@@ -752,6 +752,7 @@ class MoiraiTSModel(Basemodel):
         predictor = self.model.create_predictor(batch_size=self.batch_size)
         forecast = predictor.predict(dataset.dataset.input)
 
+        # Iterators for input, label and forecast
         input_it = iter(dataset.dataset.input)
         label_it = iter(dataset.dataset.label)
         forecast_it = iter(forecast)
