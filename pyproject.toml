@@ -8,7 +8,9 @@ requires-python = ">=3.12"
 dependencies = [
     "absl-py>=2.1.0",
     "datasets>=3.2.0",
+    "accelerate>=1.2.0",
     "einshape>=1.0",
+    "gluonts>=0.16.0",
     "huggingface-hub>=0.26.2",
     "jax>=0.4.38",
     "matplotlib>=3.10.0",
@@ -16,8 +18,12 @@ dependencies = [
     "pandas>=2.2.3",
     "scikit-learn>=1.5.2",
     "torch>=2.5.1",
-    "transformers>=4.48.0",
+    "transformers>=4.47.0",
+    "typer-config>=1.4.2",
+    "typer>=0.15.1",
     "utilsforecast>=0.2.7",
+    "datasets>=3.2.0",
+    "jax>=0.4.38",
 ]
 
 [build-system]

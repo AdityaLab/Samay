@@ -115,7 +115,8 @@ class TimesFmTorch(timesfm_base.TimesFmBase):
             fcontext_len = self.context_len
         else:
             fcontext_len = forecast_context_len
-        inputs = np.squeeze(inputs)
+        if len(inputs.shape) > 2:
+            inputs = np.squeeze(inputs)
         inputs = [np.array(ts)[-fcontext_len:] for ts in inputs]
         inp_min = np.min([np.min(ts) for ts in inputs])
 

@@ -8,6 +8,7 @@ Current repository contains the following models:
 2. [MOMENT](https://arxiv.org/abs/2402.03885)
 3. [TimesFM](https://arxiv.org/html/2310.10688v2)
 4. [Chronos](https://arxiv.org/abs/2403.07815)
+5. [MOIRAI](https://arxiv.org/abs/2402.02592)
 
 More models will be added soon...
 
@@ -15,15 +16,27 @@ More models will be added soon...
 
 You can add the package to your project by running the following command:
 
+To use LPTM run the following command:
+
+```bash
+pip install git+https://github.com/AdityaLab/Samay.git@LPTM
+```
+
+To use all the other models run:
 ```bash
 pip install git+https://github.com/AdityaLab/Samay.git
 ```
+
+
 
 ### Development workflow
 
 To develop on the project, you can clone the repository and install the package in editable mode:
 
 ```bash
+
+## Clone repo
+git clone https://github.com/AdityaLab/Samay.git
 
 ## Install uv
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -35,6 +48,8 @@ uv sync --reinstall
 ## Usage Example
 
 ### LPTM
+
+_Note:_ Use the LPTM branch for best results `pip install git+https://github.com/AdityaLab/Samay.git@LPTM`.
 
 #### Loading  Model
 
@@ -70,6 +85,8 @@ avg_loss, trues, preds, histories = lptm.evaluate(val_dataset)
 ```
 
 ### TimesFM
+
+Install the package: `pip install git+https://github.com/AdityaLab/Samay.git`.
 
 #### Loading  Model
 
@@ -128,3 +145,6 @@ url={https://openreview.net/forum?id=vMMzjCr5Zj}
 }
 ```
 
+## Contact
+
+If you have any feedback or questions, you can contact us via email: hkamarthi3@gatech.edu.

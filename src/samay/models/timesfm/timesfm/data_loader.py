@@ -136,7 +136,7 @@ class TimeSeriesdata(object):
     self.scaler = self.scaler.fit(train_mat.transpose())
     self.data_mat = self.scaler.transform(self.data_mat.transpose()).transpose()
 
-  def train_gen(self):
+  def train_gen(self, shift=1):
     """Generator for training data."""
     num_ts = len(self.ts_cols)
     perm = np.arange(
@@ -150,12 +150,15 @@ class TimeSeriesdata(object):
       epoch_len = len(perm)
     else:
       epoch_len = self.epoch_len
-    for idx in perm[0:epoch_len]:
-      for _ in range(num_ts // self.batch_size + 1):
-        if self.permute:
-          tsidx = np.random.choice(num_ts, size=self.batch_size, replace=False)
-        else:
-          tsidx = np.arange(num_ts)
+    for i in range(0, epoch_len, shift):
+      idx = perm[i]
+      for batch_idx in range(0, num_ts, self.batch_size):
+        # if self.permute:
+        #   tsidx = np.random.choice(num_ts, size=self.batch_size, replace=False)
+        # else:
+        #   tsidx = np.arange(num_ts)
+        # dtimes = np.arange(idx - hist_len, idx + self.pred_len)
+        tsidx = np.arange(batch_idx, min(batch_idx + self.batch_size, num_ts))
         dtimes = np.arange(idx - hist_len, idx + self.pred_len)
         (
             bts_train,
@@ -247,7 +250,7 @@ class TimeSeriesdata(object):
   def torch_dataset(self, mode='train', shift=1):
     """Tensorflow Dataset."""
     if mode == 'train':
-      gen_fn = self.train_gen
+      gen_fn = lambda: self.train_gen(shift)
     else:
       gen_fn = lambda: self.test_val_gen(mode, shift)
     # output_types = tuple([tf.float32] * 2 + [tf.int32] + [tf.float32] * 2 +

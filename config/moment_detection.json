@@ -1,0 +1,6 @@
+{
+    "repo": "AutonLab/MOMENT-1-large",
+    "config": {
+        "task_name": "reconstruction"
+    }
+}
