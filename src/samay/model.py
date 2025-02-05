@@ -7,12 +7,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
-# from chronos import ChronosPipeline
+from chronos import ChronosPipeline
 from sklearn.metrics import mean_squared_error
 from torch.utils.data import DataLoader
 
-# from .models.chronosforecasting.scripts import finetune
-# from .models.chronosforecasting.scripts.jsonlogger import JsonFileHandler, JsonFormatter
+from .models.chronosforecasting.scripts import finetune
+from .models.chronosforecasting.scripts.jsonlogger import JsonFileHandler, JsonFormatter
 from .models.moment.momentfm.models.moment import MOMENTPipeline
 from .models.moment.momentfm.utils.masking import Masking
 from .models.timesfm import timesfm as tfm
@@ -222,134 +222,133 @@ class LPTMModel(Basemodel):
 
 
 
-# class ChronosModel(Basemodel):
-#     def __init__(self, config=None, repo=None):
-#         super().__init__(config=config, repo=repo)
-#         if self.config is None:
-#             self.config = {
-#                 "context_length": 512,
-#                 "prediction_length": 64,
-#                 "min_past": 64,
-#                 "max_steps": 100,
-#                 "save_steps": 25,
-#                 "log_steps": 5,
-#                 "per_device_train_batch_size": 32,
-#                 "learning_rate": 1e-3,
-#                 "optim": "adamw_torch_fused",
-#                 "shuffle_buffer_length": 100,
-#                 "gradient_accumulation_steps": 2,
-#                 "model_id": "amazon/chronos-t5-small",
-#                 "model_type": "seq2seq",
-#                 "random_init": False,
-#                 "tie_embeddings": False,
-#                 "output_dir": os.path.join(
-#                     sys.path[0],
-#                     "./tsfmproject/models/chronosforecasting/output/finetuning/",
-#                 ),
-#                 "tf32": True,
-#                 "torch_compile": True,
-#                 "tokenizer_class": "MeanScaleUniformBins",
-#                 "tokenizer_kwargs": {"low_limit": -15.0, "high_limit": 15.0},
-#                 "n_tokens": 4096,
-#                 "n_special_tokens": 2,
-#                 "pad_token_id": 0,
-#                 "eos_token_id": 1,
-#                 "use_eos_token": True,
-#                 "lr_scheduler_type": "linear",
-#                 "warmup_ratio": 0.0,
-#                 "dataloader_num_workers": 1,
-#                 "max_missing_prop": 0.9,
-#                 "num_samples": 10,
-#                 "temperature": 1.0,
-#                 "top_k": 50,
-#                 "top_p": 1.0,
-#                 "seed": 42,
-#             }
-#         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-#         # self.device = torch.device("cuda")
-#         self.result_logger = self.setup_logger("results")
-#         self.evaluation_logger = self.setup_logger("evaluation")
-#         self.model = self.load_model(model_dir=self.repo, model_type="seq2seq")
+class ChronosModel(Basemodel):
+    def __init__(self, config=None, repo=None):
+        super().__init__(config=config, repo=repo)
+        if self.config is None:
+            self.config = {
+                "context_length": 512,
+                "prediction_length": 64,
+                "min_past": 64,
+                "max_steps": 100,
+                "save_steps": 25,
+                "log_steps": 5,
+                "per_device_train_batch_size": 32,
+                "learning_rate": 1e-3,
+                "optim": "adamw_torch_fused",
+                "shuffle_buffer_length": 100,
+                "gradient_accumulation_steps": 2,
+                "model_id": "amazon/chronos-t5-small",
+                "model_type": "seq2seq",
+                "random_init": False,
+                "tie_embeddings": False,
+                "output_dir": os.path.join(
+                    sys.path[0],
+                    "./chronostout/",
+                ),
+                "tf32": True,
+                "torch_compile": True,
+                "tokenizer_class": "MeanScaleUniformBins",
+                "tokenizer_kwargs": {"low_limit": -15.0, "high_limit": 15.0},
+                "n_tokens": 4096,
+                "n_special_tokens": 2,
+                "pad_token_id": 0,
+                "eos_token_id": 1,
+                "use_eos_token": True,
+                "lr_scheduler_type": "linear",
+                "warmup_ratio": 0.0,
+                "dataloader_num_workers": 1,
+                "max_missing_prop": 0.9,
+                "num_samples": 10,
+                "temperature": 1.0,
+                "top_k": 50,
+                "top_p": 1.0,
+                "seed": 42,
+                "device": self.device
+            }
+        self.result_logger = self.setup_logger("results")
+        self.evaluation_logger = self.setup_logger("evaluation")
+        self.model = self.load_model(model_dir=self.repo, model_type="seq2seq")
 
-#     def setup_logger(self, log_type):
-#         log_dir = (
-#             Path(
-#                 os.path.join(
-#                     sys.path[0], "./tsfmproject/models/chronosforecasting/output/"
-#                 )
-#             )
-#             / log_type
-#         )
-#         log_dir.mkdir(parents=True, exist_ok=True)
+    def setup_logger(self, log_type):
+        log_dir = (
+            Path(
+                os.path.join(
+                    sys.path[0], "./chronostout/"
+                )
+            )
+            / log_type
+        )
+        log_dir.mkdir(parents=True, exist_ok=True)
 
-#         log_files = sorted(log_dir.glob(f"{log_type}_*.json"), key=os.path.getmtime)
-#         if log_files:
-#             latest_file = log_files[-1]
-#             latest_index = int(latest_file.stem.split("_")[-1])
-#             new_index = latest_index + 1
-#         else:
-#             new_index = 1
+        log_files = sorted(log_dir.glob(f"{log_type}_*.json"), key=os.path.getmtime)
+        if log_files:
+            latest_file = log_files[-1]
+            latest_index = int(latest_file.stem.split("_")[-1])
+            new_index = latest_index + 1
+        else:
+            new_index = 1
 
-#         log_file = log_dir / f"{log_type}_{new_index}.json"
-#         json_handler = JsonFileHandler(log_file)
-#         json_handler.setFormatter(JsonFormatter(log_type))
+        log_file = log_dir / f"{log_type}_{new_index}.json"
+        json_handler = JsonFileHandler(log_file)
+        json_handler.setFormatter(JsonFormatter(log_type))
 
-#         logger = logging.getLogger(f"{log_type}_logger")
-#         logger.setLevel(logging.INFO)
-#         logger.addHandler(json_handler)
-#         return logger
+        logger = logging.getLogger(f"{log_type}_logger")
+        logger.setLevel(logging.INFO)
+        logger.addHandler(json_handler)
+        return logger
 
-#     def load_model(
-#         self, model_dir: str = "amazon/chronos-t5-small", model_type: str = "seq2seq"
-#     ):
-#         self.model = ChronosPipeline.from_pretrained(
-#             model_dir,
-#             model_type=model_type,
-#             device_map=self.device,
-#             torch_dtype=torch.float32,
-#         )
-#         self.result_logger.info(f"Model loaded from {model_dir}")
+    def load_model(
+        self, model_dir: str = "amazon/chronos-t5-small", model_type: str = "seq2seq"
+    ):
+        self.model = ChronosPipeline.from_pretrained(
+            model_dir,
+            model_type=model_type,
+            device_map=self.device,
+            torch_dtype=torch.float32,
+        )
+        self.result_logger.info(f"Model loaded from {model_dir}")
 
-#     def get_latest_run_dir(
-#         self,
-#         base_dir=os.path.join(
-#             sys.path[0], "./tsfmproject/models/chronosforecasting/output/finetuning/"
-#         ),
-#     ):
-#         run_dirs = glob.glob(os.path.join(base_dir, "run-*"))
-#         if not run_dirs:
-#             raise FileNotFoundError("No run directories found.")
-#         latest_run_dir = max(run_dirs, key=os.path.getmtime)
-#         return latest_run_dir
+    def get_latest_run_dir(
+        self,
+        base_dir=os.path.join(
+            sys.path[0], "./tsfmproject/models/chronosforecasting/output/finetuning/"
+        ),
+    ):
+        run_dirs = glob.glob(os.path.join(base_dir, "run-*"))
+        if not run_dirs:
+            raise FileNotFoundError("No run directories found.")
+        latest_run_dir = max(run_dirs, key=os.path.getmtime)
+        return latest_run_dir
 
-#     def finetune(self, dataset, probability_list=None, **kwargs):
-#         # Convert dataset to arrow format
-#         data_loc = os.path.join(
-#             sys.path[0], "./tsfmproject/models/chronosforecasting/data/data.arrow"
-#         )
+    def finetune(self, dataset, probability_list=None, **kwargs):
+        # Convert dataset to arrow format
+        data_loc = os.path.join(
+            sys.path[0], "./chronostout/data.arrow"
+        )
 
-#         time_series_list = [
-#             np.array(dataset.dataset[column].values) for column in dataset.ts_cols
-#         ]
-#         dataset.convert_to_arrow(
-#             data_loc, time_series=time_series_list, start_date=dataset.dataset.index[0]
-#         )
-#         # Use default probability_list if None
-#         if probability_list is None:
-#             probability_list = [1]
+        time_series_list = [
+            np.array(dataset.dataset[column].values) for column in dataset.ts_cols
+        ]
+        dataset.convert_to_arrow(
+            data_loc, time_series=time_series_list, start_date=dataset.dataset.index[0]
+        )
+        # Use default probability_list if None
+        if probability_list is None:
+            probability_list = [1]
 
-#         # Merge provided kwargs with default configuration
-#         finetune_config = self.config.copy()
-#         # Update with kwargs where values are not None
-#         finetune_config.update({k: v for k, v in kwargs.items() if v is not None})
+        # Merge provided kwargs with default configuration
+        finetune_config = self.config.copy()
+        # Update with kwargs where values are not None
+        finetune_config.update({k: v for k, v in kwargs.items() if v is not None})
 
-#         # Call the train_model function with the combined configuration
-#         finetune.train_model(
-#             training_data_paths=[data_loc],
-#             probability=probability_list,
-#             logger=self.result_logger,
-#             **finetune_config,
-#         )
+        # Call the train_model function with the combined configuration
+        finetune.train_model(
+            training_data_paths=[data_loc],
+            probability=probability_list,
+            logger=self.result_logger,
+            **finetune_config,
+        )
 
     # def evaluate(self, dataset, metrics=['MSE'], **kwargs):
     #     """

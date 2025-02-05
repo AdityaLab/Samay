@@ -8,7 +8,6 @@ requires-python = ">=3.12"
 dependencies = [
     "absl-py>=2.1.0",
     "datasets>=3.2.0",
-    "accelerate>=1.2.0",
     "einshape>=1.0",
     "gluonts>=0.16.0",
     "huggingface-hub>=0.26.2",
@@ -24,6 +23,8 @@ dependencies = [
     "utilsforecast>=0.2.7",
     "datasets>=3.2.0",
     "jax>=0.4.38",
+    "chronos-forecasting>=1.4.1",
+    "tensorboardx>=2.6.2.2",
 ]
 
 [build-system]
