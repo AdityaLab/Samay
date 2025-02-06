@@ -99,7 +99,7 @@ def load_args(file_path):
     Load arguments from a file.
     """
     with open(file_path, "r") as file:
-        return json.load(file)
+        return json.load(file)                                                            
 
 def arrow_to_csv(arrow_dir):
     data = load_from_disk(arrow_dir)

@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 
 from .models.timesfm.timesfm.data_loader import TimeSeriesdata
 from .models.moment.momentfm.utils.data import load_from_tsfile
+from .models.chronosforecasting.chronos.chronos import MeanScaleUniformBins, ChronosConfig
 from .utils import get_multivariate_data
 
 
@@ -115,7 +116,7 @@ class TimesfmDataset(BaseDataset):
     def __init__(self, name=None,
                 datetime_col='ds',
                 path=None,
-                batchsize=16,
+                batchsize=64,
                 mode='train',
                 boundaries=(0, 0, 0),
                 context_len=128,
@@ -202,22 +203,171 @@ class ChronosDataset(BaseDataset):
         self,
         name=None,
         datetime_col="ds",
-        boundaries=(0, 0, 0),
-        context_len=128,
-        horizon_len=32,
+        path=None,
+        boundaries=[0, 0, 0],
         batch_size=16,
-        freq="H",
-        normalize=True,
         mode=None,
-        **kwargs,
+        stride=10,
+        tokenizer_class="MeanScaleUniformBins",
+        drop_prob=0.2,
+        min_past=64,
+        np_dtype=np.float32,
+        config=None,
     ):
-        super().__init__(name=name, datetime_col=datetime_col)
+        super().__init__(name=name, datetime_col=datetime_col, path=path, batchsize=batch_size, mode=mode)
         # Todo: implement ChronosDataset
-        pass
+        assert tokenizer_class is not None, "Tokenizer is required for ChronosDataset"
+        
+        if not config:
+            self.config = ChronosConfig(
+                tokenizer_class="MeanScaleUniformBins",
+                tokenizer_kwargs={'low_limit': -15.0, 'high_limit': 15.0},
+                n_tokens=4096,
+                n_special_tokens=2,
+                pad_token_id=0,
+                eos_token_id=1,
+                use_eos_token=True,
+                model_type="seq2seq",
+                context_length=512,
+                prediction_length=64,
+                num_samples=20,
+                temperature=1.0,
+                top_k=50,
+                top_p=1.0,
+            )
+        else:
+            self.config = config
+        assert type(self.config) == ChronosConfig, "Config must be an instance of ChronosConfig"
+        assert self.config.model_type in ("seq2seq", "causal"), "Model type must be either 'seq2seq' or 'causal'"
 
-    def preprocess(self, data):
-        # Todo: implement preprocess
-        pass
+        if tokenizer_class == "MeanScaleUniformBins":
+            self.tokenizer = MeanScaleUniformBins(**self.config.tokenizer_kwargs, config=self.config)
+        else:
+            raise ValueError(f"Tokenizer class {tokenizer_class} not supported")
+        self.context_len = self.config.context_length
+        self.horizon_len = self.config.prediction_length
+        self.drop_prob = drop_prob if self.config.model_type == "seq2seq" else 0.0
+        self.min_past = min_past or self.config.prediction_length
+        self.model_type = self.config.model_type
+        self.mode = mode
+        self.np_dtype = np_dtype
+        self.boundaries = boundaries
+        self.stride = stride
+        self.batchsize = batch_size
+        self.max_col_num = 64
+
+        self.pad = False
+        self._read_data()
+        self.preprocess()
+
+        self.one_chunk_num = (self.length_timeseries - self.context_len - self.horizon_len) // self.stride + 1
+
+    def _read_data(self):
+        self.df = pd.read_csv(self.data_path)
+
+        if self.boundaries[0] == 0:
+            self.boundaries[0] = int(len(self.df) * 0.5)
+        if self.boundaries[1] == 0:
+            self.boundaries[1] = int(len(self.df) * 0.7)
+        if self.boundaries[2] == 0:
+            self.boundaries[2] = int(len(self.df) - 1)
+
+        self.n_channels = self.df.shape[1] - 1
+        self.num_chunks = (self.n_channels + self.max_col_num - 1) // self.max_col_num
+        
+        if self.datetime_col:
+            self.df.drop(columns=[self.datetime_col], inplace=True)
+
+        self.df = np.array(self.df)
+
+        if self.mode == "train":
+            self.data = self.df[slice(0, self.boundaries[0]), :]
+
+        elif self.mode == "test":
+            self.data = self.df[slice(self.boundaries[1], self.boundaries[2]), :]
+
+        self.length_timeseries = self.data.shape[0]
+        self.required_len = self.context_len + self.horizon_len
+        self.pad_len = 0
+        if self.length_timeseries < self.required_len:
+            self.pad = True
+        if self.pad:
+            self.pad_sequence()
+
+    def pad_sequence(self):
+        self.pad_len = self.required_len - self.length_timeseries
+        # Pad data with zeros from the left
+        self.data = np.pad(
+            self.data, ((self.pad_len, 0), (0, 0))
+        )
+        # If num of channels isn't multiple of max_col_num, pad with zeros
+        if self.n_channels % self.max_col_num != 0:
+            self.data = np.pad(
+                self.data, ((0, 0), (0, self.max_col_num - self.n_channels % self.max_col_num))
+            )
+        self.length_timeseries = self.data.shape[0]
+
+
+    def __getitem__(self, index):
+        chunk_index = index // self.one_chunk_num
+        data_chunk = self.data[:, chunk_index * self.max_col_num: (chunk_index + 1) * self.max_col_num] if (chunk_index + 1) * self.max_col_num < self.n_channels else self.data[:, chunk_index * self.max_col_num:]
+        seq_start = self.stride * index
+        seq_end = seq_start + self.context_len
+        input_mask = np.ones(self.context_len)
+        # if the sequence is padded, mask of padded part is 0
+        input_mask[:self.pad_len] = 0
+
+        pred_end = seq_end + self.horizon_len
+
+        if pred_end > self.length_timeseries:
+            pred_end = self.length_timeseries
+            seq_end = pred_end - self.horizon_len
+            seq_start = seq_end - self.context_len
+
+        # input_seq = self.data[seq_start:seq_end, :].T
+        input_seq = data_chunk[seq_start:seq_end, :].T
+        input_ids, attention_mask, scale = self.tokenizer.context_input_transform(torch.tensor(input_seq))
+        forecast_seq = data_chunk[seq_end:pred_end, :].T
+        labels, labels_mask = self.tokenizer.label_input_transform(torch.tensor(forecast_seq), scale)
+        labels[labels_mask == 0] = -100
+        return {
+            "input_seq": input_seq,
+            "forecast_seq": forecast_seq,
+            "input_ids": input_ids.squeeze(0),
+            "attention_mask": attention_mask.squeeze(0),
+            "labels": labels.squeeze(0),
+        }
+        
+
+    def __len__(self):
+        if self.length_timeseries < self.context_len + self.horizon_len:
+            return 1 * self.num_chunks
+        return self.num_chunks * self.one_chunk_num
+    
+
+    def get_data_loader(self):
+        if self.mode == 'train':
+            # dtl = DataLoader(self, batch_size=self.batchsize, shuffle=True)
+            # for i, data in enumerate(dtl):
+            #     timeseries, input_mask, forecast = data
+            #     print(self.data.shape)
+            #     print(timeseries.shape, input_mask.shape, forecast.shape)
+            #     break
+            return DataLoader(self, shuffle=True, batch_size=self.batchsize)
+        else:
+            return DataLoader(self, shuffle=False, batch_size=self.batchsize)
+
+
+    def preprocess(self):
+        if self.mode == "train" and self.drop_prob > 0:
+            target = self.data.copy()
+            drop_p = np.random.uniform(low=0.0, high=self.drop_prob)
+            mask = np.random.choice(
+                [True, False], size=target.shape, p=[drop_p, 1 - drop_p]
+            )
+            target[mask] = np.nan
+            self.data = target
+
 
 
 class MomentDataset(BaseDataset):
@@ -231,10 +381,10 @@ class MomentDataset(BaseDataset):
     def __init__(self, name=None, 
                  datetime_col=None, 
                  path=None, 
-                 batchsize=8, 
+                 batchsize=64, 
                  mode='train', 
                  boundaries=[0, 0, 0], 
-                 horizon=0, 
+                 horizon_len=0, 
                  task_name='forecasting',
                  label_col=None,
                  stride=10,
@@ -242,18 +392,18 @@ class MomentDataset(BaseDataset):
         super().__init__(name=name, datetime_col=datetime_col, path=path, batchsize=batchsize, mode=mode)
         self.task_name = task_name
         self.label_col = 'label' if label_col is None else label_col
+        self.mode = mode
         
         self.seq_len = 512
-        self.stride = stride
-        self.forecast_horizon = horizon
+        self.stride = stride if self.mode == 'train' else horizon_len
+        self.forecast_horizon = horizon_len
         self.boundaries = boundaries
+        self.max_col_num = 64
 
-        self._read_data()
-        self.required_len = self.seq_len + self.forecast_horizon
         self.pad = False
-        self.pad_len = 0
-        if self.length_timeseries < self.required_len:
-            self.pad = True
+        self._read_data()
+        
+        self.one_chunk_num = (self.length_timeseries - self.seq_len - self.forecast_horizon) // self.stride + 1
 
     def _read_data(self):
         self.scaler = StandardScaler()
@@ -270,6 +420,7 @@ class MomentDataset(BaseDataset):
             self.n_channels = 1
         else:
             self.n_channels = self.df.shape[1] - 1
+        self.num_chunks = (self.n_channels + self.max_col_num - 1) // self.max_col_num
         
         if self.datetime_col:
             self.df.drop(columns=[self.datetime_col], inplace=True)
@@ -313,6 +464,12 @@ class MomentDataset(BaseDataset):
                 self.data, self.labels = ts[slice(self.boundaries[1], self.boundaries[2])], self.labels[slice(self.boundaries[1], self.boundaries[2])]
 
         self.length_timeseries = self.data.shape[0]
+        self.required_len = self.seq_len + self.forecast_horizon
+        self.pad_len = 0
+        if self.length_timeseries < self.required_len:
+            self.pad = True
+        if self.pad:
+            self.pad_sequence()
 
     def pad_sequence(self):
         self.pad_len = self.required_len - self.length_timeseries
@@ -320,12 +477,16 @@ class MomentDataset(BaseDataset):
         self.data = np.pad(
             self.data, ((self.pad_len, 0), (0, 0))
         )
+        # If num of channels isn't multiple of max_col_num, pad with zeros
+        if self.n_channels % self.max_col_num != 0:
+            self.data = np.pad(
+                self.data, ((0, 0), (0, self.max_col_num - self.n_channels % self.max_col_num))
+            )
         self.length_timeseries = self.data.shape[0]
 
     def __getitem__(self, index):
-        if self.pad:
-            self.pad_sequence()
-
+        chunk_index = index // self.one_chunk_num
+        data_chunk = self.data[:, chunk_index * self.max_col_num: (chunk_index + 1) * self.max_col_num] if (chunk_index + 1) * self.max_col_num < self.n_channels else self.data[:, chunk_index * self.max_col_num:]
         seq_start = self.stride * index
         seq_end = seq_start + self.seq_len
         input_mask = np.ones(self.seq_len)
@@ -339,9 +500,11 @@ class MomentDataset(BaseDataset):
             seq_end = pred_end - self.forecast_horizon
             seq_start = seq_end - self.seq_len
 
-        input_seq = self.data[seq_start:seq_end, :].T
+        # input_seq = self.data[seq_start:seq_end, :].T
+        input_seq = data_chunk[seq_start:seq_end, :].T
         if self.task_name == 'forecasting':
-            forecast_seq = self.data[seq_end:pred_end, :].T
+            # forecast_seq = self.data[seq_end:pred_end, :].T
+            forecast_seq = data_chunk[seq_end:pred_end, :].T
             return input_seq, input_mask, forecast_seq
         elif self.task_name == 'imputation':
             return input_seq, input_mask
@@ -362,11 +525,17 @@ class MomentDataset(BaseDataset):
         if self.task_name == 'classification':
             return self.num_series
         if self.length_timeseries < self.seq_len + self.forecast_horizon:
-            return 1
-        return (self.length_timeseries - self.seq_len - self.forecast_horizon) // self.stride + 1
+            return 1 * self.num_chunks
+        return self.num_chunks * self.one_chunk_num
     
     def get_data_loader(self):
         if self.mode == 'train':
+            # dtl = DataLoader(self, batch_size=self.batchsize, shuffle=True)
+            # for i, data in enumerate(dtl):
+            #     timeseries, input_mask, forecast = data
+            #     print(self.data.shape)
+            #     print(timeseries.shape, input_mask.shape, forecast.shape)
+            #     break
             return DataLoader(self, batch_size=self.batchsize, shuffle=True)
         else:
             return DataLoader(self, batch_size=self.batchsize, shuffle=False)
@@ -381,4 +550,29 @@ class MomentDataset(BaseDataset):
 
         return labels
 
+
+if __name__ == "__main__":
+    from .models.chronosforecasting.chronos.chronos import MeanScaleUniformBins, ChronosConfig
+
+    chronos_config = ChronosConfig(
+        tokenizer_class="MeanScaleUniformBins",
+        tokenizer_kwargs="{'low_limit': -15.0, 'high_limit': 15.0}",
+        n_tokens=4096,
+        n_special_tokens=2,
+        pad_token_id=0,
+        eos_token_id=1,
+        use_eos_token=True,
+        model_type="seq2seq",
+        context_length=512,
+        prediction_length=64,
+        num_samples=20,
+        temperature=1.0,
+        top_k=50,
+        top_p=1.0,
+    )
+    tokenizer = MeanScaleUniformBins(low_limit=-15.0, high_limit=15.0, config=chronos_config)
+    dataset = ChronosDataset(name="ett", datetime_col='date', path='tsfmproject/models/moment/data/ETTh1.csv',
+                              mode='train', context_len=512, horizon_len=64, tokenizer=tokenizer, model_type="seq2seq")
+    print(len(dataset))
+    print(dataset[0])
         

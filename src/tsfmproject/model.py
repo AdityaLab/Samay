@@ -1,10 +1,12 @@
 from .models.timesfm import timesfm as tfm
 from .models.timesfm.timesfm import pytorch_patched_decoder as ppd
 from .models.moment.momentfm.models.moment import MOMENT, MOMENTPipeline
+from .models.chronosforecasting.chronos.chronos import ChronosPipeline, ChronosConfig
 import numpy as np
 import pandas as pd
 import torch
 import json
+from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForSeq2SeqLM
 
 from .utils import get_least_used_gpu, visualize
 from .models.moment.momentfm.utils.masking import Masking
@@ -187,24 +189,54 @@ class TimesfmModel(Basemodel):
             "mwsq": mwsq,
             "crps": crps,
         }
-
-                
-        
         
 
 
 class ChronosModel(Basemodel):
-    def __init__(self, config=None, repo=None, hparams=None, ckpt=None, **kwargs):
+    def __init__(self, config=None, repo=None):
         super().__init__(config=config, repo=repo)
-        # Todo: load model
+        if repo:
+            print("Loading Chronos model from Huggingface repository")
+            try:
+                self.pipeline = ChronosPipeline.from_pretrained(repo, device_map=self.device)
+            except:
+                raise ValueError(f"Repository {repo} not found")
+        else:
+            print("Initializing a new Chronos model without pre-trained weights")
+            self.pipeline = ChronosPipeline(config=ChronosConfig(**config))
 
-    def finetune(self, dataloader, **kwargs):
+
+    def finetune(self, dataset, **kwargs):
         # Todo: finetune model
+
         pass
 
-    def forecast(self, input, **kwargs):
+    def plot(self, dataset, horizon_len, quantile_levels, **kwargs):
         # Todo: forecast
-        pass
+        dataloader = dataset.get_data_loader()
+        trues, preds, histories = [], [], []
+        for i, data in enumerate(dataloader):
+            input_seq = data["input_seq"]
+            forecast_seq = data["forecast_seq"]
+            shape = input_seq.shape 
+            input_seq = input_seq.reshape(shape[0]*shape[1], shape[2])
+            input_seq = torch.tensor(input_seq)
+            quantiles, mean = self.pipeline.predict_quantiles(
+                context=input_seq,
+                prediction_length=horizon_len,
+                quantile_levels=quantile_levels,
+            )
+            trues.append(forecast_seq.detach().cpu().numpy())
+            mean = mean.reshape(forecast_seq.shape[0], forecast_seq.shape[1], forecast_seq.shape[2])
+            preds.append(mean.detach().cpu().numpy())
+            input_seq = input_seq.reshape(shape[0], shape[1], shape[2])
+            histories.append(input_seq.detach().cpu().numpy())
+        
+        trues = np.concatenate(trues, axis=0)
+        preds = np.concatenate(preds, axis=0)
+        histories = np.concatenate(histories, axis=0)
+
+        visualize(task_name="forecasting", trues=trues, preds=preds, history=histories, **kwargs)
 
 
 class MomentModel(Basemodel):
@@ -256,8 +288,8 @@ class MomentModel(Basemodel):
                     timeseries = timeseries.float().to(self.device)
                     input_mask = input_mask.to(self.device)
                     forecast = forecast.float().to(self.device)
-                    with torch.amp.autocast(device_type='cuda'):
-                        output = self.model(x_enc=timeseries, input_mask=input_mask)
+                    # with torch.amp.autocast(device_type='cuda'):
+                    output = self.model(x_enc=timeseries, input_mask=input_mask)
                     loss = criterion(output.forecast, forecast)
 
                 elif task_name == "imputation":
@@ -270,8 +302,8 @@ class MomentModel(Basemodel):
                     input_mask = input_mask.repeat_interleave(n_channels, axis=0)
                     mask = mask_generator.generate_mask(x=timeseries, input_mask=input_mask).to(self.device).long()
                     output = self.model(x_enc=timeseries, input_mask=input_mask, mask=mask)
-                    with torch.amp.autocast(device_type='cuda'):
-                        recon_loss = criterion(output.reconstruction, timeseries)
+                    # with torch.amp.autocast(device_type='cuda'):
+                    recon_loss = criterion(output.reconstruction, timeseries)
                     observed_mask = input_mask * (1 - mask)
                     masked_loss = observed_mask * recon_loss
                     loss = masked_loss.nansum() / (observed_mask.nansum() + 1e-7)
@@ -285,16 +317,16 @@ class MomentModel(Basemodel):
                     input_mask = input_mask.repeat_interleave(n_channels, axis=0)
                     mask = mask_generator.generate_mask(x=timeseries, input_mask=input_mask).to(self.device).long()
                     output = self.model(x_enc=timeseries, input_mask=input_mask, mask=mask)
-                    with torch.amp.autocast(device_type='cuda'):
-                        loss = criterion(output.reconstruction, timeseries)
+                    # with torch.amp.autocast(device_type='cuda'):
+                    loss = criterion(output.reconstruction, timeseries)
                     
                 elif task_name == "classification":
                     timeseries, input_mask, label = data
                     timeseries = timeseries.to(self.device).float()
                     label = label.to(self.device).long()
                     output = self.model(x_enc=timeseries)
-                    with torch.amp.autocast(device_type='cuda'):
-                        loss = criterion(output.logits, label)
+                    # with torch.amp.autocast(device_type='cuda'):
+                    loss = criterion(output.logits, label)
 
                 optimizer.zero_grad(set_to_none=True)
                 # Scales the loss for mixed precision training

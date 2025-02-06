@@ -15,21 +15,21 @@ from tsfmproject.metric import *
 
 
 ECON_NAMES = {
-    "m4_yearly": ["Y"],
-    "m4_quarterly": ["Q"],
-    "m4_monthly": ["M"],
-    "m4_weekly": ["W"],
-    "m4_daily": ["D"],
-    "m4_hourly": ["H"],
+    # "m4_yearly": ["Y"],
+    # "m4_quarterly": ["Q"],
+    # "m4_monthly": ["M"],
+    # "m4_weekly": ["W"],
+    # "m4_daily": ["D"],
+    # "m4_hourly": ["H"],
 }
 
 SALES_NAMES = {
     "car_parts_with_missing": ['M'],
-    "hierarchical_sales": ['D', 'W'],
-    "restaurant": ['D'],
+    # "hierarchical_sales": ['D', 'W'],
+    # "restaurant": ['D'],
 }
 
-MODEL_NAMES = ["timesfm"    ]
+MODEL_NAMES = ["timesfm", "moment"]
 MODEL_CONTEXT_LEN = {
     "timesfm": 32,
     "moment": 512
@@ -68,7 +68,7 @@ def calc_pred_and_context_len(freq):
     
 
 if __name__ == "__main__":
-    model_name = MODEL_NAMES[0]
+    model_name = MODEL_NAMES[1]
     # create csv file for leaderboard if not already created
     csv_path = f"leaderboard/{model_name}.csv"
 
@@ -85,13 +85,14 @@ if __name__ == "__main__":
 
     NAMES = ECON_NAMES | SALES_NAMES
 
-
-
     for dataset_name, freqs in NAMES.items():
         for freq in freqs:
             pred_len, context_len = calc_pred_and_context_len(freq)
-            args["config"]["horizon_len"] = pred_len
-            args["config"]["context_len"] = context_len
+            if model_name == "timesfm":
+                args["config"]["horizon_len"] = pred_len
+                args["config"]["context_len"] = context_len
+            elif model_name == "moment":
+                args["config"]["forecast_horizon"] = pred_len
             if len(freqs) == 1:
                 dataset_path = f"data/gifteval/{dataset_name}/data.csv"
             else:
@@ -104,8 +105,9 @@ if __name__ == "__main__":
 
             elif model_name == "moment":
                 model = MomentModel(**args)
-                dataset = MomentDataset(datetime_col='timestamp', path=dataset_path, mode='test', context_len=args["config"]["context_len"], horizon_len=args["config"]["horizon_len"], normalize=False)
-                train_dataset = MomentDataset(datetime_col='timestamp', path=dataset_path, mode='train', context_len=args["config"]["context_len"], horizon_len=args["config"]["horizon_len"], normalize=False)
+                args["config"]["task_name"] = "forecasting"
+                train_dataset = MomentDataset(datetime_col='timestamp', path=dataset_path, mode='train', horizon_len=args["config"]["forecast_horizon"], normalize=False)
+                dataset = MomentDataset(datetime_col='timestamp', path=dataset_path, mode='test', horizon_len=args["config"]["forecast_horizon"], normalize=False)
                 finetuned_model = model.finetune(train_dataset, task_name="forecasting")
                 metrics = model.evaluate(dataset, task_name="forecasting")
 
@@ -114,7 +116,6 @@ if __name__ == "__main__":
                 df.loc[df["dataset"] == dataset_name, list(metrics.keys())] = list(metrics.values())
             else:
                 new_row = pd.DataFrame([{**{"dataset": dataset_name}, **metrics}])
-                print(new_row)
                 df = pd.concat([df, new_row], ignore_index=True)
 
             df.to_csv(csv_path, index=False)
