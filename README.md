@@ -26,7 +26,18 @@ To use all the other models run:
 ```bash
 pip install git+https://github.com/AdityaLab/Samay.git
 ```
-
+**Note:** If the installation fails because rust is missing run:
+For MacOS:
+```bash
+brew install rustup
+rustup-init
+source ~/.cargo/env
+```
+For Linux:
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+```
 
 
 ### Development workflow
