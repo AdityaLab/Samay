@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+import yaml
 
 import numpy as np
 import pandas as pd
@@ -20,8 +21,9 @@ from samay.models.timesfm import timesfm as tfm
 from samay.models.timesfm.timesfm import pytorch_patched_decoder as ppd
 from samay.models.uni2ts.model.moirai import MoiraiForecast, MoiraiModule
 from samay.models.uni2ts.model.moirai_moe import MoiraiMoEForecast, MoiraiMoEModule
-from samay.utils import get_least_used_gpu
+from samay.models.uni2ts.model.moirai.finetune import MoiraiFinetune
 from samay.dataset import MoiraiDataset
+from samay.utils import get_least_used_gpu
 
 
 class Basemodel:
@@ -279,83 +281,6 @@ class ChronosModel(Basemodel):
             logger=self.result_logger,
             **finetune_config,
         )
-
-    # def evaluate(self, dataset, metrics=['MSE'], **kwargs):
-    #     """
-    #     Evaluate the model on the given train and test data.
-
-    #     Args:
-    #         train_data (pd.DataFrame): The training data.
-    #         test_data (pd.DataFrame): The testing data.
-    #         offset (int): The offset for slicing the data.
-    #         metrics (list): List of metrics to evaluate.
-
-    #     Returns:
-    #         dict: Evaluation results for each column.
-    #         dict: True values for each column.
-    #         dict: Predictions for each column.
-    #         dict: Histories for each column.
-    #     """
-    #     # data = dataset.dataset
-    #     context_len = dataset.context_len
-    #     horizon_len = dataset.horizon_len
-    #     total_len = context_len + horizon_len
-    #     quantiles = kwargs.get('quantiles', [0.1, 0.5, 0.9])
-    #     batch_size = kwargs.get('batch_size', 8)
-
-    #     dataloader = DataLoader(dataset.dataset, batch_size=1, shuffle=False, num_workers=0)
-
-    #     eval_windows = []
-    #     true_values = []
-    #     predictions = []
-    #     histories = []
-
-    #     # self.model.to('cuda')  # Move model to GPU
-    #     with torch.no_grad():
-    #         for i, (history, actual) in enumerate(dataloader):
-    #             # context = context.to('cuda')
-    #             # actual = actual.to('cuda')
-    #             actual = actual.squeeze().numpy()
-    #             history = history.squeeze()
-    #             history_stack = [history[i] for i in range(history.shape[0])]
-    #             prediction = self.model.predict(context=history_stack, prediction_length=horizon_len, num_samples=20)
-    #             pred_median = np.median(prediction, axis=1)
-    #             # pred_median = pred_median.reshape(actual.shape[0], actual.shape[1], horizon_len)
-
-    #             # pred_median = np.median(prediction, axis=1)
-    #             # pred_values = np.quantile(prediction, q=quantiles, axis=1).transpose(1, 0, 2).squeeze()
-    #             # pred_values = prediction.squeeze().numpy()
-
-    #             eval = {}
-    #             for metric in metrics:
-    #                 if metric == 'MSE':
-    #                     eval[metric] = np.mean((actual - pred_median) ** 2)
-    #                 elif metric == 'MASE':
-    #                     forecast_error = np.mean(np.abs(actual - pred_median))
-    #                     naive_error = np.mean(np.abs(actual[:, 1:] - actual[:, :-1]))
-    #                     if naive_error == 0:
-    #                         eval[metric] = np.inf
-    #                     else:
-    #                         eval[metric] = forecast_error / naive_error
-
-    #                 else:
-    #                     raise ValueError(f"Unsupported metric: {metric}")
-
-    #             eval_windows.append(eval)
-    #             true_values.append(actual)
-    #             predictions.append(pred_median)
-    #             histories.append(history)
-
-    #     # true_values = np.concatenate(true_values, axis=0)
-    #     # predictions = np.concatenate(predictions, axis=0)
-    #     # histories = np.concatenate(histories, axis=0)
-
-    #     # get average evaluation results from all windows
-    #     eval_results = {}
-    #     for metric in metrics:
-    #         eval_results[metric] = np.average([eval[metric] for eval in eval_windows])
-
-    #     return eval_results, true_values, predictions, histories
 
     def evaluate(self, dataset, metrics=["MSE"], **kwargs):
         """
@@ -760,7 +685,10 @@ class MoiraiTSModel(Basemodel):
             ValueError: Any metric other than "MSE" or "MASE is not supported.
 
         Returns:
-            dict, list(np.array), list(np.array), list(np.array): returns the evaluation results, true values, predictions and histories.
+            dict: Evaluation results for each column (variate).
+            dict: True values for each column (variate).
+            dict: Predictions for each column (variate).
+            dict: Histories for each column (variate).
         """
         predictor = self.model.create_predictor(batch_size=self.batch_size)
         forecast = predictor.predict(dataset.dataset.input)
@@ -821,7 +749,40 @@ class MoiraiTSModel(Basemodel):
         preds = [np.array(preds[key]) for key in preds.keys()]
 
         return eval_results, trues, preds, histories
+    
+    def finetune(self, dataset, **kwargs):
 
+        # Parameters
+        path = "../src/samay/models/uni2ts/cli/conf/finetune/model/moirai_small.yaml"
+        with open(path, "r") as file:
+            fin_config = yaml.safe_load(file)
+        epochs = 10 if "epochs" not in kwargs else kwargs["epochs"]
+        num_batches = len(dataset.dataset)//self.batch_size
+        num_batches_per_epoch = num_batches//epochs
+        training_steps = num_batches_per_epoch * epochs
+        
+        # Load the model
+        FinetunedModel = MoiraiFinetune(min_patches=fin_config["min_patches"],
+                                        min_mask_ratio=fin_config["min_mask_ratio"],
+                                        max_mask_ratio=fin_config["max_mask_ratio"],
+                                        max_dim=fin_config["max_dim"],
+                                        num_training_steps=training_steps,
+                                        num_warmup_steps=fin_config["num_warmup_steps"],
+                                        module_kwargs=fin_config["module_kwargs"],
+                                        beta1=fin_config["beta1"],
+                                        beta2=fin_config["beta2"],
+                                        val_metric=fin_config["val_metric"],
+                                        weight_decay=fin_config["weight_decay"]
+                                        )
+        
+        # No need to worry about freezing layers
+        # MOIRAI's finetune.py already takes care of it - blacklist_params (line 259, finetune.py)
+        FinetunedModel.to(self.device)
+        FinetunedModel.train() # Set model to training mode
+
+        # Load the dataset
+        dataloader = dataset.get_data_loader()
+        
 
 if __name__ == "__main__":
     name = "timesfm"
