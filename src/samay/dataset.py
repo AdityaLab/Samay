@@ -61,11 +61,13 @@ from .utils import get_multivariate_data
 
 #         return context, actual
 
+
 # for fixed length history/ context data wrapping
 class TimeSeriesDataset(Dataset):
     """
     A PyTorch Dataset for sliding window extraction from time series data.
     """
+
     def __init__(self, data, context_len, horizon_len, stride=-1):
         """
         Initialize the dataset with sliding window logic.
@@ -82,13 +84,12 @@ class TimeSeriesDataset(Dataset):
         self.total_len = context_len + horizon_len
         self.stride = stride
 
-        if(self.stride == -1):
+        if self.stride == -1:
             self.stride = self.horizon_len
 
         # Generate start indices for sliding windows
         self.indices = [
-            start
-            for start in range(0, len(data) - self.total_len + 1, self.stride)
+            start for start in range(0, len(data) - self.total_len + 1, self.stride)
         ]
 
     def __len__(self):
@@ -99,8 +100,12 @@ class TimeSeriesDataset(Dataset):
         window = self.data.iloc[start : start + self.total_len]
 
         # Extract context and actuals, and convert to Torch tensors
-        context = torch.tensor(window.iloc[: self.context_len].to_numpy().transpose(), dtype=torch.float32)
-        actual = torch.tensor(window.iloc[self.context_len :].to_numpy().transpose(), dtype=torch.float32)
+        context = torch.tensor(
+            window.iloc[: self.context_len].to_numpy().transpose(), dtype=torch.float32
+        )
+        actual = torch.tensor(
+            window.iloc[self.context_len :].to_numpy().transpose(), dtype=torch.float32
+        )
         start_date = window.index[0]
 
         # # Return the input as a list of tensors (one for each column)
@@ -219,19 +224,29 @@ class TimesfmDataset(BaseDataset):
     input_ts: np.ndarray, historical time series data
     actual_ts: np.ndarray, actual time series data
     """
-    def __init__(self, name=None,
-                datetime_col='ds',
-                path=None,
-                batchsize=16,
-                mode='train',
-                boundaries=(0, 0, 0),
-                context_len=128,
-                horizon_len=32, 
-                freq='h', 
-                normalize=True, 
-                stride=10,
-                **kwargs):
-        super().__init__(name=name, datetime_col=datetime_col, path=path, batchsize=batchsize, mode=mode)
+
+    def __init__(
+        self,
+        name=None,
+        datetime_col="ds",
+        path=None,
+        batchsize=16,
+        mode="train",
+        boundaries=(0, 0, 0),
+        context_len=128,
+        horizon_len=32,
+        freq="h",
+        normalize=True,
+        stride=10,
+        **kwargs,
+    ):
+        super().__init__(
+            name=name,
+            datetime_col=datetime_col,
+            path=path,
+            batchsize=batchsize,
+            mode=mode,
+        )
         self.context_len = context_len
         self.horizon_len = horizon_len
         self.freq = freq
@@ -314,10 +329,10 @@ class ChronosDataset(BaseDataset):
         context_len=128,
         horizon_len=32,
         batch_size=16,
-        freq = None,
+        freq=None,
         start_date=None,
         end_date=None,
-        operation='sum',
+        operation="sum",
         normalize=True,
         mode="train",
         **kwargs,
@@ -339,7 +354,7 @@ class ChronosDataset(BaseDataset):
         if start_date:
             start_date = pd.Timestamp(start_date)
             self.dataset = self.dataset[self.dataset.index >= start_date]
-        
+
         if end_date:
             end_date = pd.Timestamp(end_date)
             self.dataset = self.dataset[self.dataset.index <= end_date]
@@ -348,15 +363,15 @@ class ChronosDataset(BaseDataset):
         self.dataset = self.dataset.bfill()
 
         if freq:
-            if operation == 'sum':
+            if operation == "sum":
                 self.dataset = self.dataset.resample(freq).sum()
-            elif operation == 'mean':
+            elif operation == "mean":
                 self.dataset = self.dataset.resample(freq).mean()
-            elif operation == 'pad':
+            elif operation == "pad":
                 self.dataset = self.dataset.resample(freq).pad()
-            elif operation == 'ffill':
+            elif operation == "ffill":
                 self.dataset = self.dataset.resample(freq).ffill()
-            elif operation == 'bfill':
+            elif operation == "bfill":
                 self.dataset = self.dataset.resample(freq).bfill()
             else:
                 raise ValueError(f"Unsupported resampling operation: {operation}")
@@ -364,8 +379,8 @@ class ChronosDataset(BaseDataset):
         if boundaries == (0, 0, 0):
             # Default boundaries: train 60%, val 20%, test 20%
             self.boundaries = [
-                int(len(self.data)*0.8),
-                int(len(self.data)*0.8),
+                int(len(self.data) * 0.8),
+                int(len(self.data) * 0.8),
                 len(self.data) - 1,
             ]
         else:
@@ -376,26 +391,28 @@ class ChronosDataset(BaseDataset):
             scaler = StandardScaler()
             scalar = scaler.fit(self.dataset.iloc[: self.boundaries[1]])
             data_normalized = scaler.transform(self.dataset)
-            self.dataset = pd.DataFrame(data_normalized, columns=self.dataset.columns, index=self.dataset.index)
+            self.dataset = pd.DataFrame(
+                data_normalized, columns=self.dataset.columns, index=self.dataset.index
+            )
 
-        
-        # split the data based on boundaries 
+        # split the data based on boundaries
         if self.mode == "train":
             self.dataset = self.dataset.iloc[: self.boundaries[0]]
         elif self.mode == "val":
             self.dataset = self.dataset.iloc[self.boundaries[0] : self.boundaries[1]]
         else:
-            self.dataset = self.dataset.iloc[self.boundaries[1] : ]
-            self.dataset = TimeSeriesDataset(self.dataset, self.context_len, self.horizon_len)
-        
+            self.dataset = self.dataset.iloc[self.boundaries[1] :]
+            self.dataset = TimeSeriesDataset(
+                self.dataset, self.context_len, self.horizon_len
+            )
 
     def get_data_loader(self):
         if self.mode == "test":
             return DataLoader(self.dataset, batch_size=self.batch_size, shuffle=False)
 
-
-
-    def preprocess(self, start_date=None, end_date=None, freq=None, operation='sum', **kwargs):
+    def preprocess(
+        self, start_date=None, end_date=None, freq=None, operation="sum", **kwargs
+    ):
         """
         Preprocess the dataset by clipping based on start_date and end_date,
         and resampling the data based on frequency change.
@@ -408,21 +425,21 @@ class ChronosDataset(BaseDataset):
         if start_date:
             start_date = pd.Timestamp(start_date)
             self.dataset = self.dataset[self.dataset.index >= start_date]
-        
+
         if end_date:
             end_date = pd.Timestamp(end_date)
             self.dataset = self.dataset[self.dataset.index <= end_date]
-        
+
         if freq:
-            if operation == 'sum':
+            if operation == "sum":
                 self.dataset = self.dataset.resample(freq).sum()
-            elif operation == 'mean':
+            elif operation == "mean":
                 self.dataset = self.dataset.resample(freq).mean()
-            elif operation == 'pad':
+            elif operation == "pad":
                 self.dataset = self.dataset.resample(freq).pad()
-            elif operation == 'ffill':
+            elif operation == "ffill":
                 self.dataset = self.dataset.resample(freq).ffill()
-            elif operation == 'bfill':
+            elif operation == "bfill":
                 self.dataset = self.dataset.resample(freq).bfill()
             else:
                 raise ValueError(f"Unsupported resampling operation: {operation}")
@@ -430,8 +447,6 @@ class ChronosDataset(BaseDataset):
         # Normalize the dataset if required
         if self.normalize:
             self.dataset = (self.dataset - self.dataset.mean()) / self.dataset.std()
-        
-
 
     def convert_to_arrow(
         self,
@@ -449,7 +464,8 @@ class ChronosDataset(BaseDataset):
             raise ValueError("Either start_date or start_date_list must be provided.")
         if start_date_list is not None:
             dataset = [
-                {"start": start_date_list[i], "target": ts, "freq": freq} for i, ts in enumerate(time_series)
+                {"start": start_date_list[i], "target": ts, "freq": freq}
+                for i, ts in enumerate(time_series)
             ]
         else:
             dataset = [
@@ -644,12 +660,180 @@ class MomentDataset(BaseDataset):
 
         return labels
 
-        
+
+class LPTMDataset(BaseDataset):
+    """
+    Dataset class for Chronos model
+    Data Format:
+    Tuple of 2 elements:
+    input/context: np.ndarray, historical time series data
+    actual: np.ndarray, actual time series data
+    """
+
+    def __init__(
+        self,
+        name=None,
+        datetime_col="ds",
+        path=None,
+        boundaries=(0, 0, 0),
+        context_len=128,
+        horizon_len=32,
+        batch_size=16,
+        freq=None,
+        start_date=None,
+        end_date=None,
+        operation="sum",
+        normalize=True,
+        mode="train",
+        **kwargs,
+    ):
+        super().__init__(name=name, datetime_col=datetime_col, path=path)
+        self.context_len = context_len
+        self.horizon_len = horizon_len
+        self.batch_size = batch_size
+        self.mode = mode
+        self.normalize = normalize
+        self.data = pd.read_csv(self.data_path)
+        # set datetime_col as index and remove it from columns
+        self.data[self.datetime_col] = pd.to_datetime(self.data[self.datetime_col])
+        self.data = self.data.set_index(self.datetime_col)
+        self.freq = pd.infer_freq(self.data.index)
+        self.dataset = self.data
+        self.ts_cols = [col for col in self.dataset.columns if col != self.datetime_col]
+
+        if start_date:
+            start_date = pd.Timestamp(start_date)
+            self.dataset = self.dataset[self.dataset.index >= start_date]
+
+        if end_date:
+            end_date = pd.Timestamp(end_date)
+            self.dataset = self.dataset[self.dataset.index <= end_date]
+
+        self.dataset = self.dataset.ffill()
+        self.dataset = self.dataset.bfill()
+
+        if freq:
+            if operation == "sum":
+                self.dataset = self.dataset.resample(freq).sum()
+            elif operation == "mean":
+                self.dataset = self.dataset.resample(freq).mean()
+            elif operation == "pad":
+                self.dataset = self.dataset.resample(freq).pad()
+            elif operation == "ffill":
+                self.dataset = self.dataset.resample(freq).ffill()
+            elif operation == "bfill":
+                self.dataset = self.dataset.resample(freq).bfill()
+            else:
+                raise ValueError(f"Unsupported resampling operation: {operation}")
+
+        if boundaries == (0, 0, 0):
+            # Default boundaries: train 60%, val 20%, test 20%
+            self.boundaries = [
+                int(len(self.data) * 0.8),
+                int(len(self.data) * 0.8),
+                len(self.data) - 1,
+            ]
+        else:
+            self.boundaries = boundaries
+
+        # Normalize the dataset if required
+        if self.normalize:
+            scaler = StandardScaler()
+            scalar = scaler.fit(self.dataset.iloc[: self.boundaries[1]])
+            data_normalized = scaler.transform(self.dataset)
+            self.dataset = pd.DataFrame(
+                data_normalized, columns=self.dataset.columns, index=self.dataset.index
+            )
+
+        # split the data based on boundaries
+        if self.mode == "train":
+            self.dataset = self.dataset.iloc[: self.boundaries[0]]
+        elif self.mode == "val":
+            self.dataset = self.dataset.iloc[self.boundaries[0] : self.boundaries[1]]
+        else:
+            self.dataset = self.dataset.iloc[self.boundaries[1] :]
+            self.dataset = TimeSeriesDataset(
+                self.dataset, self.context_len, self.horizon_len
+            )
+
+    def get_data_loader(self):
+        if self.mode == "test":
+            return DataLoader(self.dataset, batch_size=self.batch_size, shuffle=False)
+
+    def preprocess(
+        self, start_date=None, end_date=None, freq=None, operation="sum", **kwargs
+    ):
+        """
+        Preprocess the dataset by clipping based on start_date and end_date,
+        and resampling the data based on frequency change.
+
+        Args:
+            start_date (str): The start date to clip the dataset.
+            end_date (str): The end date to clip the dataset.
+            freq (str): The frequency to resample the dataset.
+        """
+        if start_date:
+            start_date = pd.Timestamp(start_date)
+            self.dataset = self.dataset[self.dataset.index >= start_date]
+
+        if end_date:
+            end_date = pd.Timestamp(end_date)
+            self.dataset = self.dataset[self.dataset.index <= end_date]
+
+        if freq:
+            if operation == "sum":
+                self.dataset = self.dataset.resample(freq).sum()
+            elif operation == "mean":
+                self.dataset = self.dataset.resample(freq).mean()
+            elif operation == "pad":
+                self.dataset = self.dataset.resample(freq).pad()
+            elif operation == "ffill":
+                self.dataset = self.dataset.resample(freq).ffill()
+            elif operation == "bfill":
+                self.dataset = self.dataset.resample(freq).bfill()
+            else:
+                raise ValueError(f"Unsupported resampling operation: {operation}")
+
+        # Normalize the dataset if required
+        if self.normalize:
+            self.dataset = (self.dataset - self.dataset.mean()) / self.dataset.std()
+
+    def convert_to_arrow(
+        self,
+        path: Union[str, Path],
+        time_series: Union[List[np.ndarray], np.ndarray],
+        start_date: str = None,
+        start_date_list: List[str] = None,
+        freq: str = "D",
+        compression: str = "lz4",
+    ):
+        assert isinstance(time_series, list) or (
+            isinstance(time_series, np.ndarray) and time_series.ndim == 2
+        )
+        if start_date is None and start_date_list is None:
+            raise ValueError("Either start_date or start_date_list must be provided.")
+        if start_date_list is not None:
+            dataset = [
+                {"start": start_date_list[i], "target": ts, "freq": freq}
+                for i, ts in enumerate(time_series)
+            ]
+        else:
+            dataset = [
+                {"start": start_date, "target": ts, "freq": freq} for ts in time_series
+            ]
+        # create the directory and files mentioned in path, if not present
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        ArrowWriter(compression=compression).write_to_file(
+            dataset,
+            path=path,
+        )
+
+
 class MoiraiDataset(BaseDataset):
     """
     Dataset class for Moirai model
     Data Format:
-    
+
     """
 
     def __init__(
@@ -662,10 +846,10 @@ class MoiraiDataset(BaseDataset):
         horizon_len=32,
         patch_size="auto",
         batch_size=16,
-        freq = None,
+        freq=None,
         start_date=None,
         end_date=None,
-        operation='mean',
+        operation="mean",
         normalize=True,
         mode="train",
         **kwargs,
@@ -688,7 +872,7 @@ class MoiraiDataset(BaseDataset):
         if start_date:
             start_date = pd.Timestamp(start_date)
             self.dataset = self.dataset[self.dataset.index >= start_date]
-        
+
         if end_date:
             end_date = pd.Timestamp(end_date)
             self.dataset = self.dataset[self.dataset.index <= end_date]
@@ -697,15 +881,15 @@ class MoiraiDataset(BaseDataset):
         self.dataset = self.dataset.bfill()
 
         if freq:
-            if operation == 'sum':
+            if operation == "sum":
                 self.dataset = self.dataset.resample(freq).sum()
-            elif operation == 'mean':
+            elif operation == "mean":
                 self.dataset = self.dataset.resample(freq).mean()
-            elif operation == 'pad':
+            elif operation == "pad":
                 self.dataset = self.dataset.resample(freq).pad()
-            elif operation == 'ffill':
+            elif operation == "ffill":
                 self.dataset = self.dataset.resample(freq).ffill()
-            elif operation == 'bfill':
+            elif operation == "bfill":
                 self.dataset = self.dataset.resample(freq).bfill()
             else:
                 raise ValueError(f"Unsupported resampling operation: {operation}")
@@ -713,8 +897,8 @@ class MoiraiDataset(BaseDataset):
         if boundaries == (0, 0, 0):
             # Default boundaries: train 60%, val 20%, test 20%
             self.boundaries = [
-                int(len(self.data)*0.8),
-                int(len(self.data)*0.8),
+                int(len(self.data) * 0.8),
+                int(len(self.data) * 0.8),
                 len(self.data),
             ]
         else:
@@ -725,18 +909,23 @@ class MoiraiDataset(BaseDataset):
             scaler = StandardScaler()
             scalar = scaler.fit(self.dataset.iloc[: self.boundaries[1]])
             data_normalized = scaler.transform(self.dataset)
-            self.dataset = pd.DataFrame(data_normalized, columns=self.dataset.columns, index=self.dataset.index)
+            self.dataset = pd.DataFrame(
+                data_normalized, columns=self.dataset.columns, index=self.dataset.index
+            )
 
         test_offset = self.boundaries[2] - self.boundaries[1]
         self.dataset = PandasDataset(dict(self.dataset))
 
         train_template, test_template = ts_split(self.dataset, offset=-test_offset)
 
-        
-        # split the data based on boundaries 
+        # split the data based on boundaries
         if self.mode == "train":
             self.dataset = train_template
         elif self.mode == "val":
             self.dataset = train_template
         else:
-            self.dataset = test_template.generate_instances(prediction_length=self.horizon_len, windows=test_offset//self.horizon_len, distance=self.horizon_len)
+            self.dataset = test_template.generate_instances(
+                prediction_length=self.horizon_len,
+                windows=test_offset // self.horizon_len,
+                distance=self.horizon_len,
+            )

@@ -13,10 +13,13 @@ from torch.utils.data import DataLoader
 
 from .models.chronosforecasting.scripts import finetune
 from .models.chronosforecasting.scripts.jsonlogger import JsonFileHandler, JsonFormatter
+from .models.lptm.segment.scoring import ScoringModuleMult
+from .models.lptm.selection import prune_segments
 from .models.moment.momentfm.models.moment import MOMENTPipeline
 from .models.moment.momentfm.utils.masking import Masking
 from .models.timesfm import timesfm as tfm
 from .models.timesfm.timesfm import pytorch_patched_decoder as ppd
+
 # from .models.uni2ts.model.moirai import MoiraiForecast, MoiraiModule
 # from .models.uni2ts.model.moirai_moe import MoiraiMoEForecast, MoiraiMoEModule
 from .utils import get_least_used_gpu
@@ -160,6 +163,7 @@ class LPTMModel(Basemodel):
                 raise ValueError(f"Repository {repo} not found")
 
         self.model = tfm.TimesFm(hparams=hparams, checkpoint=ckpt)
+        self.scorer = ScoringModuleMult(embed_size=512, hidden_size=256)
 
     def finetune(self, dataset, freeze_transformer=True, **kwargs):
         core_layer_tpl = self.model._model
@@ -176,6 +180,8 @@ class LPTMModel(Basemodel):
         for epoch in range(epoch):
             for i, (inputs) in enumerate(dataloader):
                 inputs = dataset.preprocess(inputs)
+                scores = self.scorer(inputs["input_ts"])
+                inputs = prune_segments(inputs)
                 inputs = {k: v.to(self.device) for k, v in inputs.items()}
                 optimizer.zero_grad()
                 outputs = FinetunedModel.compute_predictions(inputs)
@@ -221,7 +227,6 @@ class LPTMModel(Basemodel):
         return average_loss, trues, preds, histories
 
 
-
 class ChronosModel(Basemodel):
     def __init__(self, config=None, repo=None):
         super().__init__(config=config, repo=repo)
@@ -264,21 +269,14 @@ class ChronosModel(Basemodel):
                 "top_k": 50,
                 "top_p": 1.0,
                 "seed": 42,
-                "device": self.device
+                "device": self.device,
             }
         self.result_logger = self.setup_logger("results")
         self.evaluation_logger = self.setup_logger("evaluation")
         self.model = self.load_model(model_dir=self.repo, model_type="seq2seq")
 
     def setup_logger(self, log_type):
-        log_dir = (
-            Path(
-                os.path.join(
-                    sys.path[0], "./chronostout/"
-                )
-            )
-            / log_type
-        )
+        log_dir = Path(os.path.join(sys.path[0], "./chronostout/")) / log_type
         log_dir.mkdir(parents=True, exist_ok=True)
 
         log_files = sorted(log_dir.glob(f"{log_type}_*.json"), key=os.path.getmtime)
@@ -323,9 +321,7 @@ class ChronosModel(Basemodel):
 
     def finetune(self, dataset, probability_list=None, **kwargs):
         # Convert dataset to arrow format
-        data_loc = os.path.join(
-            sys.path[0], "./chronostout/data.arrow"
-        )
+        data_loc = os.path.join(sys.path[0], "./chronostout/data.arrow")
 
         time_series_list = [
             np.array(dataset.dataset[column].values) for column in dataset.ts_cols
