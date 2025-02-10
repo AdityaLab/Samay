@@ -266,6 +266,7 @@ class CustomTorchDataset(Dataset):
         self.output_shapes = output_shapes
 
         self.data = list(self._generate_data())
+        print(len(self.data), self.data[0][0].shape)
     
     def _generate_data(self):
         for item in self.gen_fn():

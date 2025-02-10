@@ -61,7 +61,7 @@ class TimesfmModel(Basemodel):
             FinetuneModel: ppd.PatchedDecoderFinetuneModel, finetuned model
         """
         lr = 1e-4 if 'lr' not in kwargs else kwargs['lr']
-        epoch = 10 if 'epoch' not in kwargs else kwargs['epoch']
+        epoch = 5 if 'epoch' not in kwargs else kwargs['epoch']
 
         core_layer_tpl = self.model._model
         # Todo: whether add freq
@@ -80,7 +80,7 @@ class TimesfmModel(Basemodel):
                 inputs = dataset.preprocess(inputs)
                 inputs = {k: v.to(self.device) for k, v in inputs.items()}
                 optimizer.zero_grad()
-                outputs = FinetunedModel.compute_predictions(inputs) # b, n, seq_len, 1+quantiles
+                outputs = FinetunedModel.compute_predictions(inputs, train_horizon_len=self.config["horizon_len"]) # b, n, seq_len, 1+quantiles
                 loss = FinetunedModel.compute_loss(outputs, inputs)
                 loss.backward()
                 optimizer.step()
@@ -208,8 +208,36 @@ class ChronosModel(Basemodel):
 
     def finetune(self, dataset, **kwargs):
         # Todo: finetune model
+        finetune_model = self.pipeline.model.model
+        dataloader = dataset.get_data_loader()
+        finetune_model.to(self.device)
+        finetune_model.train()
+        optimizer = torch.optim.AdamW(finetune_model.parameters(), lr=1e-4)
+        
+        avg_loss = 0
 
-        pass
+        for epoch in range(5):
+            for i, data in enumerate(dataloader):
+                input_ids = data["input_ids"].to(self.device)
+                ids_shape = input_ids.shape
+                input_ids = input_ids.reshape(ids_shape[0]*ids_shape[1], ids_shape[2])
+                attention_mask = data["attention_mask"].to(self.device)
+                mask_shape = attention_mask.shape
+                attention_mask = attention_mask.reshape(mask_shape[0]*mask_shape[1], mask_shape[2])
+                labels = data["labels"].to(self.device)
+                label_shape = labels.shape
+                labels = labels.reshape(label_shape[0]*label_shape[1], label_shape[2])
+                optimizer.zero_grad()
+                output = finetune_model(input_ids, attention_mask=attention_mask, labels=labels)
+                loss = output.loss
+                loss.backward()
+                optimizer.step()
+                avg_loss += loss.item()
+            avg_loss /= len(dataloader)
+            print(f"Epoch {epoch}, Loss: {avg_loss}")
+
+        finetune_model.eval()
+                
 
     def plot(self, dataset, horizon_len, quantile_levels, **kwargs):
         # Todo: forecast
@@ -237,6 +265,60 @@ class ChronosModel(Basemodel):
         histories = np.concatenate(histories, axis=0)
 
         visualize(task_name="forecasting", trues=trues, preds=preds, history=histories, **kwargs)
+
+
+    def evaluate(self, dataset, horizon_len, quantile_levels, **kwargs):
+        dataloader = dataset.get_data_loader()
+        trues, preds, histories, quantile_forecasts = [], [], [], []
+        for i, data in enumerate(dataloader):
+            input_seq = data["input_seq"]
+            forecast_seq = data["forecast_seq"]
+            shape = input_seq.shape 
+            input_seq = input_seq.reshape(shape[0]*shape[1], shape[2])
+            input_seq = torch.tensor(input_seq)
+            quantiles, mean = self.pipeline.predict_quantiles(
+                context=input_seq,
+                prediction_length=horizon_len,
+                quantile_levels=quantile_levels,
+            )
+            trues.append(forecast_seq.detach().cpu().numpy())
+            mean = mean.reshape(forecast_seq.shape[0], forecast_seq.shape[1], forecast_seq.shape[2])
+            preds.append(mean.detach().cpu().numpy())
+            quantiles = quantiles.reshape(quantiles.shape[-1], forecast_seq.shape[0], forecast_seq.shape[1], forecast_seq.shape[2])
+            quantile_forecasts.append(quantiles.detach().cpu().numpy())
+            input_seq = input_seq.reshape(shape[0], shape[1], shape[2])
+            histories.append(input_seq.detach().cpu().numpy())
+        
+        trues = np.concatenate(trues, axis=0)
+        preds = np.concatenate(preds, axis=0)
+        histories = np.concatenate(histories, axis=0)
+        quantile_forecasts = np.concatenate(quantile_forecasts, axis=1)
+
+        mse = MSE(trues, preds)
+        mae = MAE(trues, preds)
+        mase = MASE(trues, preds)
+        mape = MAPE(trues, preds)
+        rmse = RMSE(trues, preds)
+        nrmse = NRMSE(trues, preds)
+        smape = SMAPE(trues, preds)
+        msis = MSIS(trues, preds)
+        nd = ND(trues, preds)
+        mwsq = MWSQ(trues, preds, quantile_forecasts)
+        crps = CRPS(trues, preds, quantile_forecasts)
+
+        return {
+            "mse": mse,
+            "mae": mae,
+            "mase": mase,
+            "mape": mape,
+            "rmse": rmse,
+            "nrmse": nrmse,
+            "smape": smape,
+            "msis": msis,
+            "nd": nd,
+            "mwsq": mwsq,
+            "crps": crps,
+        }
 
 
 class MomentModel(Basemodel):

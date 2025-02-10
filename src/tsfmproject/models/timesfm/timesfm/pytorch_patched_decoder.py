@@ -732,7 +732,7 @@ class PatchedTimeSeriesDecoder(nn.Module):
       freq: torch.LongTensor,
       horizon_len: int,
       output_patch_len: int | None = None,
-      max_len: int = 512,
+      max_len: int = 2048,
       return_forecast_on_context: bool = False,
   ) -> tuple[torch.Tensor, torch.Tensor]:
     """Auto-regressive decoding without caching.
@@ -809,9 +809,12 @@ class PatchedDecoderFinetuneModel(nn.Module):
         self.core_layer = core_layer_tpl
         self.freq = freq
 
-    def compute_predictions(self, input_batch):
+    def compute_predictions(self, input_batch,train_horizon_len=128):
+        horizon_len = train_horizon_len
+        output_patch_len = self.core_layer.config.patch_len
         input_ts = input_batch["input_ts"]
-        input_padding = torch.zeros_like(input_ts)
+        # input_padding = torch.zeros_like(input_ts)
+        input_padding = torch.zeros([input_ts.shape[0], input_ts.shape[1] + horizon_len], dtype=torch.float32)
 
         context_len = input_ts.shape[1]
         input_patch_len = self.core_layer.config.patch_len
@@ -825,7 +828,8 @@ class PatchedDecoderFinetuneModel(nn.Module):
         input_padding = input_padding.to(input_ts.device)
         freq = freq.to(input_ts.device)
 
-        return self.core_layer(input_ts, input_padding, freq)
+        # return self.core_layer(input_ts, input_padding, freq)
+        return self.core_layer.decode(input_ts, input_padding, freq, horizon_len, output_patch_len)
 
     def _quantile_loss(self, pred, actual, quantile):
         """Calculates quantile loss."""
@@ -835,10 +839,11 @@ class PatchedDecoderFinetuneModel(nn.Module):
         return 2 * torch.where(loss_first >= 0, loss_first, loss_second)
 
     def compute_loss(self, prediction_output, input_batch):
-        output_ts = prediction_output
+        output_ts = prediction_output[1]
         actual_ts = input_batch["actual_ts"]
 
-        pred_ts = output_ts[:, -1, :actual_ts.shape[1], :]
+        # pred_ts = output_ts[:, -1, :actual_ts.shape[1], :]
+        pred_ts = output_ts
         loss = torch.square(pred_ts[:, :, 0] - actual_ts).mean()
 
         for i, quantile in enumerate(self.core_layer.config.quantiles):

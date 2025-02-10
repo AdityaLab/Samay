@@ -116,7 +116,7 @@ class TimesfmDataset(BaseDataset):
     def __init__(self, name=None,
                 datetime_col='ds',
                 path=None,
-                batchsize=64,
+                batchsize=4,
                 mode='train',
                 boundaries=(0, 0, 0),
                 context_len=128,
@@ -153,7 +153,7 @@ class TimesfmDataset(BaseDataset):
             test_range=[self.boundaries[1], self.boundaries[2]],
             hist_len=self.context_len,
             pred_len=self.horizon_len,
-            batch_size=self.batchsize,
+            batch_size=16,
             freq=self.freq,
             normalize=self.normalize,
             epoch_len=None,
@@ -174,8 +174,8 @@ class TimesfmDataset(BaseDataset):
             return DataLoader(self.dataset, shuffle=False)
 
     def preprocess_train_batch(self, data):
-        past_ts = data[0].reshape(self.batchsize * len(self.ts_cols), -1)
-        actual_ts = data[3].reshape(self.batchsize * len(self.ts_cols), -1)
+        past_ts = data[0].reshape(data[0].shape[0] * data[0].shape[1], -1)
+        actual_ts = data[3].reshape(data[3].shape[0] * data[3].shape[1], -1)
         return {"input_ts": past_ts, "actual_ts": actual_ts}
 
     def preprocess_eval_batch(self, data):
