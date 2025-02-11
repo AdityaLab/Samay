@@ -16,13 +16,6 @@ More models will be added soon...
 
 You can add the package to your project by running the following command:
 
-To use LPTM run the following command:
-
-```bash
-pip install git+https://github.com/AdityaLab/Samay.git@LPTM
-```
-
-To use all the other models run:
 ```bash
 pip install git+https://github.com/AdityaLab/Samay.git
 ```
@@ -59,8 +52,6 @@ uv sync --reinstall
 ## Usage Example
 
 ### LPTM
-
-_Note:_ Use the LPTM branch for best results `pip install git+https://github.com/AdityaLab/Samay.git@LPTM`.
 
 #### Loading  Model
 
