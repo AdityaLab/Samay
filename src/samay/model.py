@@ -24,6 +24,18 @@ from samay.models.uni2ts.model.moirai_moe import MoiraiMoEForecast, MoiraiMoEMod
 from samay.models.uni2ts.model.moirai.finetune import MoiraiFinetune
 from samay.dataset import MoiraiDataset
 from samay.utils import get_least_used_gpu
+from samay.moirai import convert_module_kwargs
+
+# For moirai finetuning
+from samay.models.uni2ts.optim import SchedulerType, get_scheduler
+from samay.models.uni2ts.module.ts_embed import MultiInSizeLinear, MultiOutSizeLinear
+from samay.models.uni2ts.module.norm import RMSNorm
+from samay.models.uni2ts.module.position import (
+    BinaryAttentionBias,
+    LearnedEmbedding,
+    LearnedProjection,
+)
+import torch.nn as nn
 
 
 class Basemodel:
@@ -756,10 +768,14 @@ class MoiraiTSModel(Basemodel):
         path = "../src/samay/models/uni2ts/cli/conf/finetune/model/moirai_small.yaml"
         with open(path, "r") as file:
             fin_config = yaml.safe_load(file)
+        
+        lr = 1e-4 if "lr" not in fin_config else float(fin_config["lr"])
         epochs = 10 if "epochs" not in kwargs else kwargs["epochs"]
+
         num_batches = len(dataset.dataset)//self.batch_size
         num_batches_per_epoch = num_batches//epochs
         training_steps = num_batches_per_epoch * epochs
+        module_args = convert_module_kwargs(fin_config["module_kwargs"])
         
         # Load the model
         FinetunedModel = MoiraiFinetune(min_patches=fin_config["min_patches"],
@@ -768,20 +784,113 @@ class MoiraiTSModel(Basemodel):
                                         max_dim=fin_config["max_dim"],
                                         num_training_steps=training_steps,
                                         num_warmup_steps=fin_config["num_warmup_steps"],
-                                        module_kwargs=fin_config["module_kwargs"],
+                                        module_kwargs=module_args,
                                         beta1=fin_config["beta1"],
                                         beta2=fin_config["beta2"],
                                         val_metric=fin_config["val_metric"],
                                         weight_decay=fin_config["weight_decay"]
                                         )
-        
-        # No need to worry about freezing layers
-        # MOIRAI's finetune.py already takes care of it - blacklist_params (line 259, finetune.py)
+    
         FinetunedModel.to(self.device)
         FinetunedModel.train() # Set model to training mode
 
+        # Freeze the transformer layers
+        # First we finetune the whole model
+
         # Load the dataset
         dataloader = dataset.get_data_loader()
+
+        # Decide which weights are going to be updated
+        decay = set()
+        no_decay = set()
+
+        whitelist_params = (
+            LearnedProjection,
+            MultiInSizeLinear,
+            MultiOutSizeLinear,
+            nn.Linear,
+        )
+        blacklist_params = (
+            BinaryAttentionBias,
+            LearnedEmbedding,
+            RMSNorm,
+            nn.Embedding,
+            nn.LayerNorm,
+        )
+
+        for xn,x in FinetunedModel.named_modules():
+            for pn,p in x.named_parameters():
+                if not p.requires_grad:
+                    continue
+
+                fpn = f"{xn}.{pn}" if xn else pn
+                if pn.endswith("bias"):
+                    no_decay.add(fpn)
+                elif pn.endswith("weight") and isinstance(x, whitelist_params):
+                    decay.add(fpn)
+                elif pn.endswith("weight") and isinstance(x, blacklist_params):
+                    no_decay.add(fpn)
+
+        # validate that we considered every parameter
+        param_dict = {pn: p for pn, p in FinetunedModel.named_parameters() if p.requires_grad}
+        # print(f"Parameters: {param_dict.keys()}")
+        # inter_params = decay & no_decay
+        # union_params = decay | no_decay
+        # assert (
+        #     len(inter_params) == 0
+        # ), f"parameters {str(inter_params)} made it into both decay/no_decay sets!"
+        # assert (
+        #     len(param_dict.keys() - union_params) == 0
+        # ), f"parameters {str(param_dict.keys() - union_params)} were not separated into either decay/no_decay set!"
+
+        optim_groups = [
+            {
+                "params": filter(
+                    lambda p: p.requires_grad,
+                    [param_dict[pn] for pn in sorted(list(decay))],
+                ),
+                "weight_decay": FinetunedModel.hparams.weight_decay,
+            },
+            {
+                "params": filter(
+                    lambda p: p.requires_grad,
+                    [param_dict[pn] for pn in sorted(list(no_decay))],
+                ),
+                "weight_decay": 0.0,
+            },
+        ]
+        optimizer = torch.optim.Adam(optim_groups,
+                                     lr=lr,
+                                     betas=(FinetunedModel.hparams.beta1, FinetunedModel.hparams.beta2),
+                                     eps=1e-6)
+        
+        scheduler = get_scheduler(
+            SchedulerType.COSINE_WITH_RESTARTS,
+            optimizer,
+            num_warmup_steps=FinetunedModel.hparams.num_warmup_steps,
+            num_training_steps=FinetunedModel.hparams.num_training_steps,
+        )
+
+        avg_loss = 0
+        for epoch in range(epochs):
+            for i, (inputs) in enumerate(dataloader):
+                inputs = dataset.preprocess(inputs)
+                inputs = {k: v.to(self.device) for k, v in inputs.items()}
+                optimizer.zero_grad() # reset gradients
+                outputs = FinetunedModel.forward(
+                    inputs
+                )  # distribution of predictions
+                loss = FinetunedModel.compute_loss(outputs, inputs)
+                loss.backward()
+                optimizer.step()
+                scheduler.step()
+                avg_loss += loss.item()
+            avg_loss /= len(dataloader)
+            print(f"Epoch {epoch}, Loss: {avg_loss}")
+        
+        self.model = FinetunedModel
+        
+        return self.model
         
 
 if __name__ == "__main__":

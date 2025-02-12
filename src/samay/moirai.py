@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 from typing import List, Union
+import re
 
 import numpy as np
 import pandas as pd
@@ -16,6 +17,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from .models.timesfm.timesfm.data_loader import TimeSeriesdata
 from .utils import get_multivariate_data
+from uni2ts.distribution import MixtureOutput
 
 
 class TimeSeriesDataset(Dataset):
@@ -66,9 +68,9 @@ class MoiraiTorch(Dataset):
     def __init__(self,data:list[dict]):
         super().__init__()
         self.data = data
-        self.input = [d["input"] for d in data if "input" in d]
-        self.label = [d["label"] for d in data if "label" in d]
-    
+        if isinstance(self.data[0], tuple):
+            self.input = [d[0] for d in self.data]
+            self.label = [d[1] for d in self.data]
     def __len__(self):
         return len(self.data)
 
@@ -271,18 +273,16 @@ class MoiraiDataset(BaseDataset):
         Returns:
             np.ndarray: Test data
         """
-        # Steps to generate test data
-        # 1) Split them into windows - each of length horizon_len
-        # 2) For each window, split them into input and label
         data = []
         for i in range(self.dataset.shape[1]):
-            data.extend([{"input": {"start":Period(self.start_date, freq=self.freq),
-                                    "target":self.dataset[:self.boundaries[1] + j*self.horizon_len].values,
+            data.extend([tuple([{"start":Period(self.start_date, freq=self.freq),
+                                    "target":self.dataset.iloc[:self.boundaries[1] + j*self.horizon_len,i].values,
                                     "item_id": self.dataset.columns[i]},
-                           "label": {"start":Period(self.start_date, freq=self.freq),
-                                     "target":self.dataset[self.boundaries[1] + j*self.horizon_len:self.boundaries[1] + (j+1)*self.horizon_len].values,
+                                {"start":Period(self.start_date, freq=self.freq),
+                                     "target":self.dataset.iloc[self.boundaries[1] + j*self.horizon_len:self.boundaries[1] + (j+1)*self.horizon_len,i].values,
                                      "item_id": self.dataset.columns[i]}
-                        } for j in range((self.dataset.shape[0] - self.boundaries[1])//self.horizon_len)])
+                                ]) for j in range((self.dataset.shape[0] - self.boundaries[1])//self.horizon_len)
+                        ])
         
         self.dataset = MoiraiTorch(data)
     
@@ -302,3 +302,31 @@ class MoiraiDataset(BaseDataset):
     
     def __len__(self):
         return len(self.dataset[0]["target"])
+
+def convert_module_kwargs(module_kwargs):
+    """Convert module_kwargs to ingestible dictionary format by instantiating necessary objects and removing _target_ fields."""
+    
+    # Extract necessary fields
+    module_args = {k: v for k, v in module_kwargs.items() if k != "_target_"}
+    
+    # Convert patch_sizes string to tuple if needed
+    if isinstance(module_args.get("patch_sizes"), str) and module_args["patch_sizes"].startswith("${as_tuple:"):
+        module_args["patch_sizes"] = tuple(map(int, re.findall(r"\d+",module_args["patch_sizes"])))# Extract numbers
+    
+    # Handle distr_output instantiation
+    if "distr_output" in module_args and isinstance(module_args["distr_output"], dict):
+        distr_config = module_args["distr_output"]
+        
+        if "_target_" in distr_config and distr_config["_target_"] == "uni2ts.distribution.MixtureOutput":
+            # Instantiate component distributions
+            components = []
+            for comp in distr_config.get("components", []):
+                if "_target_" in comp:
+                    comp_class = globals().get(comp["_target_"].split(".")[-1])  # Get class by name
+                    if comp_class:
+                        components.append(comp_class())  # Instantiate class
+            
+            # Instantiate MixtureOutput with components
+            module_args["distr_output"] = MixtureOutput(components=components)
+    
+    return module_args

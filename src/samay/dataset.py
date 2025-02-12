@@ -736,4 +736,12 @@ class MoiraiDataset(BaseDataset):
         elif self.mode == "val":
             self.dataset = train_template
         else:
-            self.dataset = test_template.generate_instances(prediction_length=self.horizon_len, windows=test_offset//self.horizon_len, distance=self.horizon_len)    
+            self.dataset = test_template.generate_instances(prediction_length=self.horizon_len, windows=test_offset//self.horizon_len, distance=self.horizon_len)
+    
+    def get_data_loader(self):
+        if self.mode == "train":
+            return glu_load.DataLoader(self.dataset, batch_size=self.batch_size, shuffle=True)
+        if self.mode == "val":
+            return glu_load.DataLoader(self.dataset, batch_size=self.batch_size, shuffle=False)
+        if self.mode == "test":
+            return glu_load.DataLoader(self.dataset, batch_size=self.batch_size, shuffle=False)
