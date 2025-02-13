@@ -24,7 +24,7 @@ from samay.models.uni2ts.model.moirai_moe import MoiraiMoEForecast, MoiraiMoEMod
 from samay.models.uni2ts.model.moirai.finetune import MoiraiFinetune
 from samay.dataset import MoiraiDataset
 from samay.utils import get_least_used_gpu
-from samay.moirai import convert_module_kwargs
+from samay.moirai_utils import convert_module_kwargs
 
 # For moirai finetuning
 from samay.models.uni2ts.optim import SchedulerType, get_scheduler
@@ -798,7 +798,7 @@ class MoiraiTSModel(Basemodel):
         # First we finetune the whole model
 
         # Load the dataset
-        dataloader = dataset.get_data_loader()
+        dataloader = dataset.get_dataloader()
 
         # Decide which weights are going to be updated
         decay = set()
@@ -874,12 +874,10 @@ class MoiraiTSModel(Basemodel):
         avg_loss = 0
         for epoch in range(epochs):
             for i, (inputs) in enumerate(dataloader):
-                inputs = dataset.preprocess(inputs)
+                # inputs = dataset.preprocess(inputs)
                 inputs = {k: v.to(self.device) for k, v in inputs.items()}
                 optimizer.zero_grad() # reset gradients
-                outputs = FinetunedModel.forward(
-                    inputs
-                )  # distribution of predictions
+                outputs = FinetunedModel.forward(inputs)  # distribution of predictions
                 loss = FinetunedModel.compute_loss(outputs, inputs)
                 loss.backward()
                 optimizer.step()
@@ -889,7 +887,7 @@ class MoiraiTSModel(Basemodel):
             print(f"Epoch {epoch}, Loss: {avg_loss}")
         
         self.model = FinetunedModel
-        
+
         return self.model
         
 

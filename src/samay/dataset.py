@@ -7,14 +7,13 @@ import pandas as pd
 import torch
 from datasets import load_dataset
 from gluonts.dataset.arrow import ArrowWriter
-from gluonts.dataset.pandas import PandasDataset
-from gluonts.dataset.split import split as ts_split
-import gluonts.dataset.loader as glu_load
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, Dataset
 
 from .models.timesfm.timesfm.data_loader import TimeSeriesdata
 from .utils import get_multivariate_data
+from .moirai_utils import MoiraiTorch
+from pandas._libs.tslibs.period import Period
 
 # for full length history/ context data wrapping
 # class TimeSeriesDataset(Dataset):
@@ -644,15 +643,14 @@ class MomentDataset(BaseDataset):
         
 class MoiraiDataset(BaseDataset):
     """
-    Dataset class for Moirai model
-    Data Format:
-    
+    Dataset class for Moirai model.
+    It ingests data in the form of a (num_variates x num_timesteps) matrix.
     """
 
     def __init__(
         self,
         name=None,
-        datetime_col="ds",
+        datetime_col="date",
         path=None,
         boundaries=(0, 0, 0),
         context_len=128,
@@ -665,23 +663,67 @@ class MoiraiDataset(BaseDataset):
         operation='mean',
         normalize=True,
         mode="train",
+        htune=False, # hyperparameter tuning
         **kwargs,
     ):
-        super().__init__(name=name, datetime_col=datetime_col, path=path)
+        super().__init__(name=name, datetime_col=datetime_col, path=path, batchsize=batch_size, mode=mode)
         self.context_len = context_len
         self.horizon_len = horizon_len
         self.patch_size = patch_size
         self.batch_size = batch_size
         self.mode = mode
+        self.htune = htune
+        self.boundaries = boundaries
         self.normalize = normalize
+
+        self._read_data()
+        self._preprocess(start_date=start_date, end_date=end_date,
+                        freq=freq, operation=operation)
+        self.start_date = self.dataset.index[0]
+        
+        # Split the dataset into train, val, test
+        if self.mode == "train": # no windowing
+            self.dataset = self.dataset[:self.boundaries[0]]
+            self.gen_train_val_data()
+        elif self.mode == "val": # no windowing
+            self.dataset = self.dataset[self.boundaries[0]:self.boundaries[1]]
+            self.gen_train_val_data()
+        elif self.mode == "test":
+            self.gen_test_data()
+        else:
+            raise ValueError(f"Unsupported mode: {self.mode}")
+        
+
+    def _read_data(self):
+        """This function reads the data from the data_path and sets the dataset, infers frequency
+        and splits the columns as index (datetime_col) and variates columns (ts_cols)
+        """
         self.data = pd.read_csv(self.data_path)
+
         # set datetime_col as index and remove it from columns
         self.data[self.datetime_col] = pd.to_datetime(self.data[self.datetime_col])
         self.data = self.data.set_index(self.datetime_col)
         self.freq = pd.infer_freq(self.data.index)
         self.dataset = self.data
         self.ts_cols = [col for col in self.dataset.columns if col != self.datetime_col]
+    
+    def _preprocess(self,start_date=None, end_date=None,
+                    freq=None, operation='mean',**kwargs):
+        """This function picks a subset of data if start_date or end_date are provided.
+        It resamples the data if freq is provided.
+        It normalizes the data if normalize is set to True.
+        It splits the data into train, val, test based on boundaries.
 
+        Args:
+            start_date (str, optional): Start of subset data. Defaults to None.
+            end_date (str, optional): End of subset of data. Defaults to None.
+            freq (str, optional): "h"(hourly), "w"(weekly), "m"(monthly), "q"(quarterly), etc for resampling. Defaults to None.
+            operation (str, optional): Operation used in resampling. Defaults to 'mean'.
+
+        Raises:
+            ValueError: If operation is not supported.
+        """
+        # When considering a subset of the data
         if start_date:
             start_date = pd.Timestamp(start_date)
             self.dataset = self.dataset[self.dataset.index >= start_date]
@@ -689,10 +731,12 @@ class MoiraiDataset(BaseDataset):
         if end_date:
             end_date = pd.Timestamp(end_date)
             self.dataset = self.dataset[self.dataset.index <= end_date]
-
+        
+        # Fill missing values
         self.dataset = self.dataset.ffill()
-        self.dataset = self.dataset.bfill()
+        self.dataset = self.dataset.bfill() # ensures the first row has no NaN values
 
+        # Resample the data if required
         if freq:
             if operation == 'sum':
                 self.dataset = self.dataset.resample(freq).sum()
@@ -707,41 +751,75 @@ class MoiraiDataset(BaseDataset):
             else:
                 raise ValueError(f"Unsupported resampling operation: {operation}")
 
-        if boundaries == (0, 0, 0):
-            # Default boundaries: train 60%, val 20%, test 20%
-            self.boundaries = [
-                int(len(self.data)*0.8),
-                int(len(self.data)*0.8),
-                len(self.data),
-            ]
-        else:
-            self.boundaries = boundaries
+        # Decide the boundaries for train, val, test
+        if self.boundaries == (0,0,0):
+            if self.htune: # if we are doing hyperparameter tuning
+                # 60% train, 20% val, 20% test
+                self.boundaries = [int(self.dataset.shape[0]*0.6),
+                                   int(self.dataset.shape[0]*0.8),
+                                   self.dataset.shape[0]-1]
+            else:
+                # 80% train, 20% test
+                self.boundaries = [int(self.dataset.shape[0]*0.8),
+                                   int(self.dataset.shape[0]*0.8),
+                                   self.dataset.shape[0]-1]
 
         # Normalize the dataset if required
         if self.normalize:
+            print("Normalizing the dataset")
             scaler = StandardScaler()
-            scalar = scaler.fit(self.dataset.iloc[: self.boundaries[1]])
+            scaler = scaler.fit(self.dataset.iloc[: self.boundaries[1]])
             data_normalized = scaler.transform(self.dataset)
             self.dataset = pd.DataFrame(data_normalized, columns=self.dataset.columns, index=self.dataset.index)
-
-        test_offset = self.boundaries[2] - self.boundaries[1]
-        self.dataset = PandasDataset(dict(self.dataset))
-
-        train_template, test_template = ts_split(self.dataset, offset=-test_offset)
-
-        
-        # split the data based on boundaries 
-        if self.mode == "train":
-            self.dataset = train_template
-        elif self.mode == "val":
-            self.dataset = train_template
-        else:
-            self.dataset = test_template.generate_instances(prediction_length=self.horizon_len, windows=test_offset//self.horizon_len, distance=self.horizon_len)
     
-    def get_data_loader(self):
+    def gen_train_val_data(self):
+        """Generates training and validation data based on the boundaries
+
+        Returns:
+            np.ndarray: Training and Validation data
+        """
+        data = []
+        for i in range(self.dataset.shape[1]):
+            data.append({
+                "start": Period(self.start_date, freq=self.freq),
+                "target": self.dataset.iloc[:,i].values,
+                "item_id": self.dataset.columns[i]
+            })
+        
+        self.dataset = MoiraiTorch(data)
+    
+    def gen_test_data(self):
+        """Generates test data based on the boundaries
+
+        Returns:
+            np.ndarray: Test data
+        """
+        data = []
+        for i in range(self.dataset.shape[1]):
+            data.extend([tuple([{"start":Period(self.start_date, freq=self.freq),
+                                    "target":self.dataset.iloc[:self.boundaries[1] + j*self.horizon_len,i].values,
+                                    "item_id": self.dataset.columns[i]},
+                                {"start":Period(self.start_date, freq=self.freq),
+                                     "target":self.dataset.iloc[self.boundaries[1] + j*self.horizon_len:self.boundaries[1] + (j+1)*self.horizon_len,i].values,
+                                     "item_id": self.dataset.columns[i]}
+                                ]) for j in range((self.dataset.shape[0] - self.boundaries[1])//self.horizon_len)
+                        ])
+        
+        self.dataset = MoiraiTorch(data)
+    
+    def get_dataloader(self):
+        """Returns the iterator for data batches for the dataset based on the mode
+
+        Returns:
+            torch.utils.data.DataLoader: Depends on the mode
+        """
         if self.mode == "train":
-            return glu_load.DataLoader(self.dataset, batch_size=self.batch_size, shuffle=True)
-        if self.mode == "val":
-            return glu_load.DataLoader(self.dataset, batch_size=self.batch_size, shuffle=False)
-        if self.mode == "test":
-            return glu_load.DataLoader(self.dataset, batch_size=self.batch_size, shuffle=False)
+            return DataLoader(self.dataset, batch_size=self.batch_size, shuffle=True)
+        else:
+            return DataLoader(self.dataset, batch_size=self.batch_size, shuffle=False)
+    
+    def __getitem__(self, idx):
+        return super().__getitem__(idx)
+    
+    def __len__(self):
+        return len(self.dataset[0]["target"])
