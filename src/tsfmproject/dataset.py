@@ -236,7 +236,7 @@ class ChronosDataset(BaseDataset):
                 top_p=1.0,
             )
         else:
-            self.config = config
+            self.config = ChronosConfig(**config)
         assert type(self.config) == ChronosConfig, "Config must be an instance of ChronosConfig"
         assert self.config.model_type in ("seq2seq", "causal"), "Model type must be either 'seq2seq' or 'causal'"
 
@@ -291,15 +291,15 @@ class ChronosDataset(BaseDataset):
         self.pad_len = 0
         if self.length_timeseries < self.required_len:
             self.pad = True
-        if self.pad:
-            self.pad_sequence()
+        self.pad_sequence()
 
     def pad_sequence(self):
         self.pad_len = self.required_len - self.length_timeseries
         # Pad data with zeros from the left
-        self.data = np.pad(
-            self.data, ((self.pad_len, 0), (0, 0))
-        )
+        if self.pad:
+            self.data = np.pad(
+                self.data, ((self.pad_len, 0), (0, 0))
+            )
         # If num of channels isn't multiple of max_col_num, pad with zeros
         if self.n_channels % self.max_col_num != 0:
             self.data = np.pad(
@@ -468,15 +468,15 @@ class MomentDataset(BaseDataset):
         self.pad_len = 0
         if self.length_timeseries < self.required_len:
             self.pad = True
-        if self.pad:
-            self.pad_sequence()
+        self.pad_sequence()
 
     def pad_sequence(self):
         self.pad_len = self.required_len - self.length_timeseries
         # Pad data with zeros from the left
-        self.data = np.pad(
-            self.data, ((self.pad_len, 0), (0, 0))
-        )
+        if self.pad:
+            self.data = np.pad(
+                self.data, ((self.pad_len, 0), (0, 0))
+            )
         # If num of channels isn't multiple of max_col_num, pad with zeros
         if self.n_channels % self.max_col_num != 0:
             self.data = np.pad(

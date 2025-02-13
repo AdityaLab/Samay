@@ -8,31 +8,32 @@ src_path = os.path.abspath(os.path.join("src"))
 if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
-from tsfmproject.model import TimesfmModel, MomentModel
-from tsfmproject.dataset import TimesfmDataset, MomentDataset
+from tsfmproject.model import TimesfmModel, MomentModel, ChronosModel
+from tsfmproject.dataset import TimesfmDataset, MomentDataset, ChronosDataset
 from tsfmproject.utils import load_args
 from tsfmproject.metric import *
 
 
 ECON_NAMES = {
-    # "m4_yearly": ["Y"],
-    # "m4_quarterly": ["Q"],
-    # "m4_monthly": ["M"],
-    # "m4_weekly": ["W"],
-    # "m4_daily": ["D"],
-    # "m4_hourly": ["H"],
+    "m4_yearly": ["Y"],
+    "m4_quarterly": ["Q"],
+    "m4_monthly": ["M"],
+    "m4_weekly": ["W"],
+    "m4_daily": ["D"],
+    "m4_hourly": ["H"],
 }
 
 SALES_NAMES = {
     "car_parts_with_missing": ['M'],
-    # "hierarchical_sales": ['D', 'W'],
-    # "restaurant": ['D'],
+    "hierarchical_sales": ['D', 'W'],
+    "restaurant": ['D'],
 }
 
-MODEL_NAMES = ["timesfm", "moment"]
+MODEL_NAMES = ["timesfm", "moment", "chronos"]
 MODEL_CONTEXT_LEN = {
     "timesfm": 32,
-    "moment": 512
+    "moment": 512,
+    "chronos": 512
 }
 
 
@@ -68,7 +69,7 @@ def calc_pred_and_context_len(freq):
     
 
 if __name__ == "__main__":
-    model_name = MODEL_NAMES[1]
+    model_name = MODEL_NAMES[2]
     # create csv file for leaderboard if not already created
     csv_path = f"leaderboard/{model_name}.csv"
 
@@ -81,6 +82,9 @@ if __name__ == "__main__":
         args = load_args(arg_path)
     elif model_name == "moment":
         arg_path = "config/moment_forecast.json"
+        args = load_args(arg_path)
+    elif model_name == "chronos":
+        arg_path = "config/chronos.json"
         args = load_args(arg_path)
 
     NAMES = ECON_NAMES | SALES_NAMES
@@ -110,6 +114,14 @@ if __name__ == "__main__":
                 dataset = MomentDataset(datetime_col='timestamp', path=dataset_path, mode='test', horizon_len=args["config"]["forecast_horizon"], normalize=False)
                 finetuned_model = model.finetune(train_dataset, task_name="forecasting")
                 metrics = model.evaluate(dataset, task_name="forecasting")
+
+            elif model_name == "chronos":
+                model = ChronosModel(**args)
+                dataset_config = load_args("config/chronos_dataset.json")
+                dataset_config["context_length"] = context_len
+                dataset_config["prediction_length"] = pred_len
+                dataset = ChronosDataset(datetime_col='timestamp', path=dataset_path, mode='test', config=dataset_config)
+                metrics = model.evaluate(dataset, horizon_len=dataset_config["prediction_length"], quantile_levels=[0.1, 0.5, 0.9])
 
             df = pd.read_csv(csv_path)
             if dataset_name in df["dataset"].values:
