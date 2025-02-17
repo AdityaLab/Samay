@@ -16,29 +16,26 @@ More models will be added soon...
 
 You can add the package to your project by running the following command:
 
-To use LPTM run the following command:
-
-```bash
-pip install git+https://github.com/AdityaLab/Samay.git@LPTM
-```
-
-To use all the other models run:
 ```bash
 pip install git+https://github.com/AdityaLab/Samay.git
 ```
+
 **Note:** If the installation fails because rust is missing run:
+
 For MacOS:
+
 ```bash
 brew install rustup
 rustup-init
 source ~/.cargo/env
 ```
+
 For Linux:
+
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source ~/.cargo/env
 ```
-
 
 ### Development workflow
 
@@ -60,9 +57,7 @@ uv sync --reinstall
 
 ### LPTM
 
-_Note:_ Use the LPTM branch for best results `pip install git+https://github.com/AdityaLab/Samay.git@LPTM`.
-
-#### Loading  Model
+#### Loading Model
 
 ```python
 from samay.model import LPTMModel
@@ -99,7 +94,7 @@ avg_loss, trues, preds, histories = lptm.evaluate(val_dataset)
 
 Install the package: `pip install git+https://github.com/AdityaLab/Samay.git`.
 
-#### Loading  Model
+#### Loading Model
 
 ```python
 from samay.model import TimesfmModel
@@ -158,4 +153,4 @@ url={https://openreview.net/forum?id=vMMzjCr5Zj}
 
 ## Contact
 
-If you have any feedback or questions, you can contact us via email: hkamarthi3@gatech.edu.
+If you have any feedback or questions, you can contact us via email: <hkamarthi3@gatech.edu>.

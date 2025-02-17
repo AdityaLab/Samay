@@ -1,9 +1,11 @@
+import json
 import subprocess
 
 import numpy as np
 import pandas as pd
-import json
+
 from .models.moment.momentfm.utils.data import load_from_tsfile
+
 
 def get_least_used_gpu():
     """Get the least used GPU device."""
@@ -62,7 +64,9 @@ def ts_to_csv(ts_file, csv_file, replace_missing_vals_with="NaN"):
             for j, channel in enumerate(features):
                 flattened_features.extend([float(x) for x in channel.split(",")])
                 # add column names for each channel
-                column_name.extend([f"channel_{j}_time_{i}" for i in range(len(channel.split(",")))])
+                column_name.extend(
+                    [f"channel_{j}_time_{i}" for i in range(len(channel.split(",")))]
+                )
 
             data.append(flattened_features)
 
@@ -74,6 +78,7 @@ def ts_to_csv(ts_file, csv_file, replace_missing_vals_with="NaN"):
 
     # Save to CSV
     df.to_csv(csv_file, index=False)
+
 
 def get_multivariate_data(dataframe, label_col="label"):
     """
@@ -91,6 +96,7 @@ def get_multivariate_data(dataframe, label_col="label"):
     # reshape data into (num_samples, num_channels, num_timesteps)
     data = dataframe.values.reshape(-1, num_channels, num_timesteps)
     return data, labels
+
 
 def load_args(file_path):
     """
@@ -110,5 +116,3 @@ if __name__ == "__main__":
     ts_labels = np.array(ts_labels, dtype=int)
     print(data - ts_data)
     print(labels - ts_labels)
- 
-
