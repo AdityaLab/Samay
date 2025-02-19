@@ -480,15 +480,21 @@ class MoiraiForecast(L.LightningModule):
     ) -> tuple[
         Int[torch.Tensor, "batch past_token"], Int[torch.Tensor, "batch future_token"]
     ]:
+        # Pad the past_observed_target tensor to ensure its length is a multiple of patch_size
+        # and then reduce it by taking the maximum value over the patch dimension.
         past_seq_id = reduce(
-            self._patched_seq_pad(patch_size, past_observed_target, -2, left=True),
-            "... (seq patch) dim -> ... seq",
-            "max",
-            patch=patch_size,
+            self._patched_seq_pad(patch_size, past_observed_target, -2, left=True),  # Pad the input tensor
+            "... (seq patch) dim -> ... seq",  # Combine the seq and patch dimensions into a single one
+            "max",  # Reduction operation to take the maximum value
+            patch=patch_size,  # Size of the patches
         )
+
+        # Bound the id below by 0
         past_seq_id = torch.clamp(
-            past_seq_id.cummax(dim=-1).values.cumsum(dim=-1) - 1, min=0
+            past_seq_id.cummax(dim=-1).values.cumsum(dim=-1) - 1,
+            min=0
         )
+
         batch_shape = " ".join(map(str, past_observed_target.shape[:-2]))
         future_seq_id = (
             repeat(

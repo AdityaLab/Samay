@@ -167,6 +167,8 @@ class MoiraiMoEModule(
         :param patch_size: patch size for each token
         :return: predictive distribution
         """
+
+        # Apply scaling to observations
         loc, scale = self.scaler(
             target,
             observed_mask * ~prediction_mask.unsqueeze(-1),
@@ -175,11 +177,11 @@ class MoiraiMoEModule(
         )
         scaled_target = (target - loc) / scale
 
-        in_reprs = self.in_proj(scaled_target, patch_size)
-        in_reprs = F.silu(in_reprs)
-        in_reprs = self.feat_proj(in_reprs, patch_size)
-        res_reprs = self.res_proj(scaled_target, patch_size)
-        reprs = in_reprs + res_reprs
+        in_reprs = self.in_proj(scaled_target, patch_size) # Project from observations to representations
+        in_reprs = F.silu(in_reprs) # Apply activation function
+        in_reprs = self.feat_proj(in_reprs, patch_size) # Project from representations to features
+        res_reprs = self.res_proj(scaled_target, patch_size) # Project from observations to representations
+        reprs = in_reprs + res_reprs # Add features to representations
 
         reprs = self.encoder(
             reprs,

@@ -97,7 +97,9 @@ class MoiraiModule(
         self.max_seq_len = max_seq_len
         self.scaling = scaling
 
-        self.mask_encoding = nn.Embedding(num_embeddings=1, embedding_dim=d_model)
+        self.mask_encoding = nn.Embedding(num_embeddings=1, # number of embeddings
+                                          embedding_dim=d_model # length of each embedding vector
+                                        ) 
         self.scaler = PackedStdScaler() if scaling else PackedNOPScaler()
         self.in_proj = MultiInSizeLinear(
             in_features_ls=patch_sizes,
@@ -158,21 +160,36 @@ class MoiraiModule(
         :param patch_size: patch size for each token
         :return: predictive distribution
         """
+
+        print("target.shape: ", target.shape)
+        # Scaling the target (main data) 
         loc, scale = self.scaler(
             target,
+            # observed_mask * ~prediction_mask separates the observed data from the prediction window
+            # unsqueeze(-1) adds a new dimension to the end of the tensor 
             observed_mask * ~prediction_mask.unsqueeze(-1),
             sample_id,
             variate_id,
         )
         scaled_target = (target - loc) / scale
+
+        # Projecting to representations
         reprs = self.in_proj(scaled_target, patch_size)
+
+        # Masking the prediction window
         masked_reprs = mask_fill(reprs, prediction_mask, self.mask_encoding.weight)
+
+        # Applying transformer layers
         reprs = self.encoder(
             masked_reprs,
             packed_attention_mask(sample_id),
             time_id=time_id,
             var_id=variate_id,
         )
+
+        # Projecting to distribution parameters
         distr_param = self.param_proj(reprs, patch_size)
+
+        # Constructing distribution object
         distr = self.distr_output.distribution(distr_param, loc=loc, scale=scale)
         return distr
