@@ -15,6 +15,10 @@ from .utils import get_multivariate_data
 from .moirai_utils import MoiraiTorch
 from pandas._libs.tslibs.period import Period
 
+from gluonts.dataset.pandas import PandasDataset
+from gluonts.dataset.split import split as ts_split
+from gluonts.dataset.loader import TrainDataLoader, ValidationDataLoader, InferenceDataLoader
+
 # for full length history/ context data wrapping
 # class TimeSeriesDataset(Dataset):
 #     """
@@ -675,6 +679,7 @@ class MoiraiDataset(BaseDataset):
         self.htune = htune
         self.boundaries = boundaries
         self.normalize = normalize
+        self.kwargs = kwargs
 
         self._read_data()
         self._preprocess(start_date=start_date, end_date=end_date,
@@ -807,6 +812,26 @@ class MoiraiDataset(BaseDataset):
         
         self.dataset = MoiraiTorch(data)
     
+    def prep_train_data(self,data):
+        """Convert the input `data` to have the following fields:
+        +--------------------+--------------------------------------+-----------------------+----------------------------------+
+        | FIELD              | DESCRIPTION                          | TYPE                  | SHAPE                            |
+        +--------------------+--------------------------------------+-----------------------+----------------------------------+
+        | target             | Batched time series data             | torch.tensor[float]   | (batch_size, seq_len, max_patch) |
+        | observed_mask      | Binary mask for the context part     | torch.tensor[bool]    | (batch_size, seq_len, max_patch) |
+        | prediction_mask    | Binary mask for the prediction part  | torch.tensor[bool]    | (batch_size, seq_len)            |
+        | time_id            | Time index                           | torch.tensor[int]     | (batch_size, seq_len)            |
+        +--------------------+--------------------------------------+-----------------------+----------------------------------+
+        """
+        mod_data = {}
+        pass
+    
+    # def prep_test_data(self, data):
+    #     """give just the time series data for testing
+    #     """
+    #     self.dataset = self.dataset[self.boundaries[1]:]
+    #     self.gen_test_data()
+    
     def get_dataloader(self):
         """Returns the iterator for data batches for the dataset based on the mode
 
@@ -814,6 +839,14 @@ class MoiraiDataset(BaseDataset):
             torch.utils.data.DataLoader: Depends on the mode
         """
         if self.mode == "train":
+            if self.kwargs:
+                batch_size = self.kwargs.get("batch_size", self.batch_size)
+                num_workers = self.kwargs.get("num_workers", 0)
+                pin_memory = self.kwargs.get("pin_memory", False)
+                persistent_workers = self.kwargs.get("persistent_workers", False)
+
+                return DataLoader(self.dataset, batch_size=batch_size, shuffle=True,
+                                num_workers=num_workers, pin_memory=pin_memory, persistent_workers=persistent_workers)
             return DataLoader(self.dataset, batch_size=self.batch_size, shuffle=True)
         else:
             return DataLoader(self.dataset, batch_size=self.batch_size, shuffle=False)
@@ -823,3 +856,107 @@ class MoiraiDataset(BaseDataset):
     
     def __len__(self):
         return len(self.dataset[0]["target"])
+
+class Moirai_old_Dataset(BaseDataset):
+    """
+    Dataset class for Moirai model
+    Data Format:
+    
+    """
+
+    def __init__(
+        self,
+        name=None,
+        datetime_col="ds",
+        path=None,
+        boundaries=(0, 0, 0),
+        context_len=128,
+        horizon_len=32,
+        patch_size="auto",
+        batch_size=16,
+        freq = None,
+        start_date=None,
+        end_date=None,
+        operation='mean',
+        normalize=True,
+        mode="train",
+        **kwargs,
+    ):
+        super().__init__(name=name, datetime_col=datetime_col, path=path)
+        self.context_len = context_len
+        self.horizon_len = horizon_len
+        self.patch_size = patch_size
+        self.batch_size = batch_size
+        self.mode = mode
+        self.normalize = normalize
+        self.data = pd.read_csv(self.data_path)
+        # set datetime_col as index and remove it from columns
+        self.data[self.datetime_col] = pd.to_datetime(self.data[self.datetime_col])
+        self.data = self.data.set_index(self.datetime_col)
+        self.freq = pd.infer_freq(self.data.index)
+        self.dataset = self.data
+        self.ts_cols = [col for col in self.dataset.columns if col != self.datetime_col]
+
+        if start_date:
+            start_date = pd.Timestamp(start_date)
+            self.dataset = self.dataset[self.dataset.index >= start_date]
+        
+        if end_date:
+            end_date = pd.Timestamp(end_date)
+            self.dataset = self.dataset[self.dataset.index <= end_date]
+
+        self.dataset = self.dataset.ffill()
+        self.dataset = self.dataset.bfill()
+
+        if freq:
+            if operation == 'sum':
+                self.dataset = self.dataset.resample(freq).sum()
+            elif operation == 'mean':
+                self.dataset = self.dataset.resample(freq).mean()
+            elif operation == 'pad':
+                self.dataset = self.dataset.resample(freq).pad()
+            elif operation == 'ffill':
+                self.dataset = self.dataset.resample(freq).ffill()
+            elif operation == 'bfill':
+                self.dataset = self.dataset.resample(freq).bfill()
+            else:
+                raise ValueError(f"Unsupported resampling operation: {operation}")
+
+        if boundaries == (0, 0, 0):
+            # Default boundaries: train 60%, val 20%, test 20%
+            self.boundaries = [
+                int(len(self.data)*0.8),
+                int(len(self.data)*0.8),
+                len(self.data),
+            ]
+        else:
+            self.boundaries = boundaries
+
+        # Normalize the dataset if required
+        if self.normalize:
+            scaler = StandardScaler()
+            scalar = scaler.fit(self.dataset.iloc[: self.boundaries[1]])
+            data_normalized = scaler.transform(self.dataset)
+            self.dataset = pd.DataFrame(data_normalized, columns=self.dataset.columns, index=self.dataset.index)
+
+        test_offset = self.boundaries[2] - self.boundaries[1]
+        self.dataset = PandasDataset(dict(self.dataset))
+
+        train_template, test_template = ts_split(self.dataset, offset=-test_offset)
+
+        
+        # split the data based on boundaries 
+        if self.mode == "train":
+            self.dataset = train_template
+        elif self.mode == "val":
+            self.dataset = train_template
+        else:
+            self.dataset = test_template.generate_instances(prediction_length=self.horizon_len, windows=test_offset//self.horizon_len, distance=self.horizon_len)
+    
+    def get_dataloader(self):
+        if self.mode == "train":
+            return DataLoader(self.dataset, batch_size=self.batchsize, shuffle=True)
+        elif self.mode == "val":
+            return DataLoader(self.dataset, batch_size=self.batchsize, shuffle=False)
+        else:
+            return DataLoader(self.dataset, batch_size=self.batchsize, shuffle=False)

@@ -25,7 +25,7 @@ from samay.models.uni2ts.model.moirai.finetune import MoiraiFinetune
 from samay.dataset import MoiraiDataset
 from samay.utils import get_least_used_gpu
 from samay.moirai_utils import convert_module_kwargs
-
+from samay.models.uni2ts.cli.train import DataModule
 # For moirai finetuning
 from samay.models.uni2ts.optim import SchedulerType, get_scheduler
 from samay.models.uni2ts.module.ts_embed import MultiInSizeLinear, MultiOutSizeLinear
@@ -36,6 +36,7 @@ from samay.models.uni2ts.module.position import (
     LearnedProjection,
 )
 import torch.nn as nn
+import lightning as L
 
 
 class Basemodel:
@@ -646,6 +647,7 @@ class MoiraiTSModel(Basemodel):
         **kwargs,
     ):
         super().__init__(config=config, repo=repo)
+        # config.get(<key>, <default_value> if key not found)
         self.horizon_len = config.get("horizon_len", 32)
         self.context_len = config.get("context_len", 128)
         self.patch_size = config.get("patch_size", 16)
@@ -765,127 +767,62 @@ class MoiraiTSModel(Basemodel):
     def finetune(self, dataset, **kwargs):
 
         # Parameters
-        path = "../src/samay/models/uni2ts/cli/conf/finetune/model/moirai_small.yaml"
-        with open(path, "r") as file:
-            fin_config = yaml.safe_load(file)
+        model_config = "../src/samay/models/uni2ts/cli/conf/finetune/model/moirai_small.yaml"
+        with open(model_config, "r") as file:
+            fin_model_config = yaml.safe_load(file)
         
-        lr = 1e-4 if "lr" not in fin_config else float(fin_config["lr"])
-        epochs = 10 if "epochs" not in kwargs else kwargs["epochs"]
+        lr = 1e-4 if "lr" not in fin_model_config else float(fin_model_config["lr"])
+        self.batch_size = kwargs["batch_size"] if "batch_size" in kwargs else self.batch_size
 
         num_batches = len(dataset.dataset)//self.batch_size
-        num_batches_per_epoch = num_batches//epochs
-        training_steps = num_batches_per_epoch * epochs
-        module_args = convert_module_kwargs(fin_config["module_kwargs"])
-        
-        # Load the model
-        FinetunedModel = MoiraiFinetune(min_patches=fin_config["min_patches"],
-                                        min_mask_ratio=fin_config["min_mask_ratio"],
-                                        max_mask_ratio=fin_config["max_mask_ratio"],
-                                        max_dim=fin_config["max_dim"],
-                                        num_training_steps=training_steps,
-                                        num_warmup_steps=fin_config["num_warmup_steps"],
-                                        module_kwargs=module_args,
-                                        beta1=fin_config["beta1"],
-                                        beta2=fin_config["beta2"],
-                                        val_metric=fin_config["val_metric"],
-                                        weight_decay=fin_config["weight_decay"]
-                                        )
+        if "num_batches_per_epoch" in kwargs.keys(): # If num_batches_per_epoch is provided
+            num_batches_per_epoch = kwargs["num_batches_per_epoch"]
+            epochs = min(kwargs["max_epochs"], num_batches//num_batches_per_epoch) # clips epochs by max_epochs
+        else:
+            epochs = kwargs["max_epochs"]
+            num_batches_per_epoch = num_batches//epochs
+        training_steps = num_batches_per_epoch * kwargs["max_epochs"]
+        module_args = convert_module_kwargs(fin_model_config["module_kwargs"])
+
+        # Trainer configuration (from uni2ts/cli/train.py)
+        # mod_torch is the trainer configuration without _target_ fields or any key 
+        # whose value is neither a list or dictionary
+        if kwargs["tf32"]:
+            assert kwargs["mod_torch"]["precision"] == 32, "Precision should be 32 for tf32"
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
     
-        FinetunedModel.to(self.device)
-        FinetunedModel.train() # Set model to training mode
-
-        # Freeze the transformer layers
-        # First we finetune the whole model
-
-        # Load the dataset
-        dataloader = dataset.get_dataloader()
-
-        # Decide which weights are going to be updated
-        decay = set()
-        no_decay = set()
-
-        whitelist_params = (
-            LearnedProjection,
-            MultiInSizeLinear,
-            MultiOutSizeLinear,
-            nn.Linear,
-        )
-        blacklist_params = (
-            BinaryAttentionBias,
-            LearnedEmbedding,
-            RMSNorm,
-            nn.Embedding,
-            nn.LayerNorm,
-        )
-
-        for xn,x in FinetunedModel.named_modules():
-            for pn,p in x.named_parameters():
-                if not p.requires_grad:
-                    continue
-
-                fpn = f"{xn}.{pn}" if xn else pn
-                if pn.endswith("bias"):
-                    no_decay.add(fpn)
-                elif pn.endswith("weight") and isinstance(x, whitelist_params):
-                    decay.add(fpn)
-                elif pn.endswith("weight") and isinstance(x, blacklist_params):
-                    no_decay.add(fpn)
-
-        # validate that we considered every parameter
-        param_dict = {pn: p for pn, p in FinetunedModel.named_parameters() if p.requires_grad}
-        # print(f"Parameters: {param_dict.keys()}")
-        # inter_params = decay & no_decay
-        # union_params = decay | no_decay
-        # assert (
-        #     len(inter_params) == 0
-        # ), f"parameters {str(inter_params)} made it into both decay/no_decay sets!"
-        # assert (
-        #     len(param_dict.keys() - union_params) == 0
-        # ), f"parameters {str(param_dict.keys() - union_params)} were not separated into either decay/no_decay set!"
-
-        optim_groups = [
-            {
-                "params": filter(
-                    lambda p: p.requires_grad,
-                    [param_dict[pn] for pn in sorted(list(decay))],
-                ),
-                "weight_decay": FinetunedModel.hparams.weight_decay,
-            },
-            {
-                "params": filter(
-                    lambda p: p.requires_grad,
-                    [param_dict[pn] for pn in sorted(list(no_decay))],
-                ),
-                "weight_decay": 0.0,
-            },
-        ]
-        optimizer = torch.optim.Adam(optim_groups,
-                                     lr=lr,
-                                     betas=(FinetunedModel.hparams.beta1, FinetunedModel.hparams.beta2),
-                                     eps=1e-6)
+        # Load the model
+        FinetunedModel = MoiraiFinetune(min_patches=fin_model_config["min_patches"],
+                                        min_mask_ratio=fin_model_config["min_mask_ratio"],
+                                        max_mask_ratio=fin_model_config["max_mask_ratio"],
+                                        max_dim=fin_model_config["max_dim"],
+                                        num_training_steps=training_steps,
+                                        num_warmup_steps=fin_model_config["num_warmup_steps"],
+                                        module_kwargs=module_args,
+                                        beta1=fin_model_config["beta1"],
+                                        beta2=fin_model_config["beta2"],
+                                        val_metric=fin_model_config["val_metric"],
+                                        weight_decay=fin_model_config["weight_decay"]
+                                        )
         
-        scheduler = get_scheduler(
-            SchedulerType.COSINE_WITH_RESTARTS,
-            optimizer,
-            num_warmup_steps=FinetunedModel.hparams.num_warmup_steps,
-            num_training_steps=FinetunedModel.hparams.num_training_steps,
-        )
+        # Instantiate trainer (refer uni2ts/cli/conf/finetune/default.yaml)
+        output_dir = "../../finetuning/moirai"
+        logger = L.pytorch.loggers.TensorBoardLogger(save_dir=output_dir,name="logs")
+        callbacks = [L.pytorch.callbacks.LearningRateMonitor(logging_interval="epoch"),
+                    L.pytorch.callbacks.ModelCheckpoint(dirpath=f"{output_dir}/checkpoints",monitor="val_loss", save_top_k=1, mode="min",every_n_epochs=1,save_weights_only=True),
+                    L.pytorch.callbacks.EarlyStopping(monitor="val_loss",patience=3,mode="min",min_delta=0.0,strict=False,verbose=True)
+                    ]
+        ft_trainer = L.Trainer(logger=logger, callbacks=callbacks, **kwargs["mod_torch"])
+        L.seed_everything(kwargs["seed"] + ft_trainer.logger.version, workers=True)
 
-        avg_loss = 0
-        for epoch in range(epochs):
-            for i, (inputs) in enumerate(dataloader):
-                # inputs = dataset.preprocess(inputs)
-                inputs = {k: v.to(self.device) for k, v in inputs.items()}
-                optimizer.zero_grad() # reset gradients
-                outputs = FinetunedModel.forward(inputs)  # distribution of predictions
-                loss = FinetunedModel.compute_loss(outputs, inputs)
-                loss.backward()
-                optimizer.step()
-                scheduler.step()
-                avg_loss += loss.item()
-            avg_loss /= len(dataloader)
-            print(f"Epoch {epoch}, Loss: {avg_loss}")
-        
+        # Get train loader
+        train_loader = dataset.get_dataloader()
+
+        # finetune now
+        ft_trainer.fit(FinetunedModel, train_dataloaders=train_loader)
+
+        # Update the model
         self.model = FinetunedModel
 
         return self.model
