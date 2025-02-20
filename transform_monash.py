@@ -1,4 +1,4 @@
-from src.tsfmproject.utils import arrow_to_csv
+from src.samay.utils import arrow_to_csv
 import os
 import pandas as pd
 

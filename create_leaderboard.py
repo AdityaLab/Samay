@@ -8,9 +8,9 @@ src_path = os.path.abspath(os.path.join("src"))
 if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
-from tsfmproject.model import TimesfmModel, MomentModel
-from tsfmproject.dataset import TimesfmDataset, MomentDataset
-from tsfmproject.utils import load_args
+from samay.model import TimesfmModel, MomentModel
+from samay.dataset import TimesfmDataset, MomentDataset
+from samay.utils import load_args
 
 
 MONASH_NAMES = [

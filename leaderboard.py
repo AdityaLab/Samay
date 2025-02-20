@@ -4,14 +4,14 @@ import numpy as np
 import pandas as pd
 
 
-src_path = os.path.abspath(os.path.join("src"))
-if src_path not in sys.path:
-    sys.path.insert(0, src_path)
+# src_path = os.path.abspath(os.path.join("src"))
+# if src_path not in sys.path:
+#     sys.path.insert(0, src_path)
 
-from tsfmproject.model import TimesfmModel, MomentModel, ChronosModel
-from tsfmproject.dataset import TimesfmDataset, MomentDataset, ChronosDataset
-from tsfmproject.utils import load_args
-from tsfmproject.metric import *
+from src.samay.model import TimesfmModel, MomentModel, ChronosModel
+from src.samay.dataset import TimesfmDataset, MomentDataset, ChronosDataset
+from src.samay.utils import load_args
+from src.samay.metric import *
 
 
 ECON_NAMES = {

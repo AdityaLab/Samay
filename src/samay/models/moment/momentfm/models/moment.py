@@ -10,7 +10,7 @@ from torch import nn
 from transformers import T5Config, T5EncoderModel, T5Model
 
 from ..common import TASKS
-from ..data.base import TimeseriesOutputs
+from ..dataclass.base import TimeseriesOutputs
 from .layers.embed import PatchEmbedding, Patching
 from .layers.revin import RevIN
 from ..utils.masking import Masking
