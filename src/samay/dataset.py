@@ -18,7 +18,7 @@ from pandas._libs.tslibs.period import Period
 from gluonts.dataset.pandas import PandasDataset
 from gluonts.dataset.split import split as ts_split
 from gluonts.dataset.loader import TrainDataLoader, ValidationDataLoader, InferenceDataLoader
-
+import itertools
 # for full length history/ context data wrapping
 # class TimeSeriesDataset(Dataset):
 #     """
@@ -812,7 +812,7 @@ class MoiraiDataset(BaseDataset):
         
         self.dataset = MoiraiTorch(data)
     
-    def prep_train_data(self,data):
+    def prep_train_data(self):
         """Convert the input `data` to have the following fields:
         +--------------------+--------------------------------------+-----------------------+----------------------------------+
         | FIELD              | DESCRIPTION                          | TYPE                  | SHAPE                            |
@@ -823,8 +823,53 @@ class MoiraiDataset(BaseDataset):
         | time_id            | Time index                           | torch.tensor[int]     | (batch_size, seq_len)            |
         +--------------------+--------------------------------------+-----------------------+----------------------------------+
         """
-        mod_data = {}
-        pass
+        data_iter = iter(self.dataset)
+        
+        # Add the required fields
+        mod_data = []
+        for x in data_iter:
+            mod_data.append({
+                "start": x["start"],
+                "target": x["target"],
+                "observed_mask": torch.tensor([1] * (len(x["target"]) - self.horizon_len) + [0] * self.horizon_len, dtype=torch.bool),
+                "prediction_mask": torch.tensor([0] * (len(x["target"]) - self.horizon_len) + [1] * self.horizon_len, dtype=torch.bool),
+                "time_id": torch.tensor(list(range(len(x["target"]))), dtype=torch.int32),
+                "variate_id": torch.tensor([list(self.data.columns).index(x["item_id"])]*len(x["target"]), dtype=torch.int32),
+                "patch_size": torch.tensor([16]*len(x["target"]), dtype=torch.int32),      
+            })
+
+        # construct the rolling windows
+        rolling_data = []
+        n = (mod_data[0]["target"].shape[0] - self.context_len) // self.horizon_len
+
+        for i in range(n):
+            data = []
+            for x in mod_data:
+                data.append({
+                    "start": x["start"],
+                    "target": x["target"][:(i+1)*self.horizon_len + self.context_len],
+                    "observed_mask": [1]*(self.context_len + i*self.horizon_len) + [0]*self.horizon_len,
+                    "prediction_mask": [0]*(self.context_len + i*self.horizon_len) + [1]*self.horizon_len,
+                    "time_id": x["time_id"][:(i+1)*self.horizon_len + self.context_len],
+                    "variate_id": x["variate_id"][:(i+1)*self.horizon_len + self.context_len],
+                    "patch_size": x["patch_size"][:(i+1)*self.horizon_len + self.context_len]
+                })
+            rolling_data.append(data)
+        
+        # Convert the multivariate to univariate as per MOIRAI
+        batched_data = []
+        for p in rolling_data:
+            batched_data.append({
+                "start": torch.tensor([x["start"] for x in p], dtype=torch.float32),
+                "target": torch.tensor([x for y in p for x in y["target"]], dtype=torch.float32),
+                "observed_mask": torch.tensor([x for y in p for x in y["observed_mask"]], dtype=torch.bool),
+                "prediction_mask": torch.tensor([x for y in p for x in y["prediction_mask"]], dtype=torch.bool),
+                "time_id": torch.tensor([x for y in p for x in y["time_id"]], dtype=torch.int64),
+                "variate_id": torch.tensor([x for y in p for x in y["variate_id"]], dtype=torch.int64),
+                "patch_size": torch.tensor([x for y in p for x in y["patch_size"]], dtype=torch.int64)
+                })
+
+        self.batched_data = MoiraiTorch(batched_data)
     
     # def prep_test_data(self, data):
     #     """give just the time series data for testing
@@ -839,15 +884,16 @@ class MoiraiDataset(BaseDataset):
             torch.utils.data.DataLoader: Depends on the mode
         """
         if self.mode == "train":
+            self.prep_train_data()
             if self.kwargs:
                 batch_size = self.kwargs.get("batch_size", self.batch_size)
                 num_workers = self.kwargs.get("num_workers", 0)
                 pin_memory = self.kwargs.get("pin_memory", False)
                 persistent_workers = self.kwargs.get("persistent_workers", False)
 
-                return DataLoader(self.dataset, batch_size=batch_size, shuffle=True,
+                return DataLoader(self.batched_data, batch_size=batch_size, shuffle=True,
                                 num_workers=num_workers, pin_memory=pin_memory, persistent_workers=persistent_workers)
-            return DataLoader(self.dataset, batch_size=self.batch_size, shuffle=True)
+            return DataLoader(self.batched_data, batch_size=self.batch_size, shuffle=True)
         else:
             return DataLoader(self.dataset, batch_size=self.batch_size, shuffle=False)
     

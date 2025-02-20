@@ -55,36 +55,44 @@ class MoiraiTorch(Dataset):
     def __init__(self,data:list[dict]):
         super().__init__()
         self.data = data
-        if isinstance(self.data[0], tuple):
+        if isinstance(self.data, list) and isinstance(self.data[0], tuple):
             self.input = [d[0] for d in self.data]
             self.label = [d[1] for d in self.data]
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
-        row = self.data[idx]
+        if isinstance(self.data, list):
+            row = self.data[idx]
+            
+            if isinstance(row, tuple):
+                mod_row = []
+                for i in range(len(row)):
+                    if isinstance(row[i]["start"], pd.Period):
+                        mod_row.append({"start": torch.tensor(row[i]["start"].to_timestamp().timestamp(), dtype=torch.float32),
+                                        "target": torch.tensor(row[i]["target"], dtype=torch.float32),
+                                        "freq": row[i]["start"].freqstr,
+                                        "item_id": row[i]["item_id"]
+                                        })
+                    else:
+                        mod_row.append(row[i])
+                return tuple(mod_row)
+            
+            else:
+                if isinstance(row["start"], pd.Period):  # Replace with actual column name
+                    return {"start": torch.tensor(row["start"].to_timestamp().timestamp(), dtype=torch.float32),  # Convert to float timestamp
+                    "target": torch.tensor(row["target"], dtype=torch.float),
+                    "freq": row["start"].freqstr,
+                    "item_id": row["item_id"]
+                    }
+            
+                return row
         
-        if isinstance(row, tuple):
-            mod_row = []
-            for i in range(len(row)):
-                if isinstance(row[i]["start"], pd.Period):
-                    mod_row.append({"start": torch.tensor(row[i]["start"].to_timestamp().timestamp(), dtype=torch.float32),
-                                    "target": torch.tensor(row[i]["target"], dtype=torch.float32),
-                                    "freq": row[i]["start"].freqstr,
-                                    "item_id": row[i]["item_id"]
-                                    })
-                else:
-                    mod_row.append(row[i])
-            return tuple(mod_row)
-        
-        else:
-            if isinstance(row["start"], pd.Period):  # Replace with actual column name
-                return {"start": torch.tensor(row["start"].to_timestamp().timestamp(), dtype=torch.float32),  # Convert to float timestamp
-                "target": torch.tensor(row["target"], dtype=torch.float),
-                "freq": row["start"].freqstr,
-                "item_id": row["item_id"]
-                }
-        
+        elif isinstance(self.data, dict):
+            row = {k: v[idx] for k, v in self.data.items()}
+            if isinstance(row["start"], pd.Period):
+                row["start"] = torch.tensor([x.to_timestamp().timestamp() for x in iter(self.data["start"])], dtype=torch.float32)
+
             return row
         
 # class MoiraiDataset(BaseDataset):
