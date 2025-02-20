@@ -279,20 +279,27 @@ class MoiraiFinetune(L.LightningModule):
 
         # validate that we considered every parameter
         param_dict = {pn: p for pn, p in self.named_parameters() if p.requires_grad}
-        inter_params = decay & no_decay
-        union_params = decay | no_decay
-        assert (
-            len(inter_params) == 0
-        ), f"parameters {str(inter_params)} made it into both decay/no_decay sets!"
-        assert (
-            len(param_dict.keys() - union_params) == 0
-        ), f"parameters {str(param_dict.keys() - union_params)} were not separated into either decay/no_decay set!"
+        # inter_params = decay & no_decay
+        # union_params = decay | no_decay
+        # assert (
+        #     len(inter_params) == 0
+        # ), f"parameters {str(inter_params)} made it into both decay/no_decay sets!"
+        # assert (
+        #     len(param_dict.keys() - union_params) == 0
+        # ), f"parameters {str(param_dict.keys() - union_params)} were not separated into either decay/no_decay set!"
 
         optim_groups = [
+            # {
+            #     "params": filter(
+            #         lambda p: p.requires_grad,
+            #         [param_dict[pn] for pn in sorted(list(decay))],
+            #     ),
+            #     "weight_decay": self.hparams.weight_decay,
+            # },
             {
                 "params": filter(
                     lambda p: p.requires_grad,
-                    [param_dict[pn] for pn in sorted(list(decay))],
+                    [v for k,v in param_dict.items() if k not in (list(no_decay))],
                 ),
                 "weight_decay": self.hparams.weight_decay,
             },
