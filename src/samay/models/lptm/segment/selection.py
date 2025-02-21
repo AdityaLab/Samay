@@ -34,7 +34,10 @@ def select_highest_suffix(scores: npt.NDArray[np.float32]):
     # Make all values of the diagonal and below -inf
     mask = np.tri(scores.shape[1], dtype=bool)
     mask = einops.repeat(mask, "n m -> b n m", b=scores.shape[0])
-    scores_cp[mask] = -np.inf
+    if scores_cp.dtype == np.int64:
+        pass
+    else:
+        scores_cp[mask] = -np.inf
     first_idx = np.arange(scores.shape[1] - 1)
     first_idx = einops.repeat(
         first_idx, "n -> b n", b=scores.shape[0]

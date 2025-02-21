@@ -498,6 +498,17 @@ class LPTMModel(Basemodel):
                     with torch.amp.autocast(device_type="cuda"):
                         output = self.model(x_enc=timeseries, input_mask=input_mask)
                     loss = criterion(output.forecast, forecast)
+                elif task_name == "forecasting2":
+                    timeseries, input_mask, forecast = data
+                    # Move the data to the GPU
+                    timeseries = timeseries.float().to(self.device)
+                    input_mask = input_mask.to(self.device)
+                    forecast = forecast.float().to(self.device)
+                    with torch.amp.autocast(device_type="cuda"):
+                        output = self.model(x_enc=timeseries, input_mask=input_mask)
+                    loss = criterion(
+                        output.forecast[:, :, -forecast.shape[-1] :], forecast
+                    )
 
                 elif task_name == "imputation":
                     timeseries, input_mask = data
@@ -595,6 +606,39 @@ class LPTMModel(Basemodel):
                     losses.append(loss.item())
                     trues.append(forecast.detach().cpu().numpy())
                     preds.append(output.forecast.detach().cpu().numpy())
+                    histories.append(timeseries.detach().cpu().numpy())
+
+            losses = np.array(losses)
+            average_loss = np.average(losses)
+            trues = np.concatenate(trues, axis=0)
+            preds = np.concatenate(preds, axis=0)
+            histories = np.concatenate(histories, axis=0)
+
+            return average_loss, trues, preds, histories
+
+        elif task_name == "forecasting2":
+            trues, preds, histories, losses = [], [], [], []
+            with torch.no_grad():
+                for i, data in enumerate(dataloader):
+                    # unpack the data
+                    timeseries, input_mask, forecast = data
+                    # Move the data to the GPU
+                    timeseries = timeseries.float().to(self.device)
+                    input_mask = input_mask.to(self.device)
+                    forecast = forecast.float().to(self.device)
+
+                    output = self.model(x_enc=timeseries, input_mask=input_mask)
+                    loss = criterion(
+                        output.forecast[:, :, -forecast.shape[-1] :], forecast
+                    )
+                    losses.append(loss.item())
+                    trues.append(forecast.detach().cpu().numpy())
+                    preds.append(
+                        output.forecast[:, :, -forecast.shape[-1] :]
+                        .detach()
+                        .cpu()
+                        .numpy()
+                    )
                     histories.append(timeseries.detach().cpu().numpy())
 
             losses = np.array(losses)
@@ -841,8 +885,6 @@ class MomentModel(Basemodel):
             trues = np.concatenate(trues, axis=0)
             preds = np.concatenate(preds, axis=0)
             histories = np.concatenate(histories, axis=0)
-
-            return average_loss, trues, preds, histories
 
         elif task_name == "imputation":
             trues, preds, masks = [], [], []

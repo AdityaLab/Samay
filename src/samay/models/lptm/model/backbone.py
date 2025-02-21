@@ -46,6 +46,7 @@ class TimeseriesOutputs:
 @dataclass
 class TASKS:
     FORECASTING: str = "forecasting"
+    FORECASTING2: str = "forecasting2"
     CLASSIFICATION: str = "classification"
     EMBED: str = "embedding"
     RECONSTRUCTION: str = "reconstruction"
@@ -204,7 +205,7 @@ class LPTM(nn.Module):
         if task_name != TASKS.RECONSTRUCTION:
             # warnings.warn("Only reconstruction head is pre-trained. Classification and forecasting heads must be fine-tuned.")
             pass
-        if task_name == TASKS.RECONSTRUCTION:
+        if task_name == TASKS.RECONSTRUCTION or task_name == TASKS.FORECASTING2:
             return PretrainHead(
                 self.config.d_model,
                 self.config.patch_len,
@@ -365,6 +366,63 @@ class LPTM(nn.Module):
         return TimeseriesOutputs(
             input_mask=input_mask,
             reconstruction=dec_out,
+            pretrain_mask=mask,
+            illegal_output=illegal_output,
+        )
+
+    def forecast2(
+        self,
+        *,
+        x_enc: torch.Tensor,
+        input_mask: torch.Tensor = None,
+        mask: torch.Tensor = None,
+        **kwargs,
+    ) -> TimeseriesOutputs:
+        batch_size, n_channels, _ = x_enc.shape
+        if mask is None:
+            mask = self.mask_generator.generate_mask(x=x_enc, input_mask=input_mask)
+            mask = mask.to(x_enc.device)  # mask: [batch_size x seq_len]
+
+        x_enc = self.normalizer(x=x_enc, mask=mask * input_mask, mode="norm")
+        # Prevent too short time-series from causing NaNs
+        x_enc = torch.nan_to_num(x_enc, nan=0, posinf=0, neginf=0)
+
+        x_enc = self.tokenizer(x=x_enc)
+        enc_in, scores = self.patch_embedding(x_enc, mask=mask)
+
+        n_patches = enc_in.shape[2]
+        enc_in = enc_in.reshape(
+            (batch_size * n_channels, n_patches, self.config.d_model)
+        )
+
+        patch_view_mask = Masking.convert_seq_to_patch_view(
+            input_mask, scores, self.patch_len
+        )
+        attention_mask = patch_view_mask.repeat_interleave(n_channels, dim=0)
+        if self.config.transformer_type == "encoder_decoder":
+            outputs = self.encoder(
+                inputs_embeds=enc_in,
+                decoder_inputs_embeds=enc_in,
+                attention_mask=attention_mask,
+            )
+        else:
+            outputs = self.encoder(inputs_embeds=enc_in, attention_mask=attention_mask)
+        enc_out = outputs.last_hidden_state
+
+        enc_out = enc_out.reshape((-1, n_channels, n_patches, self.config.d_model))
+
+        dec_out = self.head(enc_out)  # [batch_size x n_channels x seq_len]
+        dec_out = self.normalizer(x=dec_out, mode="denorm")
+
+        if self.config.getattr("debug", False):
+            illegal_output = self._check_model_weights_for_illegal_values()
+        else:
+            illegal_output = None
+
+        return TimeseriesOutputs(
+            input_mask=input_mask,
+            reconstruction=dec_out,
+            forecast=dec_out,
             pretrain_mask=mask,
             illegal_output=illegal_output,
         )
@@ -591,6 +649,8 @@ class LPTM(nn.Module):
             return self.embed(x_enc=x_enc, input_mask=input_mask, **kwargs)
         elif self.task_name == TASKS.FORECASTING:
             return self.forecast(x_enc=x_enc, input_mask=input_mask, **kwargs)
+        elif self.task_name == TASKS.FORECASTING2:
+            return self.forecast2(x_enc=x_enc, input_mask=input_mask, **kwargs)
         elif self.task_name == TASKS.CLASSIFICATION:
             return self.classify(x_enc=x_enc, input_mask=input_mask, **kwargs)
         else:

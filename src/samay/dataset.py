@@ -725,12 +725,20 @@ class LPTMDataset(BaseDataset):
         if self.datetime_col:
             self.df.drop(columns=[self.datetime_col], inplace=True)
 
-        if self.task_name == "forecasting" or self.task_name == "imputation":
+        if (
+            self.task_name == "forecasting"
+            or self.task_name == "imputation"
+            or self.task_name == "forecasting2"
+        ):
             self.df = self.df.infer_objects(copy=False).interpolate(method="cubic")
         elif self.task_name == "detection":
             self.df.interpolate(inplace=True, method="cubic")
 
-        if self.task_name == "forecasting" or self.task_name == "imputation":
+        if (
+            self.task_name == "forecasting"
+            or self.task_name == "imputation"
+            or self.task_name == "forecasting2"
+        ):
             self.scaler.fit(self.df[slice(0, self.boundaries[0])].values)
             self.df = self.scaler.transform(self.df.values)
         elif self.task_name == "detection":
@@ -756,7 +764,11 @@ class LPTMDataset(BaseDataset):
                 self.data = self.data.T
 
         if self.mode == "train":
-            if self.task_name == "forecasting" or self.task_name == "imputation":
+            if (
+                self.task_name == "forecasting"
+                or self.task_name == "imputation"
+                or self.task_name == "forecasting2"
+            ):
                 self.data = self.df[slice(0, self.boundaries[0]), :]
             elif self.task_name == "detection":
                 self.data, self.labels = (
@@ -765,7 +777,11 @@ class LPTMDataset(BaseDataset):
                 )
 
         elif self.mode == "test":
-            if self.task_name == "forecasting" or self.task_name == "imputation":
+            if (
+                self.task_name == "forecasting"
+                or self.task_name == "imputation"
+                or self.task_name == "forecasting2"
+            ):
                 self.data = self.df[slice(self.boundaries[1], self.boundaries[2]), :]
             elif self.task_name == "detection":
                 self.data, self.labels = (
@@ -804,6 +820,11 @@ class LPTMDataset(BaseDataset):
             return input_seq, input_mask, forecast_seq
         elif self.task_name == "imputation":
             return input_seq, input_mask
+        elif self.task_name == "forecasting2":
+            input_seq = self.data[pred_end - self.seq_len : pred_end, :].T
+            input_mask[-self.forecast_horizon :] = 0
+            forecast_seq = self.data[seq_end:pred_end, :].T
+            return input_seq, input_mask, forecast_seq
         elif self.task_name == "detection":
             labels = (
                 self.labels[seq_start:seq_end]

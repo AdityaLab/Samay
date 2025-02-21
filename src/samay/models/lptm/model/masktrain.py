@@ -31,7 +31,8 @@ class Masking:
         """
         stride = patch_len if stride is None else stride
         # sm.forward(mask)
-        select_segments(scores, patch_len, mask=mask)
+        if hasattr(scores, "shape"):
+            select_segments(scores, patch_len, mask=mask)
         mask = mask.unfold(dimension=-1, size=patch_len, step=stride)
         # mask : [batch_size x n_patches x patch_len]
         return (mask.sum(dim=-1) == patch_len).long()
