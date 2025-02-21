@@ -453,9 +453,11 @@ class ChronosModel(Basemodel):
 class LPTMModel(Basemodel):
     def __init__(self, config=None):
         super().__init__(config=config, repo=None)
+        config["patch_len"] = config["max_patch"]
         self.model = LPTMPipeline.from_pretrained(
-            "AutonLab/MOMENT-1-large", model_kwargs=self.config
+            "kage08/lptm-large2", model_kwargs=self.config
         )
+
         self.model.init()
 
     def finetune(self, dataset, task_name="forecasting", **kwargs):

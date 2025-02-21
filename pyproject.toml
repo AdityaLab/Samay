@@ -23,6 +23,7 @@ dependencies = [
     "datasets>=3.2.0",
     "chronos-forecasting>=1.4.1",
     "tensorboardx>=2.6.2.2",
+    "einops>=0.8.1",
 ]
 
 [build-system]

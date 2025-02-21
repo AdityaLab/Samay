@@ -12,6 +12,8 @@ from huggingface_hub import PyTorchModelHubMixin
 from torch import nn
 from transformers import T5Config, T5EncoderModel, T5Model
 
+from samay.models.lptm.segment.scoring import ScoringModuleMult
+
 from ..utils import (
     NamespaceWithDefaults,
 )
@@ -130,6 +132,7 @@ class LPTM(nn.Module):
         self.tokenizer = Patching(
             patch_len=config.patch_len, stride=config.patch_stride_len
         )
+        self.scoring_module = ScoringModuleMult(512, 64)
         self.patch_embedding = PatchEmbedding(
             d_model=config.d_model,
             seq_len=config.seq_len,
@@ -139,15 +142,19 @@ class LPTM(nn.Module):
             add_positional_embedding=config.getattr("add_positional_embedding", True),
             value_embedding_bias=config.getattr("value_embedding_bias", False),
             orth_gain=config.getattr("orth_gain", 1.41),
+            scoring_module=self.scoring_module,
         )
         self.mask_generator = Masking(mask_ratio=config.getattr("mask_ratio", 0.0))
         self.encoder = self._get_transformer_backbone(config)
         self.head = self._get_head(self.task_name)
 
+        self.patch_embedding.scoring_module = self.scoring_module
+
         # Frozen parameters
         self.freeze_embedder = config.getattr("freeze_embedder", True)
         self.freeze_encoder = config.getattr("freeze_encoder", True)
         self.freeze_head = config.getattr("freeze_head", False)
+        self.freeze_segment = config.getattr("freeze_segment", False)
 
         if self.freeze_embedder:
             self.patch_embedding = freeze_parameters(self.patch_embedding)
@@ -155,6 +162,8 @@ class LPTM(nn.Module):
             self.encoder = freeze_parameters(self.encoder)
         if self.freeze_head:
             self.head = freeze_parameters(self.head)
+        if self.freeze_segment:
+            self.scoring_module = freeze_parameters(self.scoring_module)
 
     def _update_inputs(
         self, config: Namespace | dict, **kwargs: dict
@@ -266,18 +275,20 @@ class LPTM(nn.Module):
         x_enc = torch.nan_to_num(x_enc, nan=0, posinf=0, neginf=0)
 
         input_mask_patch_view = Masking.convert_seq_to_patch_view(
-            input_mask, self.patch_len
+            input_mask, input_mask, self.patch_len
         )
 
         x_enc = self.tokenizer(x=x_enc)
-        enc_in = self.patch_embedding(x_enc, mask=input_mask)
+        enc_in, scores = self.patch_embedding(x_enc, mask=input_mask)
 
         n_patches = enc_in.shape[2]
         enc_in = enc_in.reshape(
             (batch_size * n_channels, n_patches, self.config.d_model)
         )
 
-        patch_view_mask = Masking.convert_seq_to_patch_view(input_mask, self.patch_len)
+        patch_view_mask = Masking.convert_seq_to_patch_view(
+            input_mask, scores, self.patch_len
+        )
         attention_mask = patch_view_mask.repeat_interleave(n_channels, dim=0)
         outputs = self.encoder(inputs_embeds=enc_in, attention_mask=attention_mask)
         enc_out = outputs.last_hidden_state
@@ -320,14 +331,16 @@ class LPTM(nn.Module):
         x_enc = torch.nan_to_num(x_enc, nan=0, posinf=0, neginf=0)
 
         x_enc = self.tokenizer(x=x_enc)
-        enc_in = self.patch_embedding(x_enc, mask=mask)
+        enc_in, scores = self.patch_embedding(x_enc, mask=mask)
 
         n_patches = enc_in.shape[2]
         enc_in = enc_in.reshape(
             (batch_size * n_channels, n_patches, self.config.d_model)
         )
 
-        patch_view_mask = Masking.convert_seq_to_patch_view(input_mask, self.patch_len)
+        patch_view_mask = Masking.convert_seq_to_patch_view(
+            input_mask, scores, self.patch_len
+        )
         attention_mask = patch_view_mask.repeat_interleave(n_channels, dim=0)
         if self.config.transformer_type == "encoder_decoder":
             outputs = self.encoder(
@@ -371,7 +384,7 @@ class LPTM(nn.Module):
         x_enc = self.normalizer(x=x_enc, mask=mask * input_mask, mode="norm")
 
         x_enc = self.tokenizer(x=x_enc)
-        enc_in = self.patch_embedding(x_enc, mask=mask)
+        enc_in, scores = self.patch_embedding(x_enc, mask=mask)
 
         n_patches = enc_in.shape[2]
         enc_in = enc_in.reshape(
@@ -379,7 +392,9 @@ class LPTM(nn.Module):
         )
         # [batch_size * n_channels x n_patches x d_model]
 
-        patch_view_mask = Masking.convert_seq_to_patch_view(input_mask, self.patch_len)
+        patch_view_mask = Masking.convert_seq_to_patch_view(
+            input_mask, scores, self.patch_len
+        )
         attention_mask = patch_view_mask.repeat_interleave(n_channels, dim=0).to(
             x_enc.device
         )
@@ -415,26 +430,6 @@ class LPTM(nn.Module):
 
         return TimeseriesOutputs(input_mask=input_mask, reconstruction=dec_out)
 
-    def detect_anomalies(
-        self,
-        *,
-        x_enc: torch.Tensor,
-        input_mask: torch.Tensor = None,
-        anomaly_criterion: str = "mse",
-        **kwargs,
-    ) -> TimeseriesOutputs:
-        outputs = self.reconstruct(x_enc=x_enc, input_mask=input_mask)
-        self.anomaly_criterion = get_anomaly_criterion(anomaly_criterion)
-
-        anomaly_scores = self.anomaly_criterion(x_enc, outputs.reconstruction)
-
-        return TimeseriesOutputs(
-            input_mask=input_mask,
-            reconstruction=outputs.reconstruction,
-            anomaly_scores=anomaly_scores,
-            metadata={"anomaly_criterion": anomaly_criterion},
-        )
-
     def forecast(
         self, *, x_enc: torch.Tensor, input_mask: torch.Tensor = None, **kwargs
     ) -> TimeseriesOutputs:
@@ -444,14 +439,16 @@ class LPTM(nn.Module):
         x_enc = torch.nan_to_num(x_enc, nan=0, posinf=0, neginf=0)
 
         x_enc = self.tokenizer(x=x_enc)
-        enc_in = self.patch_embedding(x_enc, mask=torch.ones_like(input_mask))
+        enc_in, scores = self.patch_embedding(x_enc, mask=torch.ones_like(input_mask))
 
         n_patches = enc_in.shape[2]
         enc_in = enc_in.reshape(
             (batch_size * n_channels, n_patches, self.config.d_model)
         )
 
-        patch_view_mask = Masking.convert_seq_to_patch_view(input_mask, self.patch_len)
+        patch_view_mask = Masking.convert_seq_to_patch_view(
+            input_mask, scores, self.patch_len
+        )
         attention_mask = patch_view_mask.repeat_interleave(n_channels, dim=0)
         outputs = self.encoder(inputs_embeds=enc_in, attention_mask=attention_mask)
         enc_out = outputs.last_hidden_state
@@ -488,7 +485,7 @@ class LPTM(nn.Module):
         mask[:, -num_masked_timesteps:] = 0
 
         x_enc = self.tokenizer(x=x_enc)
-        enc_in = self.patch_embedding(x_enc, mask=mask)
+        enc_in, scores = self.patch_embedding(x_enc, mask=mask)
 
         n_patches = enc_in.shape[2]
         enc_in = enc_in.reshape(
@@ -496,7 +493,9 @@ class LPTM(nn.Module):
         )
         # [batch_size * n_channels x n_patches x d_model]
 
-        patch_view_mask = Masking.convert_seq_to_patch_view(input_mask, self.patch_len)
+        patch_view_mask = Masking.convert_seq_to_patch_view(
+            input_mask, scores, self.patch_len
+        )
         attention_mask = patch_view_mask.repeat_interleave(n_channels, dim=0)
         outputs = self.encoder(inputs_embeds=enc_in, attention_mask=attention_mask)
         enc_out = outputs.last_hidden_state
@@ -534,18 +533,20 @@ class LPTM(nn.Module):
         x_enc = torch.nan_to_num(x_enc, nan=0, posinf=0, neginf=0)
 
         input_mask_patch_view = Masking.convert_seq_to_patch_view(
-            input_mask, self.patch_len
+            input_mask, input_mask, self.patch_len
         )
 
         x_enc = self.tokenizer(x=x_enc)
-        enc_in = self.patch_embedding(x_enc, mask=input_mask)
+        enc_in, scores = self.patch_embedding(x_enc, mask=input_mask)
 
         n_patches = enc_in.shape[2]
         enc_in = enc_in.reshape(
             (batch_size * n_channels, n_patches, self.config.d_model)
         )
 
-        patch_view_mask = Masking.convert_seq_to_patch_view(input_mask, self.patch_len)
+        patch_view_mask = Masking.convert_seq_to_patch_view(
+            input_mask, scores, self.patch_len
+        )
         attention_mask = patch_view_mask.repeat_interleave(n_channels, dim=0)
         outputs = self.encoder(inputs_embeds=enc_in, attention_mask=attention_mask)
         enc_out = outputs.last_hidden_state

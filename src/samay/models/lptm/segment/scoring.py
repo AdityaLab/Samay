@@ -30,10 +30,10 @@ class ScoringModuleBase(nn.Module, ABC):
         scores = self.compute_scores(W1, W2)  # (batch_size, seq_len, seq_len)
 
         # Mask out the scores
-        if mask is not None:
-            mask = mask.unsqueeze(1)
-            mask = mask.expand(batch_size, seq_len, seq_len)
-            scores = scores.masked_fill(mask, float("-inf"))
+        # if mask is not None:
+        #    mask = mask.unsqueeze(1)
+        #    mask = mask.expand(batch_size, seq_len, seq_len)
+        #    scores = scores.masked_fill(mask, float("-inf"))
 
         return scores
 

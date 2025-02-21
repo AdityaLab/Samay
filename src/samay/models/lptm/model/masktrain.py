@@ -2,6 +2,8 @@ from typing import Optional
 
 import torch
 
+from samay.models.lptm.segment.selection import select_segments
+
 
 class Masking:
     def __init__(
@@ -16,7 +18,10 @@ class Masking:
 
     @staticmethod
     def convert_seq_to_patch_view(
-        mask: torch.Tensor, patch_len: int = 8, stride: Optional[int] = None
+        mask: torch.Tensor,
+        scores: torch.Tensor,
+        patch_len: int = 8,
+        stride: Optional[int] = None,
     ):
         """
         Input:
@@ -25,6 +30,8 @@ class Masking:
             mask : torch.Tensor of shape [batch_size x n_patches]
         """
         stride = patch_len if stride is None else stride
+        # sm.forward(mask)
+        select_segments(scores, patch_len, mask=mask)
         mask = mask.unfold(dimension=-1, size=patch_len, step=stride)
         # mask : [batch_size x n_patches x patch_len]
         return (mask.sum(dim=-1) == patch_len).long()
