@@ -453,7 +453,7 @@ class ChronosModel(Basemodel):
 class LPTMModel(Basemodel):
     def __init__(self, config=None):
         super().__init__(config=config, repo=None)
-        config["patch_len"] = config["max_patch"]
+        # config["patch_len"] = config["max_patch"]
         self.model = LPTMPipeline.from_pretrained(
             "kage08/lptm-large2", model_kwargs=self.config
         )
