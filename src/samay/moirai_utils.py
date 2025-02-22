@@ -3,6 +3,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 from uni2ts.distribution import MixtureOutput
+from typing import List, Dict, Any, Union
 
 # for finetune class
 import lightning as L
@@ -111,7 +112,7 @@ class MoiraiTorch(Dataset):
             idx (int): Index indicating the sample to be returned.
 
         Returns:
-            _type_: _description_
+            Union[dict, tuple(dict)]: The sample at the index idx cleaned in proper format.
         """
         if isinstance(self.data, list):
             row = self.data[idx]
@@ -149,7 +150,3 @@ class MoiraiTorch(Dataset):
                 row["start"] = torch.tensor([x.to_timestamp().timestamp() for x in iter(self.data["start"])], dtype=torch.float32)
 
             return row
-
-# ------------------- CUSTOM FINETUNE CLASS -------------------
-class MoiraiFinetune_custom():
-    pass
