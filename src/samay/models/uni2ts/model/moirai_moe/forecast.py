@@ -252,13 +252,16 @@ class MoiraiMoEForecast(L.LightningModule):
         ] = None,
         num_samples: Optional[int] = None,
     ) -> Float[torch.Tensor, "batch sample future_time *tgt"]:
+        
+        # batch is the batch size
+        # past_time is the number of time steps in the past - context length
+        # tgt is the target dimension - self.hparams.target_dim
         context_step = self.context_token_length(self.hparams.patch_size)
-        context_token = self.hparams.target_dim * context_step
+        context_token = self.hparams.target_dim * context_step # number of context tokens needed
         predict_step = self.prediction_token_length(self.hparams.patch_size)
-        predict_token = self.hparams.target_dim * predict_step
+        predict_token = self.hparams.target_dim * predict_step # number of prediction tokens needed
 
-        (
-            target,
+        (   target,
             observed_mask,
             sample_id,
             time_id,
@@ -286,7 +289,7 @@ class MoiraiMoEForecast(L.LightningModule):
             end=context_token + predict_token,
             step=predict_step,
         )
-
+        
         if predict_step == 1:
             distr = self.module(
                 target,
