@@ -26,7 +26,15 @@ from gluonts.transform import (
     TestSplitSampler,
     Transformation,
 )
-import itertools
+
+from samay.moirai_utils import (
+    AsNumpy,
+    AddObservedValues,
+    ArrExpandDims,
+    CausalMeanNaNFix
+)
+from torchvision import transforms
+
 # for full length history/ context data wrapping
 # class TimeSeriesDataset(Dataset):
 #     """
@@ -832,54 +840,65 @@ class MoiraiDataset(BaseDataset):
         self.dataset = MoiraiTorch(data)
         self.data = data
     
-    def default_transforms(self) -> Transformation:
+    def default_transforms(self) -> transforms.Compose:
         """Default transformations for the dataset
         """
-        transform = AsNumpyArray(
+        transforms_list = []
+
+        # Convert the target data to numpy array
+        transforms_list.append(AsNumpy(
             field="target",
             expected_ndim=1 if self.target_dim == 1 else 2,
             dtype=np.float32,
-        )
+        ))
+
         if self.target_dim == 1:
-            transform += AddObservedValuesIndicator(
+            # Fix missing values
+            transforms_list.append(AddObservedValues(
                 target_field="target",
                 output_field="observed_target",
-                imputation_method=CausalMeanValueImputation(),
+                imputation_method=CausalMeanNaNFix(),
                 dtype=bool,
-            )
-            transform += ExpandDimArray(field="target", axis=0)
-            transform += ExpandDimArray(field="observed_target", axis=0)
+            ))
+
+            # Add dimension to target
+            transforms_list.append(ArrExpandDims(field="target", axis=0))
+            transforms_list.append(ArrExpandDims(field="observed_target", axis=0))
         else:
-            transform += AddObservedValuesIndicator(
+            transforms_list.append(AddObservedValues(
                 target_field="target",
                 output_field="observed_target",
                 dtype=bool,
-            )
+            ))
 
         if self.feat_dynamic_real_dim > 0:
-            transform += AsNumpyArray(
+            transforms_list.append(AsNumpy(
                 field="feat_dynamic_real",
                 expected_ndim=2,
                 dtype=np.float32,
-            )
-            transform += AddObservedValuesIndicator(
+            ))
+            transforms_list.append(AddObservedValues(
                 target_field="feat_dynamic_real",
                 output_field="observed_feat_dynamic_real",
                 dtype=bool,
-            )
+            ))
 
         if self.past_feat_dynamic_real_dim > 0:
-            transform += AsNumpyArray(
+            transforms_list.append(AsNumpyArray(
                 field="past_feat_dynamic_real",
                 expected_ndim=2,
                 dtype=np.float32,
-            )
-            transform += AddObservedValuesIndicator(
+            ))
+            transforms_list.append(AddObservedValuesIndicator(
                 target_field="past_feat_dynamic_real",
                 output_field="past_observed_feat_dynamic_real",
                 dtype=bool,
-            )
-        return transform
+            ))
+        
+        # Convert list of tranforms to a single transformation
+        comp_transform = transforms.Compose(transforms_list)
+        
+        return comp_transform
     
     def prep_train_data(self):
         """Convert the input `data` to have the following fields:
@@ -892,15 +911,15 @@ class MoiraiDataset(BaseDataset):
         | time_id            | Time index                           | torch.tensor[int]     | (batch_size, seq_len)            |
         +--------------------+--------------------------------------+-----------------------+----------------------------------+
         """
-        transforms = self.default_transforms().transformations
-        for t in transforms:
-            print(t)
 
         # Steps
         # (a) Apply the transforms on the data
+        comp_transforms = self.default_transforms()
+        for t in comp_transforms.transforms:
+            self.data = [t(x) for x in self.data]
         # (b) Call the _convert() fn of MoiraiTSModel to add the requiste fields
         # (c) Convert the data to a MoiraiTorch object
-        # (d) Return the MoiraiTorch object
+        self.batched_data = MoiraiTorch(self.data)
 
         # data_iter = iter(self.dataset)
         
