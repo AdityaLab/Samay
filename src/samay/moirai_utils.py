@@ -7,7 +7,6 @@ from typing import Callable, List, Dict, Any, Union, Type, Optional
 
 # For custom transforms
 import numpy as np
-
 # for finetune class
 import lightning as L
 from torch.distributions import Distribution
@@ -138,12 +137,7 @@ class MoiraiTorch(Dataset):
             # Train or val data
             else:
                 if isinstance(row["start"], pd.Period):  # Replace with actual column name
-                    return {"start": torch.tensor(row["start"].to_timestamp().timestamp(), dtype=torch.float32),  # Convert to float timestamp
-                    "target": torch.tensor(row["target"], dtype=torch.float),
-                    "freq": row["start"].freqstr,
-                    "item_id": row["item_id"]
-                    }
-            
+                    row["start"] = torch.tensor(row["start"].to_timestamp().timestamp(), dtype=torch.float32),  # Convert to float timestamp
                 return row
         
         # In case of dictionary data
