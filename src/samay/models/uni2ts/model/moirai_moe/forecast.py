@@ -133,6 +133,9 @@ class MoiraiMoEForecast(L.LightningModule):
         if self.hparams.past_feat_dynamic_real_dim > 0:
             past_ts_fields.append("past_feat_dynamic_real")
             past_ts_fields.append("past_observed_feat_dynamic_real")
+        
+        # This splitter converts multivariate to univariate by padding sequences
+        # Adds the past_ and future_ prefix to the fields
         instance_splitter = TFTInstanceSplitter(
             instance_sampler=TestSplitSampler(),
             past_length=self.past_length,
