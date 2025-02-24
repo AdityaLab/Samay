@@ -711,6 +711,7 @@ class MoiraiDataset(BaseDataset):
         self._preprocess(start_date=start_date, end_date=end_date,
                         freq=freq, operation=operation)
         self.start_date = self.dataset.index[0]
+        self.train_transforms = self.default_transforms()
         
         # Split the dataset into train, val, test
         if self.mode == "train": # no windowing
@@ -900,6 +901,48 @@ class MoiraiDataset(BaseDataset):
         
         return comp_transform
     
+    @property
+    def past_length(self) -> int:
+        return self.context_len + self.horizon_len if self.patch_size == "auto" else self.context_len
+    
+    def add_past_fields(self):
+        """Add the following fields:
+        (a) past_target: The past target data
+        (b) past_observed_target: The past target data with missing values indicator
+        (c) past_is_pad: Indicates if the added value was a padding value
+        (d) past_feat_dynamic_real: The past dynamic real features
+        (e) past_observed_feat_dynamic_real: The past dynamic real features with missing values indicator
+        """
+
+        # Refer TFTInstanceSplitter call in forecast.py  
+        pass
+
+    def convert_for_moirai_format(self):
+        """Given dataset having the following fields:
+        (a) past_target: The past target data
+        (b) past_observed_target: The past target data with missing values indicator
+        (c) past_is_pad: Indicates if the added value was a padding value
+        (d) past_feat_dynamic_real: The past dynamic real features
+        (e) past_observed_feat_dynamic_real: The past dynamic real features with missing values indicator
+        (f) future_target: The future target data
+        (g) future_observed_target: The future target data with missing values indicator
+        (h) future_is_pad: Indicates if the added value was a padding value
+        (i) future_feat_dynamic_real: The future dynamic real features
+        (j) future_observed_feat_dynamic_real: The future dynamic real features with missing values indicator
+        (k) time: The time index
+        
+        Convert the data to have the following fields:
+        (a) target: Batched time series data
+        (b) observed_mask: Binary mask for the context part
+        (c) prediction_mask: Binary mask for the prediction part
+        (d) time_id: Time index
+        (e) variate_id: Variate index
+        """
+
+        # Refer _convert function in forecast.py
+        pass
+
+
     def prep_train_data(self):
         """Convert the input `data` to have the following fields:
         +--------------------+--------------------------------------+-----------------------+----------------------------------+
@@ -914,11 +957,13 @@ class MoiraiDataset(BaseDataset):
 
         # Steps
         # (a) Apply the transforms on the data
-        comp_transforms = self.default_transforms()
-        for t in comp_transforms.transforms:
+        while self.train_transforms.transforms:
+            t = self.train_transforms.transforms.pop(0)
             self.data = [t(x) for x in self.data]
-        # (b) Call the _convert() fn of MoiraiTSModel to add the requiste fields
-        # (c) Convert the data to a MoiraiTorch object
+        # (b) Linearize the data and add the required fields
+        self.add_past_fields()
+        # (c) Call _convert function to add fields like observed mask, etc.
+        # (d) Convert the data to a MoiraiTorch object
         self.batched_data = MoiraiTorch(self.data)
 
         # data_iter = iter(self.dataset)

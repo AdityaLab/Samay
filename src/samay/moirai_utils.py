@@ -123,30 +123,33 @@ class MoiraiTorch(Dataset):
             if isinstance(row, tuple):
                 mod_row = []
                 for i in range(len(row)):
-                    # convert period to timestamp
-                    if isinstance(row[i]["start"], pd.Period):
-                        mod_row.append({"start": torch.tensor(row[i]["start"].to_timestamp().timestamp(), dtype=torch.float32),
-                                        "target": torch.tensor(row[i]["target"], dtype=torch.float32),
-                                        "freq": row[i]["start"].freqstr,
-                                        "item_id": row[i]["item_id"]
-                                        })
-                    else:
-                        mod_row.append(row[i])
+                    mod_row.append({})
+                    for k,v in row[i].items():
+                        if k == "start":
+                            mod_row[i]["forecast_start"] = v if isinstance(v, torch.Tensor) else torch.tensor(v.to_timestamp().timestamp(), dtype=torch.float32)
+                        else:
+                            mod_row[i][k] = v
                 return tuple(mod_row)
             
             # Train or val data
             else:
-                if isinstance(row["start"], pd.Period):  # Replace with actual column name
-                    row["start"] = torch.tensor(row["start"].to_timestamp().timestamp(), dtype=torch.float32),  # Convert to float timestamp
-                return row
+                mod_row = {}
+                for k,v in row.items():
+                    if k == "start":
+                        mod_row["forecast_start"] = v if isinstance(v, torch.Tensor) else torch.tensor(v.to_timestamp().timestamp(), dtype=torch.float32)
+                    else:
+                        mod_row[k] = v
+                return mod_row
         
         # In case of dictionary data
         elif isinstance(self.data, dict):
-            row = {k: v[idx] for k, v in self.data.items()}
-            if isinstance(row["start"], pd.Period):
-                row["start"] = torch.tensor([x.to_timestamp().timestamp() for x in iter(self.data["start"])], dtype=torch.float32)
-
-            return row
+            row, mod_row = {k: v[idx] for k, v in self.data.items()}, {}
+            for k,v in row.items():
+                if k == "start":
+                    mod_row["forecast_start"] = v if isinstance(v, torch.Tensor) else torch.tensor(v.to_timestamp().timestamp(), dtype=torch.float32)
+                else:
+                    mod_row[k] = v
+            return mod_row
 
 # ------------------- CUSTOM TRANSFORMS -------------------
 class CausalMeanNaNFix:
@@ -231,10 +234,12 @@ class AsNumpy:
 
         # Validate number of dimensions
         if value.ndim != self.expected_ndim:
-            raise ValueError(
-                f'Input for field "{self.field}" does not have the required dimension '
-                f"(field: {self.field}, ndim observed: {value.ndim}, expected ndim: {self.expected_ndim})"
-            )
+            # raise ValueError(
+            #     f'Input for field "{self.field}" does not have the required dimension '
+            #     f"(field: {self.field}, ndim observed: {value.ndim}, expected ndim: {self.expected_ndim})"
+            # )
+            if self.expected_ndim == 1:
+                value = value[..., None]
 
         data[self.field] = value
         return data
