@@ -782,12 +782,19 @@ class MoiraiTSModel(Basemodel):
         inputs["time_id"] = time_id
         inputs["variate_id"] = variate_id
         inputs["prediction_mask"] = prediction_mask
+        inputs["patch_size"] = torch.tensor(np.full(shape=sample_id.shape, fill_value=self.patch_size, dtype=np.int64), dtype=torch.int64)
 
         return inputs
-        
-    
-    def finetune(self, dataset, **kwargs):
 
+    def finetune(self, dataset, **kwargs):
+        """Finetune the model on the given dataset.
+
+        Args:
+            dataset (MoiraiDataset): Dataset containing the input data and relevant functions like dataloaders etc.
+
+        Returns:
+            _type_: _description_
+        """
         # Parameters
         model_config = "../src/samay/models/uni2ts/cli/conf/finetune/model/moirai_small.yaml"
         with open(model_config, "r") as file:
@@ -806,6 +813,7 @@ class MoiraiTSModel(Basemodel):
             num_batches_per_epoch = num_batches//epochs
         training_steps = num_batches_per_epoch * kwargs["max_epochs"]
         module_args = convert_module_kwargs(fin_model_config["module_kwargs"])
+        self.patch_size = self.model.module.in_proj.in_features_ls[0]
 
         # Trainer configuration (from uni2ts/cli/train.py)
         # mod_torch is the trainer configuration without _target_ fields or any key 
@@ -909,7 +917,6 @@ class MoiraiTSModel(Basemodel):
             num_warmup_steps=FinetunedModel.hparams.num_warmup_steps,
             num_training_steps=FinetunedModel.hparams.num_training_steps,
         )
-        print(f"In model.py line 912: {self.patch_size}")
 
         avg_loss = 0
         for epoch in range(epochs):
@@ -927,7 +934,7 @@ class MoiraiTSModel(Basemodel):
                                                 time_id=inputs["time_id"],
                                                 variate_id=inputs["variate_id"],
                                                 prediction_mask=inputs["prediction_mask"],
-                                                patch_size=self.patch_size)
+                                                patch_size=inputs["patch_size"])
                 loss = FinetunedModel.compute_loss(outputs, inputs)
                 loss.backward()
                 optimizer.step()
