@@ -134,8 +134,8 @@ class MoiraiMoEForecast(L.LightningModule):
             past_ts_fields.append("past_feat_dynamic_real")
             past_ts_fields.append("past_observed_feat_dynamic_real")
         
-        # This splitter converts multivariate to univariate by padding sequences
-        # Adds the past_ and future_ prefix to the fields
+        # This splitter separates the series into past and future
+        # Past series consists of the context alone
         instance_splitter = TFTInstanceSplitter(
             instance_sampler=TestSplitSampler(),
             past_length=self.past_length,
@@ -855,6 +855,10 @@ class MoiraiMoEForecast(L.LightningModule):
         return preds.squeeze(-1)
 
     def get_default_transform(self) -> Transformation:
+        # AsNumpyArray casts the input to a numpy array with the specified dtype
+        # AddObservedValuesIndicator adds a boolean mask for observed values (True for observed, False for missing)
+        # CausalMeanValueImputation imputes missing values with the mean of the observed values
+        # ExpandDimArray adds a new dimension to the input array
         transform = AsNumpyArray(
             field="target",
             expected_ndim=1 if self.hparams.target_dim == 1 else 2,
