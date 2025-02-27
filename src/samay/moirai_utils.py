@@ -80,6 +80,26 @@ def convert_module_kwargs(module_kwargs):
     
     return module_args
 
+def custom_train_instance_split(ts:np.ndarray,allow_empty_interval:bool=False, axis: int=-1, min_past: int=0, min_future: int=0):
+    """Get the interval to consider for a given mode based on the prediction length (>= min_future) and the start of past values.
+    Always selects the last time point for splitting i.e. the forecast point for the time series.
+    (Based on PredictionSampler() from Gluonts)
+
+    Args:
+        ts (np.ndarray): Time series data.
+        allow_empty_interval (bool, optional): If True, the sampled part containes empty intervals. Defaults to False.
+        axis (int, optional): The dimension in which we want to sample. Defaults to -1.
+        min_past (int, optional): Start of past values. Defaults to 0.
+        min_future (int, optional): Min number of future. Defaults to 0.
+
+    Returns:
+        np.array: sampled indices
+    """
+    s, f = min_past, ts.shape[axis] - min_future
+    assert allow_empty_interval or s <= f
+    return np.array([f]) if s <= f else np.array([], dtype=int) 
+
+
 # ------------------- CUSTOM TORCH DATASET -------------------
 class MoiraiTorch(Dataset):
     def __init__(self,data:list[dict]):
@@ -126,6 +146,8 @@ class MoiraiTorch(Dataset):
                     mod_row.append({})
                     for k,v in row[i].items():
                         if k == "start":
+                            mod_row[i]["start"] = v if isinstance(v, torch.Tensor) else torch.tensor(v.to_timestamp().timestamp(), dtype=torch.float32)
+                        elif k == "forecast_start":
                             mod_row[i]["forecast_start"] = v if isinstance(v, torch.Tensor) else torch.tensor(v.to_timestamp().timestamp(), dtype=torch.float32)
                         else:
                             mod_row[i][k] = v
@@ -136,6 +158,8 @@ class MoiraiTorch(Dataset):
                 mod_row = {}
                 for k,v in row.items():
                     if k == "start":
+                        mod_row["start"] = v if isinstance(v, torch.Tensor) else torch.tensor(v.to_timestamp().timestamp(), dtype=torch.float32)
+                    elif k == "forecast_start":
                         mod_row["forecast_start"] = v if isinstance(v, torch.Tensor) else torch.tensor(v.to_timestamp().timestamp(), dtype=torch.float32)
                     else:
                         mod_row[k] = v
@@ -146,6 +170,8 @@ class MoiraiTorch(Dataset):
             row, mod_row = {k: v[idx] for k, v in self.data.items()}, {}
             for k,v in row.items():
                 if k == "start":
+                    mod_row["start"] = v if isinstance(v, torch.Tensor) else torch.tensor(v.to_timestamp().timestamp(), dtype=torch.float32)
+                elif k == "forecast_start":
                     mod_row["forecast_start"] = v if isinstance(v, torch.Tensor) else torch.tensor(v.to_timestamp().timestamp(), dtype=torch.float32)
                 else:
                     mod_row[k] = v

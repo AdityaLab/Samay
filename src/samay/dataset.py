@@ -12,7 +12,13 @@ from torch.utils.data import DataLoader, Dataset
 
 from .models.timesfm.timesfm.data_loader import TimeSeriesdata
 from .utils import get_multivariate_data
-from .moirai_utils import MoiraiTorch
+from .moirai_utils import (MoiraiTorch,
+    AsNumpy,
+    AddObservedValues,
+    ArrExpandDims,
+    CausalMeanNaNFix,
+    custom_train_instance_split
+)
 from pandas._libs.tslibs.period import Period
 
 from gluonts.dataset.pandas import PandasDataset
@@ -27,12 +33,6 @@ from gluonts.transform import (
     Transformation,
 )
 
-from samay.moirai_utils import (
-    AsNumpy,
-    AddObservedValues,
-    ArrExpandDims,
-    CausalMeanNaNFix
-)
 from torchvision import transforms
 
 # for full length history/ context data wrapping
@@ -721,6 +721,7 @@ class MoiraiDataset(BaseDataset):
             self.dataset = self.dataset[self.boundaries[0]:self.boundaries[1]]
             self.gen_train_val_data()
         elif self.mode == "test":
+            # whole dataset sent
             self.gen_test_data()
         else:
             raise ValueError(f"Unsupported mode: {self.mode}")
@@ -905,7 +906,12 @@ class MoiraiDataset(BaseDataset):
     def past_length(self) -> int:
         return self.context_len + self.horizon_len if self.patch_size == "auto" else self.context_len
     
-    def add_past_fields(self):
+    def add_past_fields(self, data: dict, ts_fields:list=[],
+                        past_ts_fields:list=[],dummy_val:float=0.0,
+                        lead_time: int = 0, target_field: str = "target",
+                        is_pad_field: str = "is_pad", observed_value_field: str = "observed_target",
+                        start_field: str = "start", forecast_start_field: str = "forecast_start",
+                        output_NTC: bool = True):
         """Add the following fields:
         (a) past_target: The past target data
         (b) past_observed_target: The past target data with missing values indicator
@@ -913,9 +919,80 @@ class MoiraiDataset(BaseDataset):
         (d) past_feat_dynamic_real: The past dynamic real features
         (e) past_observed_feat_dynamic_real: The past dynamic real features with missing values indicator
         """
+        pred_len = self.horizon_len
+        target = data[target_field]
+        observed_field = data[observed_value_field]
+        num_windows = 1 + ((target.shape[-1] - self.past_length) // pred_len)
 
-        # Refer TFTInstanceSplitter call in forecast.py  
-        pass
+        # Sample indices from the target field using the instance sampler
+        # sampled_indices = custom_train_instance_split(target) - to be modified later
+        sampled_indices = [self.past_length + i*pred_len for i in range(num_windows+1)]
+
+        # Columns to be sliced
+        slice_cols = ts_fields + past_ts_fields + [target_field, observed_value_field]
+
+
+        transformed_data = []
+        # Iterate over the sampled indices
+        for i in range(len(sampled_indices)):
+            idx = sampled_indices[i]
+            # Calculate the padding length if the index is less than past_length
+            d = data.copy()
+            pad_length = max(0, self.past_length - d[target_field][...,(idx - self.past_length) : idx].shape[-1])
+
+            # Iterate over the fields to be sliced
+            for field in slice_cols:
+                # Slice the past piece of the field
+                if pad_length == 0:
+                    past_piece = d[field][..., (idx - self.past_length) : idx]
+                else:
+                    pad_block = np.full(
+                        shape=d[field].shape[:-1] + (pad_length,),
+                        fill_value=dummy_val,
+                        dtype=d[field].dtype,
+                    )
+                    past_piece = np.concatenate(
+                        [pad_block, d[field][...,(idx - self.past_length) : idx]], axis=-1
+                    )
+                
+                # # Slice the future piece of the field
+                # future_piece = d[field][..., (idx + lead_time) : (idx + lead_time + pred_len)]
+                future_piece = np.full(shape=d[field].shape[:-1] + (pred_len,),
+                                        fill_value=dummy_val,
+                                        dtype=d[field].dtype)
+                
+                # If the field is in time series fields, concatenate past and future pieces
+                if field in ts_fields:
+                    piece = np.concatenate([past_piece, future_piece], axis=-1)
+                    if output_NTC:
+                        piece = piece.transpose()
+                    d[field] = piece
+                else:
+                    if output_NTC:
+                        past_piece = past_piece.transpose()
+                        # future_piece = future_piece.transpose()
+                    if field not in past_ts_fields:
+                        d["past_" + field] = past_piece
+                        # d["future_" + field] = future_piece
+                        del d[field]
+                    else:
+                        d[field] = past_piece
+            
+            # Create a padding indicator for the past piece
+            pad_indicator = np.zeros(self.past_length)
+            if pad_length > 0:
+                pad_indicator[:pad_length] = 1
+            d["past_" + (is_pad_field)] = pad_indicator
+            
+            # Set the forecast start field
+            if isinstance(d[start_field], pd.Timestamp):
+                d[forecast_start_field] = (d[start_field] + idx + lead_time).timestamp()
+
+            # Append the transformed data
+            transformed_data.append(d)
+
+        # Return the transformed data
+        return transformed_data
 
     def convert_for_moirai_format(self):
         """Given dataset having the following fields:
@@ -961,7 +1038,10 @@ class MoiraiDataset(BaseDataset):
             t = self.train_transforms.transforms.pop(0)
             self.data = [t(x) for x in self.data]
         # (b) Linearize the data and add the required fields
-        self.add_past_fields()
+        transformed_data = []
+        for x in self.data:
+            transformed_data.extend(self.add_past_fields(x))
+        self.data = transformed_data
         # (c) Call _convert function to add fields like observed mask, etc.
         # (d) Convert the data to a MoiraiTorch object
         self.batched_data = MoiraiTorch(self.data)
