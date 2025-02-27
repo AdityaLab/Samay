@@ -161,7 +161,6 @@ class MoiraiModule(
         :return: predictive distribution
         """
 
-        print("target.shape: ", target.shape)
         # Scaling the target (main data) 
         loc, scale = self.scaler(
             target,

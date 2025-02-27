@@ -764,6 +764,28 @@ class MoiraiTSModel(Basemodel):
 
         return eval_results, trues, preds, histories
     
+    def preprocess_inputs(self, inputs:dict):
+        """Preprocess the inputs to the model.
+
+        Args:
+            inputs (dict): Dictionary containing the input data.
+
+        Returns:
+            dict: Preprocessed input data.
+        """
+        (target, observed_mask, sample_id,
+         time_id, variate_id, prediction_mask) = self.model._convert(patch_size=self.patch_size, past_target=inputs["past_target"],
+                                                                     past_observed_target=inputs["past_observed_target"],past_is_pad=inputs["past_is_pad"])
+        inputs["target"] = target
+        inputs["observed_mask"] = observed_mask
+        inputs["sample_id"] = sample_id
+        inputs["time_id"] = time_id
+        inputs["variate_id"] = variate_id
+        inputs["prediction_mask"] = prediction_mask
+
+        return inputs
+        
+    
     def finetune(self, dataset, **kwargs):
 
         # Parameters
@@ -773,13 +795,14 @@ class MoiraiTSModel(Basemodel):
         
         lr = 1e-4 if "lr" not in fin_model_config else float(fin_model_config["lr"])
         self.batch_size = kwargs["batch_size"] if "batch_size" in kwargs else self.batch_size
+        epochs = 4
+        assert epochs <= kwargs["max_epochs"], "epochs should be less than or equal to max_epochs"
 
         num_batches = len(dataset.dataset)//self.batch_size
         if "num_batches_per_epoch" in kwargs.keys(): # If num_batches_per_epoch is provided
             num_batches_per_epoch = kwargs["num_batches_per_epoch"]
-            epochs = min(kwargs["max_epochs"], num_batches//num_batches_per_epoch) # clips epochs by max_epochs
+            epochs = min(epochs, num_batches//num_batches_per_epoch)
         else:
-            epochs = kwargs["max_epochs"]
             num_batches_per_epoch = num_batches//epochs
         training_steps = num_batches_per_epoch * kwargs["max_epochs"]
         module_args = convert_module_kwargs(fin_model_config["module_kwargs"])
@@ -806,22 +829,129 @@ class MoiraiTSModel(Basemodel):
                                         weight_decay=fin_model_config["weight_decay"]
                                         )
         
+        # Pytorch version
+        FinetunedModel.to(self.device)
+        FinetunedModel.train() # Set model to training mode
+
+        # Freeze the transformer layers
+        # First we finetune the whole model
+
+        # Load the dataset
+        dataloader = dataset.get_dataloader()
+
+        # Decide which weights are going to be updated
+        decay = set()
+        no_decay = set()
+
+        whitelist_params = (
+            LearnedProjection,
+            MultiInSizeLinear,
+            MultiOutSizeLinear,
+            nn.Linear,
+        )
+        blacklist_params = (
+            BinaryAttentionBias,
+            LearnedEmbedding,
+            RMSNorm,
+            nn.Embedding,
+            nn.LayerNorm,
+        )
+
+        for xn,x in FinetunedModel.named_modules():
+            for pn,p in x.named_parameters():
+                if not p.requires_grad:
+                    continue
+
+                fpn = f"{xn}.{pn}" if xn else pn
+                if pn.endswith("bias"):
+                    no_decay.add(fpn)
+                elif pn.endswith("weight") and isinstance(x, whitelist_params):
+                    decay.add(fpn)
+                elif pn.endswith("weight") and isinstance(x, blacklist_params):
+                    no_decay.add(fpn)
+
+        # validate that we considered every parameter
+        param_dict = {pn: p for pn, p in FinetunedModel.named_parameters() if p.requires_grad}
+        # print(f"Parameters: {param_dict.keys()}")
+        # inter_params = decay & no_decay
+        # union_params = decay | no_decay
+        # assert (
+        #     len(inter_params) == 0
+        # ), f"parameters {str(inter_params)} made it into both decay/no_decay sets!"
+        # assert (
+        #     len(param_dict.keys() - union_params) == 0
+        # ), f"parameters {str(param_dict.keys() - union_params)} were not separated into either decay/no_decay set!"
+
+        optim_groups = [
+            {
+                "params": filter(
+                    lambda p: p.requires_grad,
+                    [param_dict[pn] for pn in sorted(list(decay))],
+                ),
+                "weight_decay": FinetunedModel.hparams.weight_decay,
+            },
+            {
+                "params": filter(
+                    lambda p: p.requires_grad,
+                    [param_dict[pn] for pn in sorted(list(no_decay))],
+                ),
+                "weight_decay": 0.0,
+            },
+        ]
+        optimizer = torch.optim.Adam(optim_groups,
+                                     lr=lr,
+                                     betas=(FinetunedModel.hparams.beta1, FinetunedModel.hparams.beta2),
+                                     eps=1e-6)
         
-        # Instantiate trainer (refer uni2ts/cli/conf/finetune/default.yaml)
-        output_dir = "../../finetuning/moirai"
-        logger = L.pytorch.loggers.TensorBoardLogger(save_dir=output_dir,name="logs")
-        callbacks = [L.pytorch.callbacks.LearningRateMonitor(logging_interval="epoch"),
-                    L.pytorch.callbacks.ModelCheckpoint(dirpath=f"{output_dir}/checkpoints",monitor="val_loss", save_top_k=1, mode="min",every_n_epochs=1,save_weights_only=True),
-                    L.pytorch.callbacks.EarlyStopping(monitor="val_loss",patience=3,mode="min",min_delta=0.0,strict=False,verbose=True)
-                    ]
-        ft_trainer = L.Trainer(logger=logger, callbacks=callbacks, **kwargs["mod_torch"])
-        L.seed_everything(kwargs["seed"] + ft_trainer.logger.version, workers=True)
+        scheduler = get_scheduler(
+            SchedulerType.COSINE_WITH_RESTARTS,
+            optimizer,
+            num_warmup_steps=FinetunedModel.hparams.num_warmup_steps,
+            num_training_steps=FinetunedModel.hparams.num_training_steps,
+        )
+        print(f"In model.py line 912: {self.patch_size}")
 
-        # Get train loader
-        train_loader = dataset.get_dataloader()
+        avg_loss = 0
+        for epoch in range(epochs):
+            for i, (inputs) in enumerate(dataloader):
+                inputs = self.preprocess_inputs(inputs)
+                for k,v in inputs.items():
+                    if isinstance(v, torch.Tensor):
+                        inputs[k] = v.to(self.device)
 
-        # finetune now
-        ft_trainer.fit(FinetunedModel, train_dataloaders=train_loader)
+                optimizer.zero_grad() # reset gradients
+                # distribution of predictions
+                outputs = FinetunedModel.forward(target=inputs["target"],
+                                                observed_mask=inputs["observed_mask"],
+                                                sample_id=inputs["sample_id"],
+                                                time_id=inputs["time_id"],
+                                                variate_id=inputs["variate_id"],
+                                                prediction_mask=inputs["prediction_mask"],
+                                                patch_size=self.patch_size)
+                loss = FinetunedModel.compute_loss(outputs, inputs)
+                loss.backward()
+                optimizer.step()
+                # scheduler.step()
+                avg_loss += loss.item()
+            avg_loss /= len(dataloader)
+            print(f"Epoch {epoch}, Loss: {avg_loss}")
+        
+        # Lightning Trainer version
+        # # Instantiate trainer (refer uni2ts/cli/conf/finetune/default.yaml)
+        # output_dir = "../../finetuning/moirai"
+        # logger = L.pytorch.loggers.TensorBoardLogger(save_dir=output_dir,name="logs")
+        # callbacks = [L.pytorch.callbacks.LearningRateMonitor(logging_interval="epoch"),
+        #             L.pytorch.callbacks.ModelCheckpoint(dirpath=f"{output_dir}/checkpoints",monitor="val_loss", save_top_k=1, mode="min",every_n_epochs=1,save_weights_only=True),
+        #             L.pytorch.callbacks.EarlyStopping(monitor="val_loss",patience=3,mode="min",min_delta=0.0,strict=False,verbose=True)
+        #             ]
+        # ft_trainer = L.Trainer(logger=logger, callbacks=callbacks, **kwargs["mod_torch"])
+        # L.seed_everything(kwargs["seed"] + ft_trainer.logger.version, workers=True)
+
+        # # Get train loader
+        # train_loader = dataset.get_dataloader()
+
+        # # finetune now
+        # ft_trainer.fit(FinetunedModel, train_dataloaders=train_loader)
 
         # Update the model
         self.model = FinetunedModel
