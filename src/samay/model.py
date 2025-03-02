@@ -771,7 +771,7 @@ class MoiraiTSModel(Basemodel):
             inputs (dict): Dictionary containing the input data.
 
         Returns:
-            dict: Preprocessed input data.
+            dict: Preprocessed input data.            
         """
         (target, observed_mask, sample_id,
          time_id, variate_id, prediction_mask) = self.model._convert(patch_size=self.patch_size, past_target=inputs["past_target"],
@@ -805,15 +805,17 @@ class MoiraiTSModel(Basemodel):
         epochs = 4
         assert epochs <= kwargs["max_epochs"], "epochs should be less than or equal to max_epochs"
 
+        # Number of batches per epoch required for calculating the number of training steps
         num_batches = len(dataset.dataset)//self.batch_size
         if "num_batches_per_epoch" in kwargs.keys(): # If num_batches_per_epoch is provided
             num_batches_per_epoch = kwargs["num_batches_per_epoch"]
             epochs = min(epochs, num_batches//num_batches_per_epoch)
         else:
             num_batches_per_epoch = num_batches//epochs
+        
         training_steps = num_batches_per_epoch * kwargs["max_epochs"]
-        module_args = convert_module_kwargs(fin_model_config["module_kwargs"])
-        self.patch_size = self.model.module.in_proj.in_features_ls[0]
+        module_args = convert_module_kwargs(fin_model_config["module_kwargs"]) # remove _target_ fields
+        self.patch_size = self.model.module.in_proj.in_features_ls[0] # update patch_size
 
         # Trainer configuration (from uni2ts/cli/train.py)
         # mod_torch is the trainer configuration without _target_ fields or any key 
@@ -822,6 +824,11 @@ class MoiraiTSModel(Basemodel):
             assert kwargs["mod_torch"]["precision"] == 32, "Precision should be 32 for tf32"
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True
+        
+        # For now, self.model.module.patch_sizes i just [16] from the config file
+        # But in finetune, we are using patch_sizes as [8,16,32,64,128]
+        # So, we need to update the patch_sizes in the model
+        self.model.module.patch_sizes = list(module_args["patch_sizes"])
     
         # Load the model
         FinetunedModel = MoiraiFinetune(min_patches=fin_model_config["min_patches"],
@@ -845,7 +852,7 @@ class MoiraiTSModel(Basemodel):
         # First we finetune the whole model
 
         # Load the dataset
-        dataloader = dataset.get_dataloader()
+        dataloader = dataset.get_dataloader() # look at if mode=="train" case for more info
 
         # Decide which weights are going to be updated
         decay = set()
