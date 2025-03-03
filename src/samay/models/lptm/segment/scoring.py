@@ -22,6 +22,10 @@ class ScoringModuleBase(nn.Module, ABC):
         Returns:
             torch.Tensor, shape (batch_size, seq_len, seq_len)
         """
+        if time_embeds.size(-1) != self.embed_size:
+            time_embeds = torch.nn.functional.interpolate(
+                time_embeds, size=self.embed_size, mode="linear"
+            )
         batch_size, seq_len, _ = time_embeds.size()
         # Compute the scores
         W1: torch.Tensor = self.W1(time_embeds)  # (batch_size, seq_len, hidden_size)
