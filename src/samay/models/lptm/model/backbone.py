@@ -376,34 +376,30 @@ class LPTM(nn.Module):
         x_enc: torch.Tensor,
         input_mask: torch.Tensor = None,
         mask: torch.Tensor = None,
-        c=0.8,
         **kwargs,
     ) -> TimeseriesOutputs:
-        batch_size, n_channels, _ = x_enc.shape
+        b, c, _ = x_enc.shape
         if mask is None:
             mask = self.mask_generator.generate_mask(x=x_enc, input_mask=input_mask)
-            mask = mask.to(x_enc.device)  # mask: [batch_size x seq_len]
+            mask = mask.to(x_enc.device)  # mask: [b x seq_len]
         fc, fc_mask = (
-            x_enc[-self.config.forecast_horizon :, :],
-            mask[-self.config.forecast_horizon :, :],
+            x_enc[:, :, -self.config.forecast_horizon :],
+            mask[:, -self.config.forecast_horizon :],
         )
 
         x_enc = self.normalizer(x=x_enc, mask=mask * input_mask, mode="norm")
-        # Prevent too short time-series from causing NaNs
         x_enc = torch.nan_to_num(x_enc, nan=0, posinf=0, neginf=0)
 
         x_enc = self.tokenizer(x=x_enc)
         enc_in, scores = self.patch_embedding(x_enc, mask=mask, fc=(fc, fc_mask))
 
         n_patches = enc_in.shape[2]
-        enc_in = enc_in.reshape(
-            (batch_size * n_channels, n_patches, self.config.d_model)
-        )
+        enc_in = enc_in.reshape((b * c, n_patches, self.config.d_model))
 
         patch_view_mask = Masking.convert_seq_to_patch_view(
             input_mask, scores, self.patch_len
         )
-        attention_mask = patch_view_mask.repeat_interleave(n_channels, dim=0)
+        attention_mask = patch_view_mask.repeat_interleave(c, dim=0)
         if self.config.transformer_type == "encoder_decoder":
             outputs = self.encoder(
                 inputs_embeds=enc_in,
@@ -414,12 +410,11 @@ class LPTM(nn.Module):
             outputs = self.encoder(inputs_embeds=enc_in, attention_mask=attention_mask)
         enc_out = outputs.last_hidden_state
 
-        enc_out = enc_out.reshape((-1, n_channels, n_patches, self.config.d_model))
+        enc_out = enc_out.reshape((-1, c, n_patches, self.config.d_model))
 
-        dec_out = self.head(enc_out)  # [batch_size x n_channels x seq_len]
-        dec_out_f = self.normalizer(x=dec_out, mode="denorm")
-        dec_out_f = dec_out[-self.config.forecast_horizon :, :] * c + fc * (1 - c)
-        # print(dec_out.shape)
+        dec_out = self.head(enc_out)  # [b x c x seq_len]
+        dec_out_f, dec_out = self._align_for(dec_out, fc)
+
         # if dec_out.shape[1] != self.config.forecast_horizon:
         #    dec_out = dec_out.view(batch_size, n_channels, self.config.forecast_horizon)
 
@@ -496,6 +491,14 @@ class LPTM(nn.Module):
         dec_out = self.normalizer(x=dec_out, mode="denorm")
 
         return TimeseriesOutputs(input_mask=input_mask, reconstruction=dec_out)
+
+    def _align_for(self, dec_out, fc):
+        prime_lambda = 0.6
+        dec_out_f = self.normalizer(x=dec_out, mode="denorm")
+        return (
+            dec_out[:, :, -self.config.forecast_horizon :] * prime_lambda
+            + fc * (1 - prime_lambda)
+        ), dec_out_f
 
     def forecast(
         self, *, x_enc: torch.Tensor, input_mask: torch.Tensor = None, **kwargs
