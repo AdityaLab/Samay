@@ -417,7 +417,7 @@ class LPTM(nn.Module):
         enc_out = enc_out.reshape((-1, n_channels, n_patches, self.config.d_model))
 
         dec_out = self.head(enc_out)  # [batch_size x n_channels x seq_len]
-        dec_out = self.normalizer(x=dec_out, mode="denorm")
+        dec_out_f = self.normalizer(x=dec_out, mode="denorm")
         dec_out_f = dec_out[-self.config.forecast_horizon :, :] * c + fc * (1 - c)
         # print(dec_out.shape)
         # if dec_out.shape[1] != self.config.forecast_horizon:
