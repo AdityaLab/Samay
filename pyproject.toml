@@ -27,8 +27,8 @@ dependencies = [
 ]
 
 [build-system]
-requires = ["maturin>=1.7,<2.0"]
-build-backend = "maturin"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
@@ -38,7 +38,3 @@ dev = [
     "ruff>=0.8.1",
     "wandb>=0.18.5",
 ]
-
-[tool.maturin]
-features = ["pyo3/extension-module"]
-module-name = "samay.models.lptm.selection"
