@@ -822,7 +822,9 @@ class LPTMDataset(BaseDataset):
             return input_seq, input_mask
         elif self.task_name == "forecasting2":
             input_seq = self.data[pred_end - self.seq_len : pred_end, :].T
-            input_mask[-self.forecast_horizon :] = 0
+            input_mask[seq_end:pred_end] = 0
+            input_mask[self.pad_len :] = 1
+            input_mask[: self.pad_len] = 0
             forecast_seq = self.data[seq_end:pred_end, :].T
             return input_seq, input_mask, forecast_seq
         elif self.task_name == "detection":

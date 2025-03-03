@@ -7,7 +7,7 @@ from samay.models.lptm.segment.selection import select_segments
 
 class Masking:
     def __init__(
-        self, mask_ratio: float = 0.3, patch_len: int = 8, stride: Optional[int] = None
+        self, mask_ratio: float = 0.0, patch_len: int = 8, stride: Optional[int] = None
     ):
         """
         Indices with 0 mask are hidden, and with 1 are observed.
