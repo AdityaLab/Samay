@@ -633,12 +633,7 @@ class LPTMModel(Basemodel):
                     )
                     losses.append(loss.item())
                     trues.append(forecast.detach().cpu().numpy())
-                    preds.append(
-                        output.forecast[:, :, -forecast.shape[-1] :]
-                        .detach()
-                        .cpu()
-                        .numpy()
-                    )
+                    preds.append(output.forecast.detach().cpu().numpy())
                     histories.append(timeseries.detach().cpu().numpy())
 
             losses = np.array(losses)
