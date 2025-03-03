@@ -418,7 +418,7 @@ class LPTM(nn.Module):
 
         dec_out = self.head(enc_out)  # [batch_size x n_channels x seq_len]
         dec_out = self.normalizer(x=dec_out, mode="denorm")
-        dec_out = dec_out[-self.config.forecast_horizon :, :] * c + fc * (1 - c)
+        dec_out_f = dec_out[-self.config.forecast_horizon :, :] * c + fc * (1 - c)
         # print(dec_out.shape)
         # if dec_out.shape[1] != self.config.forecast_horizon:
         #    dec_out = dec_out.view(batch_size, n_channels, self.config.forecast_horizon)
@@ -431,7 +431,7 @@ class LPTM(nn.Module):
         return TimeseriesOutputs(
             input_mask=input_mask,
             reconstruction=dec_out,
-            forecast=dec_out,
+            forecast=dec_out_f,
             pretrain_mask=mask,
             illegal_output=illegal_output,
         )
