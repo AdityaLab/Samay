@@ -210,7 +210,9 @@ class PatchEmbedding(nn.Module):
         # Residual dropout
         self.dropout = nn.Dropout(patch_dropout)
 
-    def forward(self, x: torch.Tensor, mask: torch.Tensor = None) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, mask: torch.Tensor = None, **kwargs
+    ) -> torch.Tensor:
         mask = Masking.convert_seq_to_patch_view(
             mask, mask, patch_len=self.patch_len
         ).unsqueeze(-1)

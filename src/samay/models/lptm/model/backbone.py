@@ -376,19 +376,24 @@ class LPTM(nn.Module):
         x_enc: torch.Tensor,
         input_mask: torch.Tensor = None,
         mask: torch.Tensor = None,
+        c=0.8,
         **kwargs,
     ) -> TimeseriesOutputs:
         batch_size, n_channels, _ = x_enc.shape
         if mask is None:
             mask = self.mask_generator.generate_mask(x=x_enc, input_mask=input_mask)
             mask = mask.to(x_enc.device)  # mask: [batch_size x seq_len]
+        fc, fc_mask = (
+            x_enc[-self.config.forecast_horizon :, :],
+            mask[-self.config.forecast_horizon :, :],
+        )
 
         x_enc = self.normalizer(x=x_enc, mask=mask * input_mask, mode="norm")
         # Prevent too short time-series from causing NaNs
         x_enc = torch.nan_to_num(x_enc, nan=0, posinf=0, neginf=0)
 
         x_enc = self.tokenizer(x=x_enc)
-        enc_in, scores = self.patch_embedding(x_enc, mask=mask)
+        enc_in, scores = self.patch_embedding(x_enc, mask=mask, fc=(fc, fc_mask))
 
         n_patches = enc_in.shape[2]
         enc_in = enc_in.reshape(
@@ -413,6 +418,10 @@ class LPTM(nn.Module):
 
         dec_out = self.head(enc_out)  # [batch_size x n_channels x seq_len]
         dec_out = self.normalizer(x=dec_out, mode="denorm")
+        dec_out = dec_out[-self.config.forecast_horizon :, :] * c + fc * (1 - c)
+        # print(dec_out.shape)
+        # if dec_out.shape[1] != self.config.forecast_horizon:
+        #    dec_out = dec_out.view(batch_size, n_channels, self.config.forecast_horizon)
 
         if self.config.getattr("debug", False):
             illegal_output = self._check_model_weights_for_illegal_values()
