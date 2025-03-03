@@ -682,6 +682,7 @@ class LPTMDataset(BaseDataset):
         task_name="forecasting",
         label_col=None,
         stride=10,
+        seq_len=512,
         **kwargs,
     ):
         super().__init__(
@@ -694,7 +695,7 @@ class LPTMDataset(BaseDataset):
         self.task_name = task_name
         self.label_col = "label" if label_col is None else label_col
 
-        self.seq_len = 512
+        self.seq_len = seq_len
         self.stride = stride
         self.forecast_horizon = horizon
         self.boundaries = boundaries
