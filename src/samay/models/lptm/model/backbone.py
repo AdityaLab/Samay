@@ -206,6 +206,8 @@ class LPTM(nn.Module):
             # warnings.warn("Only reconstruction head is pre-trained. Classification and forecasting heads must be fine-tuned.")
             pass
         if task_name == TASKS.RECONSTRUCTION or task_name == TASKS.FORECASTING2:
+            if hasattr(self.config, "forecast_horizon"):
+                self.fh = self.config.forecast_horizon
             return PretrainHead(
                 self.config.d_model,
                 self.config.patch_len,
@@ -383,8 +385,8 @@ class LPTM(nn.Module):
             mask = self.mask_generator.generate_mask(x=x_enc, input_mask=input_mask)
             mask = mask.to(x_enc.device)  # mask: [b x seq_len]
         fc, fc_mask = (
-            x_enc[:, :, -self.config.forecast_horizon :],
-            mask[:, -self.config.forecast_horizon :],
+            x_enc[:, :, -self.fh :],
+            mask[:, -self.fh :],
         )
 
         x_enc = self.normalizer(x=x_enc, mask=mask * input_mask, mode="norm")
@@ -496,8 +498,7 @@ class LPTM(nn.Module):
         prime_lambda = 0.6
         dec_out_f = self.normalizer(x=dec_out, mode="denorm")
         return (
-            dec_out[:, :, -self.config.forecast_horizon :] * prime_lambda
-            + fc * (1 - prime_lambda)
+            dec_out[:, :, -self.fh :] * prime_lambda + fc * (1 - prime_lambda)
         ), dec_out_f
 
     def forecast(
