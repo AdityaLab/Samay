@@ -829,7 +829,7 @@ class MoiraiTSModel(Basemodel):
         # But in finetune, we are using patch_sizes as [8,16,32,64,128]
         # So, we need to update the patch_sizes in the model
         self.model.module.patch_sizes = list(module_args["patch_sizes"])
-    
+            
         # Load the model
         FinetunedModel = MoiraiFinetune(min_patches=fin_model_config["min_patches"],
                                         min_mask_ratio=fin_model_config["min_mask_ratio"],
@@ -897,42 +897,44 @@ class MoiraiTSModel(Basemodel):
         #     len(param_dict.keys() - union_params) == 0
         # ), f"parameters {str(param_dict.keys() - union_params)} were not separated into either decay/no_decay set!"
 
-        optim_groups = [
-            {
-                "params": filter(
-                    lambda p: p.requires_grad,
-                    [param_dict[pn] for pn in sorted(list(decay))],
-                ),
-                "weight_decay": FinetunedModel.hparams.weight_decay,
-            },
-            {
-                "params": filter(
-                    lambda p: p.requires_grad,
-                    [param_dict[pn] for pn in sorted(list(no_decay))],
-                ),
-                "weight_decay": 0.0,
-            },
-        ]
+        # optim_groups = [
+        #     {
+        #         "params": filter(
+        #             lambda p: p.requires_grad,
+        #             [param_dict[pn] for pn in sorted(list(decay))],
+        #         ),
+        #         "weight_decay": FinetunedModel.hparams.weight_decay,
+        #     },
+        #     {
+        #         "params": filter(
+        #             lambda p: p.requires_grad,
+        #             [param_dict[pn] for pn in sorted(list(no_decay))],
+        #         ),
+        #         "weight_decay": 0.0,
+        #     },
+        # ]
+        optim_groups = [{"params":list(param_dict.values())}]
         optimizer = torch.optim.Adam(optim_groups,
                                      lr=lr,
                                      betas=(FinetunedModel.hparams.beta1, FinetunedModel.hparams.beta2),
                                      eps=1e-6)
         
-        scheduler = get_scheduler(
-            SchedulerType.COSINE_WITH_RESTARTS,
-            optimizer,
-            num_warmup_steps=FinetunedModel.hparams.num_warmup_steps,
-            num_training_steps=FinetunedModel.hparams.num_training_steps,
-        )
+        # scheduler = get_scheduler(
+        #     SchedulerType.COSINE_WITH_RESTARTS,
+        #     optimizer,
+        #     num_warmup_steps=FinetunedModel.hparams.num_warmup_steps,
+        #     num_training_steps=FinetunedModel.hparams.num_training_steps,
+        # )
 
         avg_loss = 0
         for epoch in range(epochs):
-            for i, (inputs) in enumerate(dataloader):
-                inputs = self.preprocess_inputs(inputs)
+            for i, (inputs) in enumerate(dataloader): # each batch is processed
+                inputs = self.preprocess_inputs(inputs) # patchify and other fields added
                 for k,v in inputs.items():
                     if isinstance(v, torch.Tensor):
                         inputs[k] = v.to(self.device)
-
+                        if v.dtype == torch.float32 or v.dtype == torch.float64:
+                            inputs[k] = inputs[k].requires_grad_()
                 optimizer.zero_grad() # reset gradients
                 # distribution of predictions
                 outputs = FinetunedModel.forward(target=inputs["target"],
@@ -942,7 +944,11 @@ class MoiraiTSModel(Basemodel):
                                                 variate_id=inputs["variate_id"],
                                                 prediction_mask=inputs["prediction_mask"],
                                                 patch_size=inputs["patch_size"])
-                loss = FinetunedModel.compute_loss(outputs, inputs)
+                loss = FinetunedModel.hparams.loss_func(pred=outputs,
+                                                        **{field: inputs[field] for field in ["target","prediction_mask","observed_mask",
+                                                                                              "sample_id","variate_id",]
+                                                        }
+                                                    )
                 loss.backward()
                 optimizer.step()
                 # scheduler.step()
