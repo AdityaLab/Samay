@@ -469,18 +469,20 @@ class MoiraiMoEForecast(L.LightningModule):
                                         dtype=past_target.dtype,
                                         device=device
                                     )
+        # We are using torch.nn.functional.pad to pad the fields so that during training when model tries to check with different patch sizes
+        # the weight vector has enough elements to handle the largest of patch_sizes
         target.extend(
             [   # pad the past target on the left
                 torch.nn.functional.pad(input=rearrange(self._patched_seq_pad(patch_size, past_target, -2, left=True), # pad on the second last dimension
                                                         "... (seq patch) dim -> ... (dim seq) patch", # rearrange the tensor
                                                         patch=patch_size),
-                                        pad=(0, self.max_patch_size - patch_size), # pad the tensor
+                                        pad=(0, self.max_patch_size - patch_size), # right pad the tensor's last dim with (max_patch - patch)
                                         ),
                 # pad the future target on the right
                 torch.nn.functional.pad(input=rearrange(self._patched_seq_pad(patch_size, future_target, -2, left=False), # pad on the second last dimension
                                                         "... (seq patch) dim -> ... (dim seq) patch", # rearrange the tensor
                                                         patch=patch_size),
-                                        pad=(0, self.max_patch_size - patch_size), # pad the tensor
+                                        pad=(0, self.max_patch_size - patch_size), # right pad the tensor's last dim with (max_patch - patch)
                                         )
             ]
         )
@@ -494,13 +496,13 @@ class MoiraiMoEForecast(L.LightningModule):
                 torch.nn.functional.pad(input=rearrange(self._patched_seq_pad(patch_size, past_observed_target, -2, left=True), # pad on the second last dimension
                                                         "... (seq patch) dim -> ... (dim seq) patch", # rearrange the tensor
                                                         patch=patch_size),
-                                        pad=(0, self.max_patch_size - patch_size), # pad the tensor
+                                        pad=(0, self.max_patch_size - patch_size), # right pad the tensor's last dim with (max_patch - patch)
                                         ),
                 # pad the future observed target on the right
                 torch.nn.functional.pad(input=rearrange(self._patched_seq_pad(patch_size, future_observed_target, -2, left=False), # pad on the second last dimension
                                                         "... (seq patch) dim -> ... (dim seq) patch", # rearrange the tensor
                                                         patch=patch_size),
-                                        pad=(0, self.max_patch_size - patch_size), # pad the tensor
+                                        pad=(0, self.max_patch_size - patch_size), # right pad the tensor's last dim with (max_patch - patch)
                                         ),
             ]
         )
