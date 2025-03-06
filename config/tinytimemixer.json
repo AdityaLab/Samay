@@ -1,0 +1,7 @@
+{
+    "repo": "ibm-granite/granite-timeseries-ttm-r2",
+    "config": {
+        "context_len": 512,
+        "horizon_len": 96
+    }
+}

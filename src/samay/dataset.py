@@ -123,7 +123,7 @@ class TimesfmDataset(BaseDataset):
                 context_len=128,
                 horizon_len=32, 
                 freq='h', 
-                normalize=True, 
+                normalize=False, 
                 stride=10,
                 **kwargs):
         super().__init__(name=name, datetime_col=datetime_col, path=path, batchsize=batchsize, mode=mode)
@@ -140,6 +140,9 @@ class TimesfmDataset(BaseDataset):
                 int(len(self.data) * 0.7),
                 len(self.data) - 1,
             ]
+        elif boundaries == (-1, -1, -1):
+            # use all data for training
+            self.boundaries = [0, 0, len(self.data) - 1]
         else:
             self.boundaries = boundaries
         self.ts_cols = [col for col in self.data.columns if col != self.datetime_col]
@@ -154,7 +157,7 @@ class TimesfmDataset(BaseDataset):
             test_range=[self.boundaries[1], self.boundaries[2]],
             hist_len=self.context_len,
             pred_len=self.horizon_len,
-            batch_size=16,
+            batch_size=64,
             freq=self.freq,
             normalize=self.normalize,
             epoch_len=None,
@@ -255,7 +258,7 @@ class ChronosDataset(BaseDataset):
         self.boundaries = boundaries
         self.stride = stride
         self.batchsize = batch_size
-        self.max_col_num = 64
+        self.max_col_num = 16
 
         self.pad = False
         self._read_data()
@@ -302,7 +305,7 @@ class ChronosDataset(BaseDataset):
                 self.data, ((self.pad_len, 0), (0, 0))
             )
         # If num of channels isn't multiple of max_col_num, pad with zeros
-        if self.n_channels % self.max_col_num != 0:
+        if self.n_channels % self.max_col_num != 0 and self.n_channels > self.max_col_num:
             self.data = np.pad(
                 self.data, ((0, 0), (0, self.max_col_num - self.n_channels % self.max_col_num))
             )
@@ -671,6 +674,122 @@ class MomentDataset(BaseDataset):
         labels = np.vectorize(transform.get)(labels)
 
         return labels
+
+
+class TinyTimeMixerDataset(BaseDataset):
+    """
+    Dataset class for ChronosBolt model
+    Data Format:
+    Dict with keys:
+    input_ts: np.ndarray, historical time series data
+    actual_ts: np.ndarray, actual time series data
+    """
+
+    def __init__(
+        self,
+        name=None,
+        datetime_col="ds",
+        path=None,
+        boundaries=[0, 0, 0],
+        batch_size=64,
+        mode=None,
+        stride=10,
+        context_len=512,
+        horizon_len=64,
+    ):
+        super().__init__(name=name, datetime_col=datetime_col, path=path, batchsize=batch_size, mode=mode)
+        # Todo: implement ChronosDataset
+
+        self.context_len = context_len
+        self.horizon_len = horizon_len
+        self.mode = mode
+        self.boundaries = boundaries
+        self.stride = stride
+        self.batchsize = batch_size
+        self.max_col_num = 64
+
+        self.pad = False
+        self._read_data()
+
+        self.one_chunk_num = (self.length_timeseries - self.context_len - self.horizon_len) // self.stride + 1
+
+    def _read_data(self):
+        self.df = pd.read_csv(self.data_path)
+
+        if self.boundaries[0] == 0:
+            self.boundaries[0] = int(len(self.df) * 0.5)
+        if self.boundaries[1] == 0:
+            self.boundaries[1] = int(len(self.df) * 0.7)
+        if self.boundaries[2] == 0:
+            self.boundaries[2] = int(len(self.df) - 1)
+
+        self.n_channels = self.df.shape[1] - 1
+        self.num_chunks = (self.n_channels + self.max_col_num - 1) // self.max_col_num
+        
+        if self.datetime_col:
+            self.df.drop(columns=[self.datetime_col], inplace=True)
+
+        self.df = np.array(self.df)
+
+        if self.mode == "train":
+            self.data = self.df[slice(0, self.boundaries[0]), :]
+
+        elif self.mode == "test":
+            self.data = self.df[slice(self.boundaries[1], self.boundaries[2]), :]
+
+        self.length_timeseries = self.data.shape[0]
+        self.required_len = self.context_len + self.horizon_len
+        self.pad_len = 0
+        if self.length_timeseries < self.required_len:
+            self.pad = True
+        self.pad_sequence()
+
+    def pad_sequence(self):
+        self.pad_len = self.required_len - self.length_timeseries
+        # Pad data with zeros from the left
+        if self.pad:
+            self.data = np.pad(
+                self.data, ((self.pad_len, 0), (0, 0))
+            )
+        # If num of channels isn't multiple of max_col_num, pad with zeros
+        if self.n_channels % self.max_col_num != 0 and self.n_channels > self.max_col_num:
+            self.data = np.pad(
+                self.data, ((0, 0), (0, self.max_col_num - self.n_channels % self.max_col_num))
+            )
+        self.length_timeseries = self.data.shape[0]
+
+
+    def __getitem__(self, index):
+        chunk_index = index // self.one_chunk_num
+        data_chunk = self.data[:, chunk_index * self.max_col_num: (chunk_index + 1) * self.max_col_num] if (chunk_index + 1) * self.max_col_num < self.n_channels else self.data[:, chunk_index * self.max_col_num:]
+        seq_start = self.stride * index
+        seq_end = seq_start + self.context_len
+
+        pred_end = seq_end + self.horizon_len
+
+        if pred_end > self.length_timeseries:
+            pred_end = self.length_timeseries
+            seq_end = pred_end - self.horizon_len
+            seq_start = seq_end - self.context_len
+
+        # input_seq = self.data[seq_start:seq_end, :].T
+        input_seq = data_chunk[seq_start:seq_end, :].T
+        forecast_seq = data_chunk[seq_end:pred_end, :].T
+        return input_seq, forecast_seq
+        
+
+    def __len__(self):
+        if self.length_timeseries < self.context_len + self.horizon_len:
+            return 1 * self.num_chunks
+        return self.num_chunks * self.one_chunk_num
+    
+
+    def get_data_loader(self):
+        if self.mode == 'train':
+            return DataLoader(self, shuffle=True, batch_size=self.batchsize)
+        else:
+            return DataLoader(self, shuffle=False, batch_size=self.batchsize)
+        # shape: (batch_size, n_channels, seq_len)
 
 
 if __name__ == "__main__":

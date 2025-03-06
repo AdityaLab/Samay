@@ -3,6 +3,7 @@ from .models.timesfm.timesfm import pytorch_patched_decoder as ppd
 from .models.moment.momentfm.models.moment import MOMENT, MOMENTPipeline
 from .models.chronosforecasting.chronos.chronos import ChronosPipeline, ChronosConfig
 from .models.chronosforecasting.chronos.chronos_bolt import ChronosBoltPipeline, ChronosBoltConfig
+from .models.TinyTimeMixer.models.tinytimemixer.modeling_tinytimemixer import TinyTimeMixerForPrediction
 import numpy as np
 import pandas as pd
 import torch
@@ -280,6 +281,7 @@ class ChronosModel(Basemodel):
                 context=input_seq,
                 prediction_length=horizon_len,
                 quantile_levels=quantile_levels,
+                limit_prediction_length=False,
             )
             trues.append(forecast_seq.detach().cpu().numpy())
             mean = mean.reshape(forecast_seq.shape[0], forecast_seq.shape[1], forecast_seq.shape[2])
@@ -367,7 +369,6 @@ class ChronosBoltModel(Basemodel):
                 
 
     def plot(self, dataset, horizon_len, quantile_levels, **kwargs):
-        # Todo: forecast
         dataloader = dataset.get_data_loader()
         trues, preds, histories = [], [], []
         for i, data in enumerate(dataloader):
@@ -742,6 +743,104 @@ class MomentModel(Basemodel):
             embeddings = np.concatenate(embeddings)
             labels = np.concatenate(labels)
             return accuracy, embeddings, labels
+
+
+class TinyTimeMixerModel(Basemodel):
+    def __init__(self, config=None, repo=None):
+        super().__init__(config=config, repo=repo)
+        if repo:
+            context_len = config["context_len"]
+            horizon_len = config["horizon_len"]
+            if context_len == 512 and horizon_len == 96:
+                revision = "main"
+            else:
+                revision = f"{context_len}-{horizon_len}-r2"
+            self.model = TinyTimeMixerForPrediction.from_pretrained(repo, revision=revision, prediction_filter_length=horizon_len)
+            self.model = self.model.to(self.device)
+        else:
+            raise ValueError("TinyTimeMixer model requires a repository")
+
+    def finetune(self, dataset, **kwargs):
+        dataloader = dataset.get_data_loader()
+        self.model.train()
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-4)
+        for epoch in range(5):
+            total_loss = 0
+            for i, data in enumerate(dataloader):
+                context, forecast_seq = data
+                context = context.float().permute(0, 2, 1).to(self.device)
+                forecast_seq = forecast_seq.float().permute(0, 2, 1).to(self.device)
+                optimizer.zero_grad()
+                output = self.model(past_values=context, future_values=forecast_seq)
+                loss = output.loss
+                loss.backward()
+                optimizer.step()
+                total_loss += loss.item()
+            avg_loss = total_loss / len(dataloader)
+            print(f"Epoch {epoch}, Loss: {avg_loss}")
+        self.model.eval()
+
+    def plot(self, dataset, **kwargs):
+        dataloader = dataset.get_data_loader()
+        trues, preds, histories = [], [], []
+        self.model.eval()
+        with torch.no_grad():
+            for i, data in enumerate(dataloader):
+                context, forecast_seq = data
+                context = context.float().permute(0, 2, 1).to(self.device)
+                forecast_seq = forecast_seq.float().permute(0, 2, 1).to(self.device)
+                output = self.model(past_values=context, future_values=forecast_seq)
+                pred = output.prediction_outputs
+                trues.append(forecast_seq.permute(0, 2, 1).detach().cpu().numpy())
+                preds.append(pred.permute(0, 2, 1).detach().cpu().numpy())
+                histories.append(context.permute(0, 2, 1).detach().cpu().numpy())
+            
+            trues = np.concatenate(trues, axis=0)
+            preds = np.concatenate(preds, axis=0)
+            histories = np.concatenate(histories, axis=0)
+
+        visualize(task_name="forecasting", trues=trues, preds=preds, history=histories, **kwargs)
+
+    def evaluate(self, dataset, **kwargs):
+        dataloader = dataset.get_data_loader()
+        trues, preds, histories = [], [], []
+        self.model.eval()
+        with torch.no_grad():
+            for i, data in enumerate(dataloader):
+                context, forecast_seq = data
+                context = context.float().permute(0, 2, 1).to(self.device)
+                forecast_seq = forecast_seq.float().permute(0, 2, 1).to(self.device)
+                output = self.model(past_values=context, future_values=forecast_seq)
+                pred = output.prediction_outputs
+                trues.append(forecast_seq.permute(0, 2, 1).detach().cpu().numpy())
+                preds.append(pred.permute(0, 2, 1).detach().cpu().numpy())
+                histories.append(context.permute(0, 2, 1).detach().cpu().numpy())
+            
+            trues = np.concatenate(trues, axis=0)
+            preds = np.concatenate(preds, axis=0)
+            histories = np.concatenate(histories, axis=0)
+
+        mse = MSE(trues, preds)
+        mae = MAE(trues, preds)
+        mase = MASE(trues, preds)
+        mape = MAPE(trues, preds)
+        rmse = RMSE(trues, preds)
+        nrmse = NRMSE(trues, preds)
+        smape = SMAPE(trues, preds)
+        msis = MSIS(trues, preds)
+        nd = ND(trues, preds)
+
+        return {
+            "mse": mse,
+            "mae": mae,
+            "mase": mase,
+            "mape": mape,
+            "rmse": rmse,
+            "nrmse": nrmse,
+            "smape": smape,
+            "msis": msis,
+            "nd": nd,
+        }
 
 
 
