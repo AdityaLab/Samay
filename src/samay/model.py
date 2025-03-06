@@ -800,9 +800,10 @@ class MoiraiTSModel(Basemodel):
         with open(model_config, "r") as file:
             fin_model_config = yaml.safe_load(file)
         
-        lr = 1e-4 if "lr" not in fin_model_config else float(fin_model_config["lr"])
+        # lr = 1e-4 if "lr" not in fin_model_config else float(fin_model_config["lr"])
+        lr = 1e-3
         self.batch_size = kwargs["batch_size"] if "batch_size" in kwargs else self.batch_size
-        epochs = 4
+        epochs = 20
         assert epochs <= kwargs["max_epochs"], "epochs should be less than or equal to max_epochs"
 
         # Number of batches per epoch required for calculating the number of training steps
@@ -949,12 +950,15 @@ class MoiraiTSModel(Basemodel):
                                                                                               "sample_id","variate_id",]
                                                         }
                                                     )
+                loss = loss.requires_grad_()
+                # loss.required_grad = True
                 loss.backward()
                 optimizer.step()
                 # scheduler.step()
                 avg_loss += loss.item()
             avg_loss /= len(dataloader)
-            print(f"Epoch {epoch}, Loss: {avg_loss}")
+            # print(f"Epoch {epoch}, Loss: {avg_loss}")
+        print("Finetuning done")
         
         # Lightning Trainer version
         # # Instantiate trainer (refer uni2ts/cli/conf/finetune/default.yaml)
