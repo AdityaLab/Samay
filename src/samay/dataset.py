@@ -712,6 +712,7 @@ class MoiraiDataset(BaseDataset):
                         freq=freq, operation=operation)
         self.start_date = self.dataset.index[0]
         self.train_transforms = self.default_transforms()
+        self.test_transforms = self.default_transforms()
         
         # Split the dataset into train, val, test
         if self.mode == "train": # no windowing
@@ -812,6 +813,8 @@ class MoiraiDataset(BaseDataset):
             np.ndarray: Training and Validation data
         """
         data = []
+        # Each column is a separate time series
+        # Each time series is appended to the data list
         for i in range(self.dataset.shape[1]):
             data.append({
                 "start": Period(self.start_date, freq=self.freq),
@@ -827,17 +830,25 @@ class MoiraiDataset(BaseDataset):
 
         Returns:
             np.ndarray: Test data
-        """
+        """          
         data = []
+        num_windows = (self.dataset.shape[0] - self.boundaries[1]) // self.horizon_len
         for i in range(self.dataset.shape[1]):
-            data.extend([tuple([{"start":Period(self.start_date, freq=self.freq),
-                                    "target":self.dataset.iloc[:self.boundaries[1] + j*self.horizon_len,i].values,
-                                    "item_id": self.dataset.columns[i]},
-                                {"start":Period(self.start_date, freq=self.freq),
-                                     "target":self.dataset.iloc[self.boundaries[1] + j*self.horizon_len:self.boundaries[1] + (j+1)*self.horizon_len,i].values,
-                                     "item_id": self.dataset.columns[i]}
-                                ]) for j in range((self.dataset.shape[0] - self.boundaries[1])//self.horizon_len)
-                        ])
+            for j in range(num_windows):
+                start_idx = self.boundaries[1] + j * self.horizon_len
+                end_idx = start_idx + self.horizon_len
+                data.append((
+                    {# input
+                    "start": Period(self.start_date, freq=self.freq),
+                    "target": self.dataset.iloc[:start_idx, i].values,
+                    "item_id": self.dataset.columns[i]
+                    },
+                    {# label
+                    "start": Period(self.start_date, freq=self.freq),
+                    "target": self.dataset.iloc[start_idx:end_idx, i].values,
+                    "item_id": self.dataset.columns[i]
+                    }
+                ))
         
         self.dataset = MoiraiTorch(data)
         self.data = data
@@ -911,7 +922,7 @@ class MoiraiDataset(BaseDataset):
                         lead_time: int = 0, target_field: str = "target",
                         is_pad_field: str = "is_pad", observed_value_field: str = "observed_target",
                         start_field: str = "start", forecast_start_field: str = "forecast_start",
-                        output_NTC: bool = True):
+                        output_NTC: bool = True, mode="train"):
         """Add the following fields:
         (a) past_target: The past target data
         (b) past_observed_target: The past target data with missing values indicator
@@ -925,8 +936,12 @@ class MoiraiDataset(BaseDataset):
         num_windows = 1 + ((target.shape[-1] - self.past_length) // pred_len)
 
         # Sample indices from the target field using the instance sampler
-        # sampled_indices = custom_train_instance_split(target) - to be modified later
-        sampled_indices = [self.past_length + i*pred_len for i in range(num_windows+1)]
+        if mode == "train":
+            sampled_indices = [self.past_length + i*pred_len for i in range(num_windows+1)]
+        elif mode == "test":
+            sampled_indices = custom_train_instance_split(target)
+        else:
+            raise ValueError(f"Unsupported mode: {mode}")
 
         # Columns to be sliced
         slice_cols = ts_fields + past_ts_fields + [target_field, observed_value_field]
@@ -994,138 +1009,35 @@ class MoiraiDataset(BaseDataset):
         # Return the transformed data
         return transformed_data
 
-    def convert_for_moirai_format(self):
-        """Given dataset having the following fields:
-        (a) past_target: The past target data
-        (b) past_observed_target: The past target data with missing values indicator
-        (c) past_is_pad: Indicates if the added value was a padding value
-        (d) past_feat_dynamic_real: The past dynamic real features
-        (e) past_observed_feat_dynamic_real: The past dynamic real features with missing values indicator
-        (f) future_target: The future target data
-        (g) future_observed_target: The future target data with missing values indicator
-        (h) future_is_pad: Indicates if the added value was a padding value
-        (i) future_feat_dynamic_real: The future dynamic real features
-        (j) future_observed_feat_dynamic_real: The future dynamic real features with missing values indicator
-        (k) time: The time index
-        
-        Convert the data to have the following fields:
-        (a) target: Batched time series data
-        (b) observed_mask: Binary mask for the context part
-        (c) prediction_mask: Binary mask for the prediction part
-        (d) time_id: Time index
-        (e) variate_id: Variate index
+    def prep_train_test_data(self,mode="train"):
+        """Apply transforms on the data and add the past fields (past target, past observed target, etc)
         """
-
-        # Refer _convert function in forecast.py
-        pass
-
-
-    def prep_train_data(self):
-        """Convert the input `data` to have the following fields:
-        +--------------------+--------------------------------------+-----------------------+----------------------------------+
-        | FIELD              | DESCRIPTION                          | TYPE                  | SHAPE                            |
-        +--------------------+--------------------------------------+-----------------------+----------------------------------+
-        | target             | Batched time series data             | torch.tensor[float]   | (batch_size, seq_len, max_patch) |
-        | observed_mask      | Binary mask for the context part     | torch.tensor[bool]    | (batch_size, seq_len, max_patch) |
-        | prediction_mask    | Binary mask for the prediction part  | torch.tensor[bool]    | (batch_size, seq_len)            |
-        | time_id            | Time index                           | torch.tensor[int]     | (batch_size, seq_len)            |
-        +--------------------+--------------------------------------+-----------------------+----------------------------------+
-        """
-
-        # Steps
-        # (a) Apply the transforms on the data
-        while self.train_transforms.transforms:
-            t = self.train_transforms.transforms.pop(0)
-            self.data = [t(x) for x in self.data]
-        # (b) Linearize the data and add the required fields
-        transformed_data = []
-        for x in self.data:
-            transformed_data.extend(self.add_past_fields(x))
-        self.data = transformed_data
-        # (c) Call _convert function to add fields like observed mask, etc.
-        # (d) Convert the data to a MoiraiTorch object
-        self.batched_data = MoiraiTorch(self.data)
-
-        # data_iter = iter(self.dataset)
+        if mode == "train":
+            # STEP 1: Apply the transforms on the data
+            while self.train_transforms.transforms:
+                t = self.train_transforms.transforms.pop(0)
+                self.data = [t(x) for x in self.data]
+            # STEP 2: Linearize the data and add the required fields
+            transformed_data = []
+            for x in self.data:
+                transformed_data.extend(self.add_past_fields(x))
+            self.data = transformed_data
+            # STEP 3: Convert the data to a MoiraiTorch object
+            self.batched_data = MoiraiTorch(self.data)
         
-        # # Add the required fields
-        # mod_data = []
-        # for x in data_iter:
-        #     mod_data.append({
-        #         "start": x["start"],
-        #         "target": x["target"],
-        #         "observed_mask": torch.tensor([1] * (len(x["target"]) - self.horizon_len) + [0] * self.horizon_len, dtype=torch.bool),
-        #         "prediction_mask": torch.tensor([0] * (len(x["target"]) - self.horizon_len) + [1] * self.horizon_len, dtype=torch.bool),
-        #         "time_id": torch.tensor(list(range(len(x["target"]))), dtype=torch.int32),
-        #         "variate_id": torch.tensor([list(self.data.columns).index(x["item_id"])]*len(x["target"]), dtype=torch.int32),
-        #         "patch_size": torch.tensor([16]*len(x["target"]), dtype=torch.int32),      
-        #     })
-
-        # # construct the rolling windows
-        # # rolling_data = []
-        # # n = (mod_data[0]["target"].shape[0] - self.context_len) // self.horizon_len
-
-        # # for i in range(n):
-        # #     data = []
-        # #     for x in mod_data:
-        # #         data.append({
-        # #             "start": x["start"],
-        # #             "target": x["target"][:(i+1)*self.horizon_len + self.context_len],
-        # #             "observed_mask": [1]*(self.context_len + i*self.horizon_len) + [0]*self.horizon_len,
-        # #             "prediction_mask": [0]*(self.context_len + i*self.horizon_len) + [1]*self.horizon_len,
-        # #             "time_id": x["time_id"][:(i+1)*self.horizon_len + self.context_len],
-        # #             "variate_id": x["variate_id"][:(i+1)*self.horizon_len + self.context_len],
-        # #             "patch_size": x["patch_size"][:(i+1)*self.horizon_len + self.context_len]
-        # #         })
-        # #     rolling_data.append(data)
-
-        # rolling_data = []
-
-        # # for rolling evaluation
-        # n = mod_data[0]["target"].shape[0] - self.context_len - self.horizon_len
-
-        # for i in range(0, n, self.horizon_len):
-        #     data = []
-        #     for x in mod_data:
-        #         data.append({
-        #             "start": x["start"],
-        #             "target": x["target"][i:i + self.horizon_len + self.context_len],
-        #             "observed_mask": [1]*(self.context_len) + [0]*self.horizon_len,
-        #             "prediction_mask": [0]*(self.context_len) + [1]*self.horizon_len,
-        #             "time_id": x["time_id"][i:i + self.horizon_len + self.context_len],
-        #             "variate_id": x["variate_id"][i:i + self.horizon_len + self.context_len],
-        #             "patch_size": x["patch_size"][i:i + self.horizon_len + self.context_len]
-        #         })
-        #     rolling_data.append(data)
-
+        elif mode == "test":
+            # STEP 1: Apply the transforms on the data
+            data = [x[0] for x in self.data] # only input part
+            while self.test_transforms.transforms:
+                t = self.test_transforms.transforms.pop(0)
+                data = [t(x) for x in data]
+            # STEP 2: Linearize the data and add the required fields
+            transformed_data = []
+            for x in data:
+                transformed_data.extend(self.add_past_fields(data=x,mode="test"))
+            # STEP 3: Convert the data to a MoiraiTorch object
+            self.batched_data = MoiraiTorch(transformed_data)
         
-        # # Convert the multivariate to univariate as per MOIRAI
-        # batched_data = []
-        # for p in rolling_data:
-        #     batched_data.append({
-        #         "start": torch.tensor([x["start"] for x in p], dtype=torch.float32),
-        #         "target": torch.tensor([x for y in p for x in y["target"]], dtype=torch.float32),
-        #         "observed_mask": torch.tensor([x for y in p for x in y["observed_mask"]], dtype=torch.bool),
-        #         "prediction_mask": torch.tensor([x for y in p for x in y["prediction_mask"]], dtype=torch.bool),
-        #         "time_id": torch.tensor([x for y in p for x in y["time_id"]], dtype=torch.int64),
-        #         "variate_id": torch.tensor([x for y in p for x in y["variate_id"]], dtype=torch.int64),
-        #         "patch_size": torch.tensor([x for y in p for x in y["patch_size"]], dtype=torch.int64)
-        #         })
-        
-        # for x in batched_data:
-        #     x["sample_id"] = torch.tensor(list(range(self.batch_size))*(x["target"].shape[0]//self.batch_size), dtype=torch.int32)
-        #     # unsqueeze(-1) adds a new dimension at the end
-        #     # we reshape it to (patch_size, -1)
-        #     x["target"] = x["target"].unsqueeze(-1).reshape(self.patch_size, -1)
-        #     x["observed_mask"] = x["observed_mask"].unsqueeze(-1).reshape(self.patch_size, -1)
-
-        # self.batched_data = MoiraiTorch(batched_data)
-    
-    # def prep_test_data(self, data):
-    #     """give just the time series data for testing
-    #     """
-    #     self.dataset = self.dataset[self.boundaries[1]:]
-    #     self.gen_test_data()
     
     def get_dataloader(self):
         """Returns the iterator for data batches for the dataset based on the mode
@@ -1134,7 +1046,7 @@ class MoiraiDataset(BaseDataset):
             torch.utils.data.DataLoader: Depends on the mode
         """
         if self.mode == "train":
-            self.prep_train_data()
+            self.prep_train_test_data(mode="train")
             if self.kwargs:
                 batch_size = self.kwargs.get("batch_size", self.batch_size)
                 num_workers = self.kwargs.get("num_workers", 0)
@@ -1145,7 +1057,8 @@ class MoiraiDataset(BaseDataset):
                                 num_workers=num_workers, pin_memory=pin_memory, persistent_workers=persistent_workers)
             return DataLoader(self.batched_data, batch_size=self.batch_size, shuffle=True)
         else:
-            return DataLoader(self.dataset, batch_size=self.batch_size, shuffle=False)
+            self.prep_train_test_data(mode="test")
+            return DataLoader(self.batched_data, batch_size=self.batch_size, shuffle=False)
     
     def __getitem__(self, idx):
         return super().__getitem__(idx)
