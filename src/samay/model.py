@@ -765,7 +765,18 @@ class MoiraiTSModel(Basemodel):
         return eval_results, trues, preds, histories
     
     def preprocess_inputs(self, inputs:dict):
-        """Preprocess the inputs to the model.
+        """Preprocess the inputs to the model - specifically adds the following fields:
+        +--------------------+--------------------------------------+-----------------------+----------------------------------+
+        | FIELD              | DESCRIPTION                          | TYPE                  | SHAPE                            |
+        +--------------------+--------------------------------------+-----------------------+----------------------------------+
+        | target             | Batched time series data             | torch.tensor[float]   | (batch_size, seq_len, max_patch) |
+        | observed_mask      | Binary mask for the context part     | torch.tensor[bool]    | (batch_size, seq_len, max_patch) |
+        | prediction_mask    | Binary mask for the prediction part  | torch.tensor[bool]    | (batch_size, seq_len)            |
+        | time_id            | Time index                           | torch.tensor[int]     | (batch_size, seq_len)            |
+        | sample_id          | Time index                           | torch.tensor[int]     | (batch_size, seq_len)            |
+        | variate_id         | Index indicating the variate         | torch.tensor[int]     | (batch_size, seq_len)            |
+        | patch_size         | Patch size the model should use      | torch.tensor[int]     | (batch_size, seq_len)            |
+        +--------------------+--------------------------------------+-----------------------+----------------------------------+
 
         Args:
             inputs (dict): Dictionary containing the input data.
@@ -855,67 +866,11 @@ class MoiraiTSModel(Basemodel):
         # Load the dataset
         dataloader = dataset.get_dataloader() # look at if mode=="train" case for more info
 
-        # Decide which weights are going to be updated
-        decay = set()
-        no_decay = set()
-
-        whitelist_params = (
-            LearnedProjection,
-            MultiInSizeLinear,
-            MultiOutSizeLinear,
-            nn.Linear,
-        )
-        blacklist_params = (
-            BinaryAttentionBias,
-            LearnedEmbedding,
-            RMSNorm,
-            nn.Embedding,
-            nn.LayerNorm,
-        )
-
-        for xn,x in FinetunedModel.named_modules():
-            for pn,p in x.named_parameters():
-                if not p.requires_grad:
-                    continue
-
-                fpn = f"{xn}.{pn}" if xn else pn
-                if pn.endswith("bias"):
-                    no_decay.add(fpn)
-                elif pn.endswith("weight") and isinstance(x, whitelist_params):
-                    decay.add(fpn)
-                elif pn.endswith("weight") and isinstance(x, blacklist_params):
-                    no_decay.add(fpn)
-
         # validate that we considered every parameter
         param_dict = {pn: p for pn, p in FinetunedModel.named_parameters() if p.requires_grad}
-        # print(f"Parameters: {param_dict.keys()}")
-        # inter_params = decay & no_decay
-        # union_params = decay | no_decay
-        # assert (
-        #     len(inter_params) == 0
-        # ), f"parameters {str(inter_params)} made it into both decay/no_decay sets!"
-        # assert (
-        #     len(param_dict.keys() - union_params) == 0
-        # ), f"parameters {str(param_dict.keys() - union_params)} were not separated into either decay/no_decay set!"
 
-        # optim_groups = [
-        #     {
-        #         "params": filter(
-        #             lambda p: p.requires_grad,
-        #             [param_dict[pn] for pn in sorted(list(decay))],
-        #         ),
-        #         "weight_decay": FinetunedModel.hparams.weight_decay,
-        #     },
-        #     {
-        #         "params": filter(
-        #             lambda p: p.requires_grad,
-        #             [param_dict[pn] for pn in sorted(list(no_decay))],
-        #         ),
-        #         "weight_decay": 0.0,
-        #     },
-        # ]
         optim_groups = [{"params":list(param_dict.values())}]
-        optimizer = torch.optim.Adam(optim_groups,
+        optimizer = torch.optim.AdamW(optim_groups,
                                      lr=lr,
                                      betas=(FinetunedModel.hparams.beta1, FinetunedModel.hparams.beta2),
                                      eps=1e-6)
@@ -951,36 +906,17 @@ class MoiraiTSModel(Basemodel):
                                                         }
                                                     )
                 loss = loss.requires_grad_()
-                # loss.required_grad = True
                 loss.backward()
                 optimizer.step()
                 # scheduler.step()
                 avg_loss += loss.item()
             avg_loss /= len(dataloader)
-            # print(f"Epoch {epoch}, Loss: {avg_loss}")
         print("Finetuning done")
-        
-        # Lightning Trainer version
-        # # Instantiate trainer (refer uni2ts/cli/conf/finetune/default.yaml)
-        # output_dir = "../../finetuning/moirai"
-        # logger = L.pytorch.loggers.TensorBoardLogger(save_dir=output_dir,name="logs")
-        # callbacks = [L.pytorch.callbacks.LearningRateMonitor(logging_interval="epoch"),
-        #             L.pytorch.callbacks.ModelCheckpoint(dirpath=f"{output_dir}/checkpoints",monitor="val_loss", save_top_k=1, mode="min",every_n_epochs=1,save_weights_only=True),
-        #             L.pytorch.callbacks.EarlyStopping(monitor="val_loss",patience=3,mode="min",min_delta=0.0,strict=False,verbose=True)
-        #             ]
-        # ft_trainer = L.Trainer(logger=logger, callbacks=callbacks, **kwargs["mod_torch"])
-        # L.seed_everything(kwargs["seed"] + ft_trainer.logger.version, workers=True)
 
-        # # Get train loader
-        # train_loader = dataset.get_dataloader()
-
-        # # finetune now
-        # ft_trainer.fit(FinetunedModel, train_dataloaders=train_loader)
-
-        # Update the model
-        self.model = FinetunedModel
-
-        return self.model
+        # # Update the model
+        # updated_state = dict(FinetunedModel.state_dict())
+        # self.model.module.load_state_dict(state_dict=updated_state, strict=False)
+        return FinetunedModel
         
 
 if __name__ == "__main__":
