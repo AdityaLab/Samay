@@ -29,5 +29,6 @@ class PackedNLLLoss(PackedDistributionLoss):
         observed_mask: Bool[torch.Tensor, "*batch seq_len #dim"],
         sample_id: Int[torch.Tensor, "*batch seq_len"],
         variate_id: Int[torch.Tensor, "*batch seq_len"],
-    ) -> Float[torch.Tensor, "*batch seq_len #dim"]:
-        return -pred.log_prob(target)
+    ):
+        l = -pred.log_prob(target)
+        return l

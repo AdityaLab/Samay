@@ -21,8 +21,8 @@ import torch
 from einops import reduce
 from jaxtyping import Bool, Float, Int
 
-from uni2ts.common.core import abstract_class_property
-from uni2ts.common.torch_util import safe_div
+from samay.models.uni2ts.common.core import abstract_class_property
+from samay.models.uni2ts.common.torch_util import safe_div
 
 from ._base import PackedPointLoss
 

@@ -21,7 +21,7 @@ from einops import einsum, rearrange
 from jaxtyping import Float, Int
 from torch import nn
 
-from uni2ts.common.torch_util import size_to_mask
+from samay.models.uni2ts.common.torch_util import size_to_mask
 
 
 def fs2idx(

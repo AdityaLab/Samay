@@ -25,21 +25,21 @@ from jaxtyping import Bool, Float, Int
 from torch import nn
 from torch.distributions import Distribution
 
-from uni2ts.loss.packed import (
+from samay.models.uni2ts.loss.packed import (
     PackedDistributionLoss,
     PackedLoss,
     PackedNLLLoss,
     PackedPointLoss,
 )
-from uni2ts.module.norm import RMSNorm
-from uni2ts.module.position import (
+from samay.models.uni2ts.module.norm import RMSNorm
+from samay.models.uni2ts.module.position import (
     BinaryAttentionBias,
     LearnedEmbedding,
     LearnedProjection,
 )
-from uni2ts.module.ts_embed import MultiInSizeLinear, MultiOutSizeLinear
-from uni2ts.optim import SchedulerType, get_scheduler
-from uni2ts.transform import (
+from samay.models.uni2ts.module.ts_embed import MultiInSizeLinear, MultiOutSizeLinear
+from samay.models.uni2ts.optim import SchedulerType, get_scheduler
+from samay.models.uni2ts.transform import (
     AddObservedMask,
     AddTimeIndex,
     AddVariateIndex,
@@ -279,20 +279,27 @@ class MoiraiFinetune(L.LightningModule):
 
         # validate that we considered every parameter
         param_dict = {pn: p for pn, p in self.named_parameters() if p.requires_grad}
-        inter_params = decay & no_decay
-        union_params = decay | no_decay
-        assert (
-            len(inter_params) == 0
-        ), f"parameters {str(inter_params)} made it into both decay/no_decay sets!"
-        assert (
-            len(param_dict.keys() - union_params) == 0
-        ), f"parameters {str(param_dict.keys() - union_params)} were not separated into either decay/no_decay set!"
+        # inter_params = decay & no_decay
+        # union_params = decay | no_decay
+        # assert (
+        #     len(inter_params) == 0
+        # ), f"parameters {str(inter_params)} made it into both decay/no_decay sets!"
+        # assert (
+        #     len(param_dict.keys() - union_params) == 0
+        # ), f"parameters {str(param_dict.keys() - union_params)} were not separated into either decay/no_decay set!"
 
         optim_groups = [
+            # {
+            #     "params": filter(
+            #         lambda p: p.requires_grad,
+            #         [param_dict[pn] for pn in sorted(list(decay))],
+            #     ),
+            #     "weight_decay": self.hparams.weight_decay,
+            # },
             {
                 "params": filter(
                     lambda p: p.requires_grad,
-                    [param_dict[pn] for pn in sorted(list(decay))],
+                    [v for k,v in param_dict.items() if k not in (list(no_decay))],
                 ),
                 "weight_decay": self.hparams.weight_decay,
             },

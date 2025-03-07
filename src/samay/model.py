@@ -1,17 +1,26 @@
-import glob
-import logging
-import os
-import sys
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
 import torch
-from chronos import ChronosPipeline
-from sklearn.metrics import mean_squared_error
-from torch.utils.data import DataLoader
+import yaml
+from samay.dataset import MoiraiDataset
 
-from .models.chronosforecasting.chronos.chronos import ChronosPipeline, ChronosConfig
+# from chronos import ChronosPipeline
+from samay.models.chronosforecasting.chronos.chronos import ChronosPipeline
+from samay.models.moment.momentfm.models.moment import MOMENTPipeline
+from samay.models.moment.momentfm.utils.masking import Masking
+from samay.models.timesfm import timesfm as tfm
+from samay.models.timesfm.timesfm import pytorch_patched_decoder as ppd
+from samay.models.uni2ts.model.moirai import MoiraiForecast, MoiraiModule
+from samay.models.uni2ts.model.moirai.finetune import MoiraiFinetune
+from samay.models.uni2ts.model.moirai_moe import MoiraiMoEForecast, MoiraiMoEModule
+from samay.moirai_utils import convert_module_kwargs
+from samay.utils import get_least_used_gpu
+from sklearn.metrics import mean_squared_error
+
+from .metric import *
+
+# For moirai finetuning
+from .models.chronosforecasting.chronos.chronos import ChronosConfig, ChronosPipeline
 from .models.lptm.model.backbone import LPTMPipeline
 from .models.moment.momentfm.models.moment import MOMENTPipeline
 from .models.moment.momentfm.utils.masking import Masking
@@ -21,7 +30,6 @@ from .models.timesfm.timesfm import pytorch_patched_decoder as ppd
 # from .models.uni2ts.model.moirai import MoiraiForecast, MoiraiModule
 # from .models.uni2ts.model.moirai_moe import MoiraiMoEForecast, MoiraiMoEModule
 from .utils import get_least_used_gpu, visualize
-from .metric import *
 
 
 class Basemodel:
@@ -71,8 +79,8 @@ class TimesfmModel(Basemodel):
         Returns:
             FinetuneModel: ppd.PatchedDecoderFinetuneModel, finetuned model
         """
-        lr = 1e-4 if 'lr' not in kwargs else kwargs['lr']
-        epoch = 5 if 'epoch' not in kwargs else kwargs['epoch']
+        lr = 1e-4 if "lr" not in kwargs else kwargs["lr"]
+        epoch = 5 if "epoch" not in kwargs else kwargs["epoch"]
 
         core_layer_tpl = self.model._model
         # Todo: whether add freq
@@ -91,14 +99,16 @@ class TimesfmModel(Basemodel):
                 inputs = dataset.preprocess(inputs)
                 inputs = {k: v.to(self.device) for k, v in inputs.items()}
                 optimizer.zero_grad()
-                outputs = FinetunedModel.compute_predictions(inputs, train_horizon_len=self.config["horizon_len"]) # b, n, seq_len, 1+quantiles
+                outputs = FinetunedModel.compute_predictions(
+                    inputs, train_horizon_len=self.config["horizon_len"]
+                )  # b, n, seq_len, 1+quantiles
                 loss = FinetunedModel.compute_loss(outputs, inputs)
                 loss.backward()
                 optimizer.step()
                 avg_loss += loss.item()
             avg_loss /= len(dataloader)
             print(f"Epoch {epoch}, Loss: {avg_loss}")
-        
+
         self.model._model = FinetunedModel.core_layer
         return self.model
 
@@ -113,7 +123,7 @@ class TimesfmModel(Basemodel):
                 (# inputs,  # forecast horizon, 1 + # quantiles).
         """
         return self.model.forecast(input)
-    
+
     def plot(self, dataset, **kwargs):
         dataloader = dataset.get_data_loader()
         trues, preds, histories, losses = [], [], [], []
@@ -126,7 +136,7 @@ class TimesfmModel(Basemodel):
                 actual_ts = np.squeeze(actual_ts, axis=0)
 
                 output, _ = self.model.forecast(input_ts)
-                output = output[:, 0:actual_ts.shape[1]]
+                output = output[:, 0 : actual_ts.shape[1]]
 
                 loss = np.mean((output - actual_ts) ** 2)
                 losses.append(loss.item())
@@ -136,14 +146,25 @@ class TimesfmModel(Basemodel):
 
         losses = np.array(losses)
         average_loss = np.average(losses)
-        trues = np.concatenate(trues, axis=0).reshape(-1, dataset.num_ts, trues[-1].shape[-1])
-        preds = np.concatenate(preds, axis=0).reshape(-1, dataset.num_ts, preds[-1].shape[-1])
-        histories = np.concatenate(histories, axis=0).reshape(-1, dataset.num_ts, histories[-1].shape[-1])
+        trues = np.concatenate(trues, axis=0).reshape(
+            -1, dataset.num_ts, trues[-1].shape[-1]
+        )
+        preds = np.concatenate(preds, axis=0).reshape(
+            -1, dataset.num_ts, preds[-1].shape[-1]
+        )
+        histories = np.concatenate(histories, axis=0).reshape(
+            -1, dataset.num_ts, histories[-1].shape[-1]
+        )
 
-        visualize(task_name="forecasting", trues=trues, preds=preds, history=histories, **kwargs)
+        visualize(
+            task_name="forecasting",
+            trues=trues,
+            preds=preds,
+            history=histories,
+            **kwargs,
+        )
 
         # return average_loss, trues, preds, histories
-
 
     def evaluate(self, dataset, **kwargs):
         dataloader = dataset.get_data_loader()
@@ -158,8 +179,8 @@ class TimesfmModel(Basemodel):
                 actual_ts = np.squeeze(actual_ts, axis=0)
 
                 output, quantile_output = self.model.forecast(input_ts)
-                output = output[:, 0:actual_ts.shape[1]]
-                quantile_output = quantile_output[:, 0:actual_ts.shape[1]]
+                output = output[:, 0 : actual_ts.shape[1]]
+                quantile_output = quantile_output[:, 0 : actual_ts.shape[1]]
 
                 loss = np.mean((output - actual_ts) ** 2)
                 losses.append(loss.item())
@@ -170,10 +191,18 @@ class TimesfmModel(Basemodel):
 
         losses = np.array(losses)
         average_loss = np.average(losses)
-        trues = np.concatenate(trues, axis=0).reshape(-1, dataset.num_ts, trues[-1].shape[-1])
-        preds = np.concatenate(preds, axis=0).reshape(-1, dataset.num_ts, preds[-1].shape[-1])
-        histories = np.concatenate(histories, axis=0).reshape(-1, dataset.num_ts, histories[-1].shape[-1])
-        quantiles = np.concatenate(quantiles, axis=0).reshape(quantiles[-1].shape[-1], -1, dataset.num_ts, quantiles[-1].shape[-2])
+        trues = np.concatenate(trues, axis=0).reshape(
+            -1, dataset.num_ts, trues[-1].shape[-1]
+        )
+        preds = np.concatenate(preds, axis=0).reshape(
+            -1, dataset.num_ts, preds[-1].shape[-1]
+        )
+        histories = np.concatenate(histories, axis=0).reshape(
+            -1, dataset.num_ts, histories[-1].shape[-1]
+        )
+        quantiles = np.concatenate(quantiles, axis=0).reshape(
+            quantiles[-1].shape[-1], -1, dataset.num_ts, quantiles[-1].shape[-2]
+        )
 
         mse = MSE(trues, preds)
         mae = MAE(trues, preds)
@@ -200,7 +229,6 @@ class TimesfmModel(Basemodel):
             "mwsq": mwsq,
             "crps": crps,
         }
-        
 
 
 class ChronosModel(Basemodel):
@@ -209,13 +237,14 @@ class ChronosModel(Basemodel):
         if repo:
             print("Loading Chronos model from Huggingface repository")
             try:
-                self.pipeline = ChronosPipeline.from_pretrained(repo, device_map=self.device)
+                self.pipeline = ChronosPipeline.from_pretrained(
+                    repo, device_map=self.device
+                )
             except:
                 raise ValueError(f"Repository {repo} not found")
         else:
             print("Initializing a new Chronos model without pre-trained weights")
             self.pipeline = ChronosPipeline(config=ChronosConfig(**config))
-
 
     def finetune(self, dataset, **kwargs):
         # Todo: finetune model
@@ -224,22 +253,26 @@ class ChronosModel(Basemodel):
         finetune_model.to(self.device)
         finetune_model.train()
         optimizer = torch.optim.AdamW(finetune_model.parameters(), lr=1e-4)
-        
+
         avg_loss = 0
 
         for epoch in range(5):
             for i, data in enumerate(dataloader):
                 input_ids = data["input_ids"].to(self.device)
                 ids_shape = input_ids.shape
-                input_ids = input_ids.reshape(ids_shape[0]*ids_shape[1], ids_shape[2])
+                input_ids = input_ids.reshape(ids_shape[0] * ids_shape[1], ids_shape[2])
                 attention_mask = data["attention_mask"].to(self.device)
                 mask_shape = attention_mask.shape
-                attention_mask = attention_mask.reshape(mask_shape[0]*mask_shape[1], mask_shape[2])
+                attention_mask = attention_mask.reshape(
+                    mask_shape[0] * mask_shape[1], mask_shape[2]
+                )
                 labels = data["labels"].to(self.device)
                 label_shape = labels.shape
-                labels = labels.reshape(label_shape[0]*label_shape[1], label_shape[2])
+                labels = labels.reshape(label_shape[0] * label_shape[1], label_shape[2])
                 optimizer.zero_grad()
-                output = finetune_model(input_ids, attention_mask=attention_mask, labels=labels)
+                output = finetune_model(
+                    input_ids, attention_mask=attention_mask, labels=labels
+                )
                 loss = output.loss
                 loss.backward()
                 optimizer.step()
@@ -248,7 +281,6 @@ class ChronosModel(Basemodel):
             print(f"Epoch {epoch}, Loss: {avg_loss}")
 
         finetune_model.eval()
-                
 
     def plot(self, dataset, horizon_len, quantile_levels, **kwargs):
         # Todo: forecast
@@ -257,8 +289,8 @@ class ChronosModel(Basemodel):
         for i, data in enumerate(dataloader):
             input_seq = data["input_seq"]
             forecast_seq = data["forecast_seq"]
-            shape = input_seq.shape 
-            input_seq = input_seq.reshape(shape[0]*shape[1], shape[2])
+            shape = input_seq.shape
+            input_seq = input_seq.reshape(shape[0] * shape[1], shape[2])
             input_seq = torch.tensor(input_seq)
             quantiles, mean = self.pipeline.predict_quantiles(
                 context=input_seq,
@@ -266,17 +298,24 @@ class ChronosModel(Basemodel):
                 quantile_levels=quantile_levels,
             )
             trues.append(forecast_seq.detach().cpu().numpy())
-            mean = mean.reshape(forecast_seq.shape[0], forecast_seq.shape[1], forecast_seq.shape[2])
+            mean = mean.reshape(
+                forecast_seq.shape[0], forecast_seq.shape[1], forecast_seq.shape[2]
+            )
             preds.append(mean.detach().cpu().numpy())
             input_seq = input_seq.reshape(shape[0], shape[1], shape[2])
             histories.append(input_seq.detach().cpu().numpy())
-        
+
         trues = np.concatenate(trues, axis=0)
         preds = np.concatenate(preds, axis=0)
         histories = np.concatenate(histories, axis=0)
 
-        visualize(task_name="forecasting", trues=trues, preds=preds, history=histories, **kwargs)
-
+        visualize(
+            task_name="forecasting",
+            trues=trues,
+            preds=preds,
+            history=histories,
+            **kwargs,
+        )
 
     def evaluate(self, dataset, horizon_len, quantile_levels, **kwargs):
         dataloader = dataset.get_data_loader()
@@ -284,8 +323,8 @@ class ChronosModel(Basemodel):
         for i, data in enumerate(dataloader):
             input_seq = data["input_seq"]
             forecast_seq = data["forecast_seq"]
-            shape = input_seq.shape 
-            input_seq = input_seq.reshape(shape[0]*shape[1], shape[2])
+            shape = input_seq.shape
+            input_seq = input_seq.reshape(shape[0] * shape[1], shape[2])
             input_seq = torch.tensor(input_seq)
             quantiles, mean = self.pipeline.predict_quantiles(
                 context=input_seq,
@@ -293,13 +332,20 @@ class ChronosModel(Basemodel):
                 quantile_levels=quantile_levels,
             )
             trues.append(forecast_seq.detach().cpu().numpy())
-            mean = mean.reshape(forecast_seq.shape[0], forecast_seq.shape[1], forecast_seq.shape[2])
+            mean = mean.reshape(
+                forecast_seq.shape[0], forecast_seq.shape[1], forecast_seq.shape[2]
+            )
             preds.append(mean.detach().cpu().numpy())
-            quantiles = quantiles.reshape(quantiles.shape[-1], forecast_seq.shape[0], forecast_seq.shape[1], forecast_seq.shape[2])
+            quantiles = quantiles.reshape(
+                quantiles.shape[-1],
+                forecast_seq.shape[0],
+                forecast_seq.shape[1],
+                forecast_seq.shape[2],
+            )
             quantile_forecasts.append(quantiles.detach().cpu().numpy())
             input_seq = input_seq.reshape(shape[0], shape[1], shape[2])
             histories.append(input_seq.detach().cpu().numpy())
-        
+
         trues = np.concatenate(trues, axis=0)
         preds = np.concatenate(preds, axis=0)
         histories = np.concatenate(histories, axis=0)
@@ -577,22 +623,21 @@ class MomentModel(Basemodel):
         if not repo:
             # raise ValueError("Moment model requires a repository")
             print("Initializing a new MOMENT model without pre-trained weights")
-            base_config = json.load(open("/nethome/sli999/TSFMProject/config/moment_base.json", "r"))
-            self.model = MOMENTPipeline(config=base_config , model_kwargs=self.config)
+            base_config = json.load(
+                open("/nethome/sli999/TSFMProject/config/moment_base.json", "r")
+            )
+            self.model = MOMENTPipeline(config=base_config, model_kwargs=self.config)
         else:
             print(f"Loading MOMENT model from {repo}")
-            self.model = MOMENTPipeline.from_pretrained(
-                repo, 
-                model_kwargs=self.config
-            )
+            self.model = MOMENTPipeline.from_pretrained(repo, model_kwargs=self.config)
         self.model.init()
 
     def finetune(self, dataset, task_name="forecasting", **kwargs):
         # arguments
-        max_lr = 1e-4 if 'lr' not in kwargs else kwargs['lr']
-        max_epoch = 5 if 'epoch' not in kwargs else kwargs['epoch']
-        max_norm = 5.0 if 'norm' not in kwargs else kwargs['norm']
-        mask_ratio = 0.25 if 'mask_ratio' not in kwargs else kwargs['mask_ratio']
+        max_lr = 1e-4 if "lr" not in kwargs else kwargs["lr"]
+        max_epoch = 5 if "epoch" not in kwargs else kwargs["epoch"]
+        max_norm = 5.0 if "norm" not in kwargs else kwargs["norm"]
+        mask_ratio = 0.25 if "mask_ratio" not in kwargs else kwargs["mask_ratio"]
 
         if task_name == "imputation" or task_name == "detection":
             mask_generator = Masking(mask_ratio=mask_ratio)
@@ -606,7 +651,9 @@ class MomentModel(Basemodel):
         scaler = torch.amp.GradScaler()
 
         total_steps = len(dataloader) * max_epoch
-        scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=max_lr, total_steps=total_steps, pct_start=0.3)
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer, max_lr=max_lr, total_steps=total_steps, pct_start=0.3
+        )
         self.model.to(self.device)
         self.model.train()
 
@@ -632,8 +679,16 @@ class MomentModel(Basemodel):
                     timeseries = timeseries.reshape(-1, 1, timeseries.shape[-1])
                     input_mask = input_mask.to(self.device).long()
                     input_mask = input_mask.repeat_interleave(n_channels, axis=0)
-                    mask = mask_generator.generate_mask(x=timeseries, input_mask=input_mask).to(self.device).long()
-                    output = self.model(x_enc=timeseries, input_mask=input_mask, mask=mask)
+                    mask = (
+                        mask_generator.generate_mask(
+                            x=timeseries, input_mask=input_mask
+                        )
+                        .to(self.device)
+                        .long()
+                    )
+                    output = self.model(
+                        x_enc=timeseries, input_mask=input_mask, mask=mask
+                    )
                     # with torch.amp.autocast(device_type='cuda'):
                     recon_loss = criterion(output.reconstruction, timeseries)
                     observed_mask = input_mask * (1 - mask)
@@ -644,14 +699,24 @@ class MomentModel(Basemodel):
                     timeseries, input_mask, label = data
                     n_channels = timeseries.shape[1]
                     seq_len = timeseries.shape[-1]
-                    timeseries = timeseries.reshape(-1, 1, seq_len).float().to(self.device)
+                    timeseries = (
+                        timeseries.reshape(-1, 1, seq_len).float().to(self.device)
+                    )
                     input_mask = input_mask.to(self.device).long()
                     input_mask = input_mask.repeat_interleave(n_channels, axis=0)
-                    mask = mask_generator.generate_mask(x=timeseries, input_mask=input_mask).to(self.device).long()
-                    output = self.model(x_enc=timeseries, input_mask=input_mask, mask=mask)
+                    mask = (
+                        mask_generator.generate_mask(
+                            x=timeseries, input_mask=input_mask
+                        )
+                        .to(self.device)
+                        .long()
+                    )
+                    output = self.model(
+                        x_enc=timeseries, input_mask=input_mask, mask=mask
+                    )
                     # with torch.amp.autocast(device_type='cuda'):
                     loss = criterion(output.reconstruction, timeseries)
-                    
+
                 elif task_name == "classification":
                     timeseries, input_mask, label = data
                     timeseries = timeseries.to(self.device).float()
@@ -680,7 +745,7 @@ class MomentModel(Basemodel):
             scheduler.step()
 
         return self.model
-    
+
     def plot(self, dataset, task_name="forecasting"):
         dataloader = dataset.get_data_loader()
         criterion = torch.nn.MSELoss()
@@ -691,7 +756,7 @@ class MomentModel(Basemodel):
             with torch.no_grad():
                 for i, data in enumerate(dataloader):
                     # unpack the data
-                    timeseries, input_mask, forecast  = data
+                    timeseries, input_mask, forecast = data
                     # Move the data to the GPU
                     timeseries = timeseries.float().to(self.device)
                     input_mask = input_mask.to(self.device)
@@ -710,10 +775,12 @@ class MomentModel(Basemodel):
             preds = np.concatenate(preds, axis=0)
             histories = np.concatenate(histories, axis=0)
 
-            visualize(task_name="forecasting", trues=trues, preds=preds, history=histories)
+            visualize(
+                task_name="forecasting", trues=trues, preds=preds, history=histories
+            )
 
             # return average_loss, trues, preds, histories
-        
+
         elif task_name == "imputation":
             trues, preds, masks = [], [], []
             mask_generator = Masking(mask_ratio=0.25)
@@ -730,9 +797,19 @@ class MomentModel(Basemodel):
                     input_mask = input_mask.to(self.device).long()
                     input_mask = input_mask.repeat_interleave(n_channels, axis=0)
                     # print(timeseries.shape, input_mask.shape)
-                    mask = mask_generator.generate_mask(x=timeseries, input_mask=input_mask).to(self.device).long()
-                    output = self.model(x_enc=timeseries, input_mask=input_mask, mask=mask)
-                    reconstruction = output.reconstruction.reshape(-1, n_channels, timeseries.shape[-1])
+                    mask = (
+                        mask_generator.generate_mask(
+                            x=timeseries, input_mask=input_mask
+                        )
+                        .to(self.device)
+                        .long()
+                    )
+                    output = self.model(
+                        x_enc=timeseries, input_mask=input_mask, mask=mask
+                    )
+                    reconstruction = output.reconstruction.reshape(
+                        -1, n_channels, timeseries.shape[-1]
+                    )
                     mask = mask.reshape(-1, n_channels, timeseries.shape[-1])
                     preds.append(reconstruction.detach().cpu().numpy())
                     masks.append(mask.detach().cpu().numpy())
@@ -744,7 +821,7 @@ class MomentModel(Basemodel):
             visualize(task_name="imputation", trues=trues, preds=preds, masks=masks)
 
             # return trues, preds, masks
-        
+
         elif task_name == "detection":
             trues, preds, labels = [], [], []
             with torch.no_grad():
@@ -767,7 +844,7 @@ class MomentModel(Basemodel):
             visualize(task_name="detection", trues=trues, preds=preds, labels=labels)
 
             # return trues, preds, labels
-        
+
         # elif task_name == "classification":
         #     accuracy = 0
         #     total = 0
@@ -803,7 +880,7 @@ class MomentModel(Basemodel):
             with torch.no_grad():
                 for i, data in enumerate(dataloader):
                     # unpack the data
-                    timeseries, input_mask, forecast  = data
+                    timeseries, input_mask, forecast = data
                     # Move the data to the GPU
                     timeseries = timeseries.float().to(self.device)
                     input_mask = input_mask.to(self.device)
@@ -842,7 +919,7 @@ class MomentModel(Basemodel):
                 "msis": msis,
                 "nd": nd,
             }
-        
+
         elif task_name == "classification":
             accuracy = 0
             total = 0
@@ -879,6 +956,7 @@ class MoiraiTSModel(Basemodel):
         **kwargs,
     ):
         super().__init__(config=config, repo=repo)
+        # config.get(<key>, <default_value> if key not found)
         self.horizon_len = config.get("horizon_len", 32)
         self.context_len = config.get("context_len", 128)
         self.patch_size = config.get("patch_size", 16)
@@ -891,7 +969,7 @@ class MoiraiTSModel(Basemodel):
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        if model_type == "moirai":
+        if model_type == "moirai":  # standard moirai
             if self.repo is None:
                 self.repo = f"Salesforce/moirai-1.1-R-{model_size}"
             self.model = MoiraiForecast(
@@ -904,7 +982,7 @@ class MoiraiTSModel(Basemodel):
                 feat_dynamic_real_dim=self.feat_dynamic_real_dim,
                 past_feat_dynamic_real_dim=self.past_feat_dynamic_real_dim,
             )
-        elif model_type == "moirai-moe":
+        elif model_type == "moirai-moe":  # moirai with Mixture of Experts
             if self.repo is None:
                 self.repo = f"Salesforce/moirai-moe-1.0-R-{model_size}"
             self.model = MoiraiMoEForecast(
@@ -919,10 +997,26 @@ class MoiraiTSModel(Basemodel):
             )
         self.model.to(self.device)
 
-    def evaluate(self, dataset, metrics=["MSE"], **kwargs):
+    def evaluate(self, dataset: MoiraiDataset, metrics=["MSE"], **kwargs):
+        """For a given test dataset, we evaluate the model using the given metrics.
+
+        Args:
+            dataset (MoiraiDataset): Dataset to evaluate the model on.
+            metrics (list, optional): Metrics you want to evaluate the model on. Defaults to ["MSE"].
+
+        Raises:
+            ValueError: Any metric other than "MSE" or "MASE is not supported.
+
+        Returns:
+            dict: Evaluation results for each column (variate).
+            dict: True values for each column (variate).
+            dict: Predictions for each column (variate).
+            dict: Histories for each column (variate).
+        """
         predictor = self.model.create_predictor(batch_size=self.batch_size)
         forecast = predictor.predict(dataset.dataset.input)
 
+        # Iterators for input, label and forecast
         input_it = iter(dataset.dataset.input)
         label_it = iter(dataset.dataset.label)
         forecast_it = iter(forecast)
@@ -932,7 +1026,8 @@ class MoiraiTSModel(Basemodel):
         histories = {}
         eval_windows = []
 
-        with torch.no_grad():
+        with torch.no_grad():  # No need to compute gradients
+            # Iterate over each window
             for input, label, forecast in zip(input_it, label_it, forecast_it):
                 true_values = np.array(label["target"])
                 past_values = np.array(input["target"])
@@ -943,12 +1038,14 @@ class MoiraiTSModel(Basemodel):
                 for metric in metrics:
                     if metric == "MSE":
                         eval.append(mean_squared_error(true_values, pred_values))
+
+                    # MASE = current model's MAE / naive model's MAE
                     elif metric == "MASE":
                         forecast_error = np.mean(np.abs(true_values - pred_values))
                         naive_error = np.mean(
                             np.abs(true_values[1:] - true_values[:-1])
                         )
-                        if naive_error == 0:
+                        if naive_error == 0:  # Avoid division by zero
                             eval.append(np.inf)
                         else:
                             eval.append(forecast_error / naive_error)
@@ -956,6 +1053,7 @@ class MoiraiTSModel(Basemodel):
                         raise ValueError(f"Unsupported metric: {metric}")
                 eval_windows.append(eval)
 
+                # Update history, true values and predictions
                 if length not in histories.keys():
                     histories[length] = []
                     trues[length] = []
@@ -969,11 +1067,207 @@ class MoiraiTSModel(Basemodel):
         for i in range(len(metrics)):
             eval_results[metrics[i]] = eval_windows[i]
 
+        # Convert to numpy arrays
         histories = [np.array(histories[key]) for key in histories.keys()]
         trues = [np.array(trues[key]) for key in trues.keys()]
         preds = [np.array(preds[key]) for key in preds.keys()]
 
         return eval_results, trues, preds, histories
+
+    def preprocess_inputs(self, inputs: dict):
+        """Preprocess the inputs to the model - specifically adds the following fields:
+        +--------------------+--------------------------------------+-----------------------+----------------------------------+
+        | FIELD              | DESCRIPTION                          | TYPE                  | SHAPE                            |
+        +--------------------+--------------------------------------+-----------------------+----------------------------------+
+        | target             | Batched time series data             | torch.tensor[float]   | (batch_size, seq_len, max_patch) |
+        | observed_mask      | Binary mask for the context part     | torch.tensor[bool]    | (batch_size, seq_len, max_patch) |
+        | prediction_mask    | Binary mask for the prediction part  | torch.tensor[bool]    | (batch_size, seq_len)            |
+        | time_id            | Time index                           | torch.tensor[int]     | (batch_size, seq_len)            |
+        | sample_id          | Time index                           | torch.tensor[int]     | (batch_size, seq_len)            |
+        | variate_id         | Index indicating the variate         | torch.tensor[int]     | (batch_size, seq_len)            |
+        | patch_size         | Patch size the model should use      | torch.tensor[int]     | (batch_size, seq_len)            |
+        +--------------------+--------------------------------------+-----------------------+----------------------------------+
+
+        Args:
+            inputs (dict): Dictionary containing the input data.
+
+        Returns:
+            dict: Preprocessed input data.
+        """
+        (target, observed_mask, sample_id, time_id, variate_id, prediction_mask) = (
+            self.model._convert(
+                patch_size=self.patch_size,
+                past_target=inputs["past_target"],
+                past_observed_target=inputs["past_observed_target"],
+                past_is_pad=inputs["past_is_pad"],
+            )
+        )
+        inputs["target"] = target
+        inputs["observed_mask"] = observed_mask
+        inputs["sample_id"] = sample_id
+        inputs["time_id"] = time_id
+        inputs["variate_id"] = variate_id
+        inputs["prediction_mask"] = prediction_mask
+        inputs["patch_size"] = torch.tensor(
+            np.full(shape=sample_id.shape, fill_value=self.patch_size, dtype=np.int64),
+            dtype=torch.int64,
+        )
+
+        return inputs
+
+    def finetune(self, dataset, **kwargs):
+        """Finetune the model on the given dataset.
+
+        Args:
+            dataset (MoiraiDataset): Dataset containing the input data and relevant functions like dataloaders etc.
+
+        Returns:
+            _type_: _description_
+        """
+        # Parameters
+        model_config = (
+            "../src/samay/models/uni2ts/cli/conf/finetune/model/moirai_small.yaml"
+        )
+        with open(model_config, "r") as file:
+            fin_model_config = yaml.safe_load(file)
+
+        # lr = 1e-4 if "lr" not in fin_model_config else float(fin_model_config["lr"])
+        lr = 1e-3
+        self.batch_size = (
+            kwargs["batch_size"] if "batch_size" in kwargs else self.batch_size
+        )
+        epochs = 20
+        assert epochs <= kwargs["max_epochs"], (
+            "epochs should be less than or equal to max_epochs"
+        )
+
+        # Number of batches per epoch required for calculating the number of training steps
+        num_batches = len(dataset.dataset) // self.batch_size
+        if (
+            "num_batches_per_epoch" in kwargs.keys()
+        ):  # If num_batches_per_epoch is provided
+            num_batches_per_epoch = kwargs["num_batches_per_epoch"]
+            epochs = min(epochs, num_batches // num_batches_per_epoch)
+        else:
+            num_batches_per_epoch = num_batches // epochs
+
+        training_steps = num_batches_per_epoch * kwargs["max_epochs"]
+        module_args = convert_module_kwargs(
+            fin_model_config["module_kwargs"]
+        )  # remove _target_ fields
+        self.patch_size = self.model.module.in_proj.in_features_ls[
+            0
+        ]  # update patch_size
+
+        # Trainer configuration (from uni2ts/cli/train.py)
+        # mod_torch is the trainer configuration without _target_ fields or any key
+        # whose value is neither a list or dictionary
+        if kwargs["tf32"]:
+            assert kwargs["mod_torch"]["precision"] == 32, (
+                "Precision should be 32 for tf32"
+            )
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+
+        # For now, self.model.module.patch_sizes i just [16] from the config file
+        # But in finetune, we are using patch_sizes as [8,16,32,64,128]
+        # So, we need to update the patch_sizes in the model
+        self.model.module.patch_sizes = list(module_args["patch_sizes"])
+
+        # Load the model
+        FinetunedModel = MoiraiFinetune(
+            min_patches=fin_model_config["min_patches"],
+            min_mask_ratio=fin_model_config["min_mask_ratio"],
+            max_mask_ratio=fin_model_config["max_mask_ratio"],
+            max_dim=fin_model_config["max_dim"],
+            num_training_steps=training_steps,
+            num_warmup_steps=fin_model_config["num_warmup_steps"],
+            module_kwargs=module_args,
+            beta1=fin_model_config["beta1"],
+            beta2=fin_model_config["beta2"],
+            val_metric=fin_model_config["val_metric"],
+            weight_decay=fin_model_config["weight_decay"],
+        )
+
+        # Pytorch version
+        FinetunedModel.to(self.device)
+        FinetunedModel.train()  # Set model to training mode
+
+        # Freeze the transformer layers
+        # First we finetune the whole model
+
+        # Load the dataset
+        dataloader = (
+            dataset.get_dataloader()
+        )  # look at if mode=="train" case for more info
+
+        # validate that we considered every parameter
+        param_dict = {
+            pn: p for pn, p in FinetunedModel.named_parameters() if p.requires_grad
+        }
+
+        optim_groups = [{"params": list(param_dict.values())}]
+        optimizer = torch.optim.AdamW(
+            optim_groups,
+            lr=lr,
+            betas=(FinetunedModel.hparams.beta1, FinetunedModel.hparams.beta2),
+            eps=1e-6,
+        )
+
+        # scheduler = get_scheduler(
+        #     SchedulerType.COSINE_WITH_RESTARTS,
+        #     optimizer,
+        #     num_warmup_steps=FinetunedModel.hparams.num_warmup_steps,
+        #     num_training_steps=FinetunedModel.hparams.num_training_steps,
+        # )
+
+        avg_loss = 0
+        for epoch in range(epochs):
+            for i, (inputs) in enumerate(dataloader):  # each batch is processed
+                inputs = self.preprocess_inputs(
+                    inputs
+                )  # patchify and other fields added
+                for k, v in inputs.items():
+                    if isinstance(v, torch.Tensor):
+                        inputs[k] = v.to(self.device)
+                        if v.dtype == torch.float32 or v.dtype == torch.float64:
+                            inputs[k] = inputs[k].requires_grad_()
+                optimizer.zero_grad()  # reset gradients
+                # distribution of predictions
+                outputs = FinetunedModel.forward(
+                    target=inputs["target"],
+                    observed_mask=inputs["observed_mask"],
+                    sample_id=inputs["sample_id"],
+                    time_id=inputs["time_id"],
+                    variate_id=inputs["variate_id"],
+                    prediction_mask=inputs["prediction_mask"],
+                    patch_size=inputs["patch_size"],
+                )
+                loss = FinetunedModel.hparams.loss_func(
+                    pred=outputs,
+                    **{
+                        field: inputs[field]
+                        for field in [
+                            "target",
+                            "prediction_mask",
+                            "observed_mask",
+                            "sample_id",
+                            "variate_id",
+                        ]
+                    },
+                )
+                loss = loss.requires_grad_()
+                loss.backward()
+                optimizer.step()
+                # scheduler.step()
+                avg_loss += loss.item()
+            avg_loss /= len(dataloader)
+        print("Finetuning done")
+
+        # # Update the model
+        # updated_state = dict(FinetunedModel.state_dict())
+        # self.model.module.load_state_dict(state_dict=updated_state, strict=False)
+        return FinetunedModel
 
 
 if __name__ == "__main__":
