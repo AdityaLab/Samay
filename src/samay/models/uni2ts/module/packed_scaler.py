@@ -20,7 +20,7 @@ from einops import reduce
 from jaxtyping import Bool, Float, Int
 from torch import nn
 
-from uni2ts.common.torch_util import safe_div
+from samay.models.uni2ts.common.torch_util import safe_div
 
 
 class PackedScaler(nn.Module):
