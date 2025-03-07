@@ -1,132 +1,32 @@
-import os
-from pathlib import Path
-from typing import List, Union
-
 import numpy as np
 import pandas as pd
 import torch
 from datasets import load_dataset
-from gluonts.dataset.arrow import ArrowWriter
-from sklearn.preprocessing import StandardScaler
-from torch.utils.data import DataLoader, Dataset
-
-from .models.timesfm.timesfm.data_loader import TimeSeriesdata
-from .utils import get_multivariate_data
-from .moirai_utils import (MoiraiTorch,
-    AsNumpy,
-    AddObservedValues,
-    ArrExpandDims,
-    CausalMeanNaNFix,
-    custom_train_instance_split
-)
-from pandas._libs.tslibs.period import Period
-
 from gluonts.dataset.pandas import PandasDataset
 from gluonts.dataset.split import split as ts_split
-from gluonts.dataset.loader import TrainDataLoader, ValidationDataLoader, InferenceDataLoader
 from gluonts.transform import (
     AddObservedValuesIndicator,
     AsNumpyArray,
-    CausalMeanValueImputation,
-    ExpandDimArray,
-    TestSplitSampler,
-    Transformation,
 )
-
+from pandas._libs.tslibs.period import Period
+from sklearn.preprocessing import StandardScaler
+from torch.utils.data import DataLoader
 from torchvision import transforms
 
-# for full length history/ context data wrapping
-# class TimeSeriesDataset(Dataset):
-#     """
-#     A PyTorch Dataset for sliding window extraction from time series data.
-#     """
-#     def __init__(self, data, boundary1, boundary2, context_len, horizon_len, stride=-1):
-#         """
-#         Initialize the dataset with sliding window logic.
-
-#         Args:
-#             data (pd.DataFrame): The input time series data.
-#             context_len (int): Length of the context window.
-#             horizon_len (int): Length of the forecast horizon.
-#             stride (int): Step size for sliding the window.
-#         """
-#         self.data = data
-#         self.context_len = context_len
-#         self.horizon_len = horizon_len
-#         self.total_len = context_len + horizon_len
-#         self.stride = stride
-
-#         if(self.stride == -1):
-#             self.stride = self.horizon_len
-
-#         # Generate start indices for sliding windows
-#         self.indices = [
-#             start
-#             for start in range(boundary1, boundary2 - self.total_len + 1, self.stride)
-#         ]
-
-#     def __len__(self):
-#         return len(self.indices)
-
-#     def __getitem__(self, idx):
-#         start = self.indices[idx]
-#         window = self.data.iloc[ : start + self.total_len]
-
-#         # Extract context and actuals, and convert to Torch tensors
-#         context = torch.tensor(window.iloc[: -self.horizon_len].to_numpy().transpose(), dtype=torch.float32)
-#         actual = torch.tensor(window.iloc[-self.horizon_len :].to_numpy().transpose(), dtype=torch.float32)
-
-#         # # Return the input as a list of tensors (one for each column)
-#         # input_list = [context[i] for i in range(context.shape[0])]
-
-#         return context, actual
-
-# for fixed length history/ context data wrapping
-class TimeSeriesDataset(Dataset):
-    """
-    A PyTorch Dataset for sliding window extraction from time series data.
-    """
-    def __init__(self, data, context_len, horizon_len, stride=-1):
-        """
-        Initialize the dataset with sliding window logic.
-
-        Args:
-            data (pd.DataFrame): The input time series data.
-            context_len (int): Length of the context window.
-            horizon_len (int): Length of the forecast horizon.
-            stride (int): Step size for sliding the window.
-        """
-        self.data = data
-        self.context_len = context_len
-        self.horizon_len = horizon_len
-        self.total_len = context_len + horizon_len
-        self.stride = stride
-
-        if(self.stride == -1):
-            self.stride = self.horizon_len
-
-        # Generate start indices for sliding windows
-        self.indices = [
-            start
-            for start in range(0, len(data) - self.total_len + 1, self.stride)
-        ]
-
-    def __len__(self):
-        return len(self.indices)
-
-    def __getitem__(self, idx):
-        start = self.indices[idx]
-        window = self.data.iloc[start : start + self.total_len]
-
-        # Extract context and actuals, and convert to Torch tensors
-        context = torch.tensor(window.iloc[: self.context_len].to_numpy().transpose(), dtype=torch.float32)
-        actual = torch.tensor(window.iloc[self.context_len :].to_numpy().transpose(), dtype=torch.float32)
-        start_date = window.index[0]
-
-        # # Return the input as a list of tensors (one for each column)
-        # input_list = [context[i] for i in range(context.shape[0])]
-
-        return context, actual
+from .models.chronosforecasting.chronos.chronos import (
+    ChronosConfig,
+    MeanScaleUniformBins,
+)
+from .models.timesfm.timesfm.data_loader import TimeSeriesdata
+from .moirai_utils import (
+    AddObservedValues,
+    ArrExpandDims,
+    AsNumpy,
+    CausalMeanNaNFix,
+    MoiraiTorch,
+    custom_train_instance_split,
+)
+from .utils import get_multivariate_data
 
 
 # function for specific dataset to download and preprocess data, returning path
@@ -239,19 +139,29 @@ class TimesfmDataset(BaseDataset):
     input_ts: np.ndarray, historical time series data
     actual_ts: np.ndarray, actual time series data
     """
-    def __init__(self, name=None,
-                datetime_col='ds',
-                path=None,
-                batchsize=16,
-                mode='train',
-                boundaries=(0, 0, 0),
-                context_len=128,
-                horizon_len=32, 
-                freq='h', 
-                normalize=True, 
-                stride=10,
-                **kwargs):
-        super().__init__(name=name, datetime_col=datetime_col, path=path, batchsize=batchsize, mode=mode)
+
+    def __init__(
+        self,
+        name=None,
+        datetime_col="ds",
+        path=None,
+        batchsize=4,
+        mode="train",
+        boundaries=(0, 0, 0),
+        context_len=128,
+        horizon_len=32,
+        freq="h",
+        normalize=True,
+        stride=10,
+        **kwargs,
+    ):
+        super().__init__(
+            name=name,
+            datetime_col=datetime_col,
+            path=path,
+            batchsize=batchsize,
+            mode=mode,
+        )
         self.context_len = context_len
         self.horizon_len = horizon_len
         self.freq = freq
@@ -259,10 +169,10 @@ class TimesfmDataset(BaseDataset):
         self.stride = stride
         self.data = pd.read_csv(self.data_path)
         if boundaries == (0, 0, 0):
-            # Default boundaries: train 60%, val 20%, test 20%
+            # Default boundaries: train 50%, val 20%, test 30%
             self.boundaries = [
-                int(len(self.data) * 0.6),
-                int(len(self.data) * 0.8),
+                int(len(self.data) * 0.5),
+                int(len(self.data) * 0.7),
                 len(self.data) - 1,
             ]
         else:
@@ -279,7 +189,7 @@ class TimesfmDataset(BaseDataset):
             test_range=[self.boundaries[1], self.boundaries[2]],
             hist_len=self.context_len,
             pred_len=self.horizon_len,
-            batch_size=self.batchsize,
+            batch_size=16,
             freq=self.freq,
             normalize=self.normalize,
             epoch_len=None,
@@ -300,8 +210,8 @@ class TimesfmDataset(BaseDataset):
             return DataLoader(self.dataset, shuffle=False)
 
     def preprocess_train_batch(self, data):
-        past_ts = data[0].reshape(self.batchsize * len(self.ts_cols), -1)
-        actual_ts = data[3].reshape(self.batchsize * len(self.ts_cols), -1)
+        past_ts = data[0].reshape(data[0].shape[0] * data[0].shape[1], -1)
+        actual_ts = data[3].reshape(data[3].shape[0] * data[3].shape[1], -1)
         return {"input_ts": past_ts, "actual_ts": actual_ts}
 
     def preprocess_eval_batch(self, data):
@@ -320,9 +230,9 @@ class ChronosDataset(BaseDataset):
     """
     Dataset class for Chronos model
     Data Format:
-    Tuple of 2 elements:
-    input/context: np.ndarray, historical time series data
-    actual: np.ndarray, actual time series data
+    Dict with keys:
+    input_ts: np.ndarray, historical time series data
+    actual_ts: np.ndarray, actual time series data
     """
 
     def __init__(
@@ -330,156 +240,399 @@ class ChronosDataset(BaseDataset):
         name=None,
         datetime_col="ds",
         path=None,
-        boundaries=(0, 0, 0),
-        context_len=128,
-        horizon_len=32,
+        boundaries=[0, 0, 0],
         batch_size=16,
-        freq = None,
-        start_date=None,
-        end_date=None,
-        operation='sum',
-        normalize=True,
-        mode="train",
-        **kwargs,
+        mode=None,
+        stride=10,
+        tokenizer_class="MeanScaleUniformBins",
+        drop_prob=0.2,
+        min_past=64,
+        np_dtype=np.float32,
+        config=None,
     ):
-        super().__init__(name=name, datetime_col=datetime_col, path=path)
-        self.context_len = context_len
-        self.horizon_len = horizon_len
-        self.batch_size = batch_size
+        super().__init__(
+            name=name,
+            datetime_col=datetime_col,
+            path=path,
+            batchsize=batch_size,
+            mode=mode,
+        )
+        # Todo: implement ChronosDataset
+        assert tokenizer_class is not None, "Tokenizer is required for ChronosDataset"
+
+        if not config:
+            self.config = ChronosConfig(
+                tokenizer_class="MeanScaleUniformBins",
+                tokenizer_kwargs={"low_limit": -15.0, "high_limit": 15.0},
+                n_tokens=4096,
+                n_special_tokens=2,
+                pad_token_id=0,
+                eos_token_id=1,
+                use_eos_token=True,
+                model_type="seq2seq",
+                context_length=512,
+                prediction_length=64,
+                num_samples=20,
+                temperature=1.0,
+                top_k=50,
+                top_p=1.0,
+            )
+        else:
+            self.config = ChronosConfig(**config)
+        assert type(self.config) == ChronosConfig, (
+            "Config must be an instance of ChronosConfig"
+        )
+        assert self.config.model_type in ("seq2seq", "causal"), (
+            "Model type must be either 'seq2seq' or 'causal'"
+        )
+
+        if tokenizer_class == "MeanScaleUniformBins":
+            self.tokenizer = MeanScaleUniformBins(
+                **self.config.tokenizer_kwargs, config=self.config
+            )
+        else:
+            raise ValueError(f"Tokenizer class {tokenizer_class} not supported")
+        self.context_len = self.config.context_length
+        self.horizon_len = self.config.prediction_length
+        self.drop_prob = drop_prob if self.config.model_type == "seq2seq" else 0.0
+        self.min_past = min_past or self.config.prediction_length
+        self.model_type = self.config.model_type
         self.mode = mode
-        self.normalize = normalize
-        self.data = pd.read_csv(self.data_path)
-        # set datetime_col as index and remove it from columns
-        self.data[self.datetime_col] = pd.to_datetime(self.data[self.datetime_col])
-        self.data = self.data.set_index(self.datetime_col)
-        self.freq = pd.infer_freq(self.data.index)
-        self.dataset = self.data
-        self.ts_cols = [col for col in self.dataset.columns if col != self.datetime_col]
+        self.np_dtype = np_dtype
+        self.boundaries = boundaries
+        self.stride = stride
+        self.batchsize = batch_size
+        self.max_col_num = 64
 
-        if start_date:
-            start_date = pd.Timestamp(start_date)
-            self.dataset = self.dataset[self.dataset.index >= start_date]
-        
-        if end_date:
-            end_date = pd.Timestamp(end_date)
-            self.dataset = self.dataset[self.dataset.index <= end_date]
+        self.pad = False
+        self._read_data()
+        self.preprocess()
 
-        self.dataset = self.dataset.ffill()
-        self.dataset = self.dataset.bfill()
+        self.one_chunk_num = (
+            self.length_timeseries - self.context_len - self.horizon_len
+        ) // self.stride + 1
 
-        if freq:
-            if operation == 'sum':
-                self.dataset = self.dataset.resample(freq).sum()
-            elif operation == 'mean':
-                self.dataset = self.dataset.resample(freq).mean()
-            elif operation == 'pad':
-                self.dataset = self.dataset.resample(freq).pad()
-            elif operation == 'ffill':
-                self.dataset = self.dataset.resample(freq).ffill()
-            elif operation == 'bfill':
-                self.dataset = self.dataset.resample(freq).bfill()
-            else:
-                raise ValueError(f"Unsupported resampling operation: {operation}")
+    def _read_data(self):
+        self.df = pd.read_csv(self.data_path)
 
-        if boundaries == (0, 0, 0):
-            # Default boundaries: train 60%, val 20%, test 20%
-            self.boundaries = [
-                int(len(self.data)*0.8),
-                int(len(self.data)*0.8),
-                len(self.data) - 1,
-            ]
-        else:
-            self.boundaries = boundaries
+        if self.boundaries[0] == 0:
+            self.boundaries[0] = int(len(self.df) * 0.5)
+        if self.boundaries[1] == 0:
+            self.boundaries[1] = int(len(self.df) * 0.7)
+        if self.boundaries[2] == 0:
+            self.boundaries[2] = int(len(self.df) - 1)
 
-        # Normalize the dataset if required
-        if self.normalize:
-            scaler = StandardScaler()
-            scalar = scaler.fit(self.dataset.iloc[: self.boundaries[1]])
-            data_normalized = scaler.transform(self.dataset)
-            self.dataset = pd.DataFrame(data_normalized, columns=self.dataset.columns, index=self.dataset.index)
+        self.n_channels = self.df.shape[1] - 1
+        self.num_chunks = (self.n_channels + self.max_col_num - 1) // self.max_col_num
 
-        
-        # split the data based on boundaries 
+        if self.datetime_col:
+            self.df.drop(columns=[self.datetime_col], inplace=True)
+
+        self.df = np.array(self.df)
+
         if self.mode == "train":
-            self.dataset = self.dataset.iloc[: self.boundaries[0]]
-        elif self.mode == "val":
-            self.dataset = self.dataset.iloc[self.boundaries[0] : self.boundaries[1]]
-        else:
-            self.dataset = self.dataset.iloc[self.boundaries[1] : ]
-            self.dataset = TimeSeriesDataset(self.dataset, self.context_len, self.horizon_len)
-        
+            self.data = self.df[slice(0, self.boundaries[0]), :]
+
+        elif self.mode == "test":
+            self.data = self.df[slice(self.boundaries[1], self.boundaries[2]), :]
+
+        self.length_timeseries = self.data.shape[0]
+        self.required_len = self.context_len + self.horizon_len
+        self.pad_len = 0
+        if self.length_timeseries < self.required_len:
+            self.pad = True
+        self.pad_sequence()
+
+    def pad_sequence(self):
+        self.pad_len = self.required_len - self.length_timeseries
+        # Pad data with zeros from the left
+        if self.pad:
+            self.data = np.pad(self.data, ((self.pad_len, 0), (0, 0)))
+        # If num of channels isn't multiple of max_col_num, pad with zeros
+        if self.n_channels % self.max_col_num != 0:
+            self.data = np.pad(
+                self.data,
+                ((0, 0), (0, self.max_col_num - self.n_channels % self.max_col_num)),
+            )
+        self.length_timeseries = self.data.shape[0]
+
+    def __getitem__(self, index):
+        chunk_index = index // self.one_chunk_num
+        data_chunk = (
+            self.data[
+                :, chunk_index * self.max_col_num : (chunk_index + 1) * self.max_col_num
+            ]
+            if (chunk_index + 1) * self.max_col_num < self.n_channels
+            else self.data[:, chunk_index * self.max_col_num :]
+        )
+        seq_start = self.stride * index
+        seq_end = seq_start + self.context_len
+        input_mask = np.ones(self.context_len)
+        # if the sequence is padded, mask of padded part is 0
+        input_mask[: self.pad_len] = 0
+
+        pred_end = seq_end + self.horizon_len
+
+        if pred_end > self.length_timeseries:
+            pred_end = self.length_timeseries
+            seq_end = pred_end - self.horizon_len
+            seq_start = seq_end - self.context_len
+
+        # input_seq = self.data[seq_start:seq_end, :].T
+        input_seq = data_chunk[seq_start:seq_end, :].T
+        input_ids, attention_mask, scale = self.tokenizer.context_input_transform(
+            torch.tensor(input_seq)
+        )
+        forecast_seq = data_chunk[seq_end:pred_end, :].T
+        labels, labels_mask = self.tokenizer.label_input_transform(
+            torch.tensor(forecast_seq), scale
+        )
+        labels[labels_mask == 0] = -100
+        return {
+            "input_seq": input_seq,
+            "forecast_seq": forecast_seq,
+            "input_ids": input_ids.squeeze(0),
+            "attention_mask": attention_mask.squeeze(0),
+            "labels": labels.squeeze(0),
+        }
+
+    def __len__(self):
+        if self.length_timeseries < self.context_len + self.horizon_len:
+            return 1 * self.num_chunks
+        return self.num_chunks * self.one_chunk_num
 
     def get_data_loader(self):
-        if self.mode == "test":
-            return DataLoader(self.dataset, batch_size=self.batch_size, shuffle=False)
-
-    def preprocess(self, start_date=None, end_date=None, freq=None, operation='sum', **kwargs):
-        """
-        Preprocess the dataset by clipping based on start_date and end_date,
-        and resampling the data based on frequency change.
-
-        Args:
-            start_date (str): The start date to clip the dataset.
-            end_date (str): The end date to clip the dataset.
-            freq (str): The frequency to resample the dataset.
-        """
-        if start_date:
-            start_date = pd.Timestamp(start_date)
-            self.dataset = self.dataset[self.dataset.index >= start_date]
-        
-        if end_date:
-            end_date = pd.Timestamp(end_date)
-            self.dataset = self.dataset[self.dataset.index <= end_date]
-        
-        if freq:
-            if operation == 'sum':
-                self.dataset = self.dataset.resample(freq).sum()
-            elif operation == 'mean':
-                self.dataset = self.dataset.resample(freq).mean()
-            elif operation == 'pad':
-                self.dataset = self.dataset.resample(freq).pad()
-            elif operation == 'ffill':
-                self.dataset = self.dataset.resample(freq).ffill()
-            elif operation == 'bfill':
-                self.dataset = self.dataset.resample(freq).bfill()
-            else:
-                raise ValueError(f"Unsupported resampling operation: {operation}")
-
-        # Normalize the dataset if required
-        if self.normalize:
-            self.dataset = (self.dataset - self.dataset.mean()) / self.dataset.std()
-        
-    def convert_to_arrow(
-        self,
-        path: Union[str, Path],
-        time_series: Union[List[np.ndarray], np.ndarray],
-        start_date: str = None,
-        start_date_list: List[str] = None,
-        freq: str = "D",
-        compression: str = "lz4",
-    ):
-        assert isinstance(time_series, list) or (
-            isinstance(time_series, np.ndarray) and time_series.ndim == 2
-        )
-        if start_date is None and start_date_list is None:
-            raise ValueError("Either start_date or start_date_list must be provided.")
-        if start_date_list is not None:
-            dataset = [
-                {"start": start_date_list[i], "target": ts, "freq": freq} for i, ts in enumerate(time_series)
-            ]
+        if self.mode == "train":
+            # dtl = DataLoader(self, batch_size=self.batchsize, shuffle=True)
+            # for i, data in enumerate(dtl):
+            #     timeseries, input_mask, forecast = data
+            #     print(self.data.shape)
+            #     print(timeseries.shape, input_mask.shape, forecast.shape)
+            #     break
+            return DataLoader(self, shuffle=True, batch_size=self.batchsize)
         else:
-            dataset = [
-                {"start": start_date, "target": ts, "freq": freq} for ts in time_series
-            ]
-        # create the directory and files mentioned in path, if not present
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        ArrowWriter(compression=compression).write_to_file(
-            dataset,
-            path=path,
-        )
+            return DataLoader(self, shuffle=False, batch_size=self.batchsize)
+
+    def preprocess(self):
+        if self.mode == "train" and self.drop_prob > 0:
+            target = self.data.copy()
+            drop_p = np.random.uniform(low=0.0, high=self.drop_prob)
+            mask = np.random.choice(
+                [True, False], size=target.shape, p=[drop_p, 1 - drop_p]
+            )
+            target[mask] = np.nan
+            self.data = target
 
 
 class MomentDataset(BaseDataset):
+    """
+    Dataset class for Moment model
+    Data Format:
+    Dict with keys:
+    input_ts: np.ndarray, historical time series data
+    actual_ts: np.ndarray, actual time series data
+    """
+
+    def __init__(
+        self,
+        name=None,
+        datetime_col=None,
+        path=None,
+        batchsize=64,
+        mode="train",
+        boundaries=[0, 0, 0],
+        horizon_len=0,
+        task_name="forecasting",
+        label_col=None,
+        stride=10,
+        **kwargs,
+    ):
+        super().__init__(
+            name=name,
+            datetime_col=datetime_col,
+            path=path,
+            batchsize=batchsize,
+            mode=mode,
+        )
+        self.task_name = task_name
+        self.label_col = "label" if label_col is None else label_col
+        self.mode = mode
+
+        self.seq_len = 512
+        self.stride = stride if self.mode == "train" else horizon_len
+        self.forecast_horizon = horizon_len
+        self.boundaries = boundaries
+        self.max_col_num = 64
+
+        self.pad = False
+        self._read_data()
+
+        self.one_chunk_num = (
+            self.length_timeseries - self.seq_len - self.forecast_horizon
+        ) // self.stride + 1
+
+    def _read_data(self):
+        self.scaler = StandardScaler()
+        self.df = pd.read_csv(self.data_path)
+
+        if self.boundaries[0] == 0:
+            self.boundaries[0] = int(len(self.df) * 0.5)
+        if self.boundaries[1] == 0:
+            self.boundaries[1] = int(len(self.df) * 0.7)
+        if self.boundaries[2] == 0:
+            self.boundaries[2] = int(len(self.df) - 1)
+
+        if self.task_name == "detection":
+            self.n_channels = 1
+        else:
+            self.n_channels = self.df.shape[1] - 1
+        self.num_chunks = (self.n_channels + self.max_col_num - 1) // self.max_col_num
+
+        if self.datetime_col:
+            self.df.drop(columns=[self.datetime_col], inplace=True)
+
+        if self.task_name == "forecasting" or self.task_name == "imputation":
+            self.df = self.df.infer_objects(copy=False).interpolate(method="cubic")
+        elif self.task_name == "detection":
+            self.df.interpolate(inplace=True, method="cubic")
+
+        if self.task_name == "forecasting" or self.task_name == "imputation":
+            self.scaler.fit(self.df[slice(0, self.boundaries[0])].values)
+            self.df = self.scaler.transform(self.df.values)
+        elif self.task_name == "detection":
+            self.labels = self.df.iloc[:, -1].values
+            ts = self.df.iloc[:, 0].values.reshape(-1, 1)
+            self.scaler.fit(ts[slice(0, self.boundaries[0])])
+            ts = self.scaler.transform(ts)
+
+        elif self.task_name == "classification":
+            self.data, self.labels = get_multivariate_data(
+                self.df, label_col=self.label_col
+            )
+            self.labels = self._transform_labels(self.labels)
+            self.num_series, self.n_channels, self.len_timeseries = self.data.shape
+            self.data = self.data.reshape(
+                -1, self.len_timeseries
+            )  # reshape data into (num_samples*num_channels, num_timesteps)
+            self.scaler.fit(self.data)
+            self.data = self.scaler.transform(self.data)
+
+            if self.n_channels == 1:
+                self.data = self.data.reshape(self.num_series, self.len_timeseries)
+                self.data = self.data.T
+
+        if self.mode == "train":
+            if self.task_name == "forecasting" or self.task_name == "imputation":
+                self.data = self.df[slice(0, self.boundaries[0]), :]
+            elif self.task_name == "detection":
+                self.data, self.labels = (
+                    ts[slice(0, self.boundaries[0])],
+                    self.labels[slice(0, self.boundaries[0])],
+                )
+
+        elif self.mode == "test":
+            if self.task_name == "forecasting" or self.task_name == "imputation":
+                self.data = self.df[slice(self.boundaries[1], self.boundaries[2]), :]
+            elif self.task_name == "detection":
+                self.data, self.labels = (
+                    ts[slice(self.boundaries[1], self.boundaries[2])],
+                    self.labels[slice(self.boundaries[1], self.boundaries[2])],
+                )
+
+        self.length_timeseries = self.data.shape[0]
+        self.required_len = self.seq_len + self.forecast_horizon
+        self.pad_len = 0
+        if self.length_timeseries < self.required_len:
+            self.pad = True
+        self.pad_sequence()
+
+    def pad_sequence(self):
+        self.pad_len = self.required_len - self.length_timeseries
+        # Pad data with zeros from the left
+        if self.pad:
+            self.data = np.pad(self.data, ((self.pad_len, 0), (0, 0)))
+        # If num of channels isn't multiple of max_col_num, pad with zeros
+        if self.n_channels % self.max_col_num != 0:
+            self.data = np.pad(
+                self.data,
+                ((0, 0), (0, self.max_col_num - self.n_channels % self.max_col_num)),
+            )
+        self.length_timeseries = self.data.shape[0]
+
+    def __getitem__(self, index):
+        chunk_index = index // self.one_chunk_num
+        data_chunk = (
+            self.data[
+                :, chunk_index * self.max_col_num : (chunk_index + 1) * self.max_col_num
+            ]
+            if (chunk_index + 1) * self.max_col_num < self.n_channels
+            else self.data[:, chunk_index * self.max_col_num :]
+        )
+        seq_start = self.stride * index
+        seq_end = seq_start + self.seq_len
+        input_mask = np.ones(self.seq_len)
+        # if the sequence is padded, mask of padded part is 0
+        input_mask[: self.pad_len] = 0
+
+        pred_end = seq_end + self.forecast_horizon
+
+        if pred_end > self.length_timeseries:
+            pred_end = self.length_timeseries
+            seq_end = pred_end - self.forecast_horizon
+            seq_start = seq_end - self.seq_len
+
+        # input_seq = self.data[seq_start:seq_end, :].T
+        input_seq = data_chunk[seq_start:seq_end, :].T
+        if self.task_name == "forecasting":
+            # forecast_seq = self.data[seq_end:pred_end, :].T
+            forecast_seq = data_chunk[seq_end:pred_end, :].T
+            return input_seq, input_mask, forecast_seq
+        elif self.task_name == "imputation":
+            return input_seq, input_mask
+        elif self.task_name == "detection":
+            labels = (
+                self.labels[seq_start:seq_end]
+                .astype(int)
+                .reshape((self.n_channels, self.seq_len))
+            )
+            return input_seq, input_mask, labels
+        elif self.task_name == "classification":
+            input_seq = self.data[:, index]
+            input_seq = np.expand_dims(input_seq, axis=0)
+            labels = self.labels[index,].astype(int)
+            return input_seq, input_mask, labels
+
+    def __len__(self):
+        if self.task_name == "classification":
+            return self.num_series
+        if self.length_timeseries < self.seq_len + self.forecast_horizon:
+            return 1 * self.num_chunks
+        return self.num_chunks * self.one_chunk_num
+
+    def get_data_loader(self):
+        if self.mode == "train":
+            # dtl = DataLoader(self, batch_size=self.batchsize, shuffle=True)
+            # for i, data in enumerate(dtl):
+            #     timeseries, input_mask, forecast = data
+            #     print(self.data.shape)
+            #     print(timeseries.shape, input_mask.shape, forecast.shape)
+            #     break
+            return DataLoader(self, batch_size=self.batchsize, shuffle=True)
+        else:
+            return DataLoader(self, batch_size=self.batchsize, shuffle=False)
+
+    def _transform_labels(self, labels: np.ndarray):
+        unq_labels = np.unique(labels)  # Move the labels to {0, ..., L-1}
+        transform = {}
+        for i, l in enumerate(unq_labels):
+            transform[l] = i
+
+        labels = np.vectorize(transform.get)(labels)
+
+        return labels
+
+
+class LPTMDataset(BaseDataset):
     """
     Dataset class for Moment model
     Data Format:
@@ -660,7 +813,7 @@ class MomentDataset(BaseDataset):
 
         return labels
 
-        
+
 class MoiraiDataset(BaseDataset):
     """
     Dataset class for Moirai model.
@@ -677,17 +830,23 @@ class MoiraiDataset(BaseDataset):
         horizon_len=32,
         patch_size="auto",
         batch_size=16,
-        freq = None,
+        freq=None,
         start_date=None,
         end_date=None,
-        operation='mean',
+        operation="mean",
         normalize=True,
         mode="train",
-        htune=False, # hyperparameter tuning
+        htune=False,  # hyperparameter tuning
         data_config=None,
         **kwargs,
     ):
-        super().__init__(name=name, datetime_col=datetime_col, path=path, batchsize=batch_size, mode=mode)
+        super().__init__(
+            name=name,
+            datetime_col=datetime_col,
+            path=path,
+            batchsize=batch_size,
+            mode=mode,
+        )
         self.context_len = context_len
         self.horizon_len = horizon_len
         self.patch_size = patch_size
@@ -700,33 +859,35 @@ class MoiraiDataset(BaseDataset):
         if data_config:
             self.target_dim = data_config.get("target_dim", 1)
             self.feat_dynamic_real_dim = data_config.get("feat_dynamic_real_dim", 0)
-            self.past_feat_dynamic_real_dim = data_config.get("past_feat_dynamic_real_dim", 0)
+            self.past_feat_dynamic_real_dim = data_config.get(
+                "past_feat_dynamic_real_dim", 0
+            )
         else:
             self.target_dim = 1
             self.feat_dynamic_real_dim = 0
             self.past_feat_dynamic_real_dim = 0
 
-        self._read_data() # read from path into a pandas dataframe
+        self._read_data()  # read from path into a pandas dataframe
         # Preprocess the data - infer freq, take subset or normalize
-        self._preprocess(start_date=start_date, end_date=end_date,
-                        freq=freq, operation=operation)
+        self._preprocess(
+            start_date=start_date, end_date=end_date, freq=freq, operation=operation
+        )
         self.start_date = self.dataset.index[0]
         self.train_transforms = self.default_transforms()
         self.test_transforms = self.default_transforms()
-        
+
         # Split the dataset into train, val, test
-        if self.mode == "train": # no windowing
-            self.dataset = self.dataset[:self.boundaries[0]]
+        if self.mode == "train":  # no windowing
+            self.dataset = self.dataset[: self.boundaries[0]]
             self.gen_train_val_data()
-        elif self.mode == "val": # no windowing
-            self.dataset = self.dataset[self.boundaries[0]:self.boundaries[1]]
+        elif self.mode == "val":  # no windowing
+            self.dataset = self.dataset[self.boundaries[0] : self.boundaries[1]]
             self.gen_train_val_data()
         elif self.mode == "test":
             # whole dataset sent
             self.gen_test_data()
         else:
             raise ValueError(f"Unsupported mode: {self.mode}")
-        
 
     def _read_data(self):
         """This function reads the data from the data_path and sets the dataset, infers frequency
@@ -740,9 +901,10 @@ class MoiraiDataset(BaseDataset):
         self.freq = pd.infer_freq(self.data.index)
         self.dataset = self.data
         self.ts_cols = [col for col in self.dataset.columns if col != self.datetime_col]
-    
-    def _preprocess(self,start_date=None, end_date=None,
-                    freq=None, operation='mean',**kwargs):
+
+    def _preprocess(
+        self, start_date=None, end_date=None, freq=None, operation="mean", **kwargs
+    ):
         """This function picks a subset of data if start_date or end_date are provided.
         It resamples the data if freq is provided.
         It normalizes the data if normalize is set to True.
@@ -761,42 +923,46 @@ class MoiraiDataset(BaseDataset):
         if start_date:
             start_date = pd.Timestamp(start_date)
             self.dataset = self.dataset[self.dataset.index >= start_date]
-        
+
         if end_date:
             end_date = pd.Timestamp(end_date)
             self.dataset = self.dataset[self.dataset.index <= end_date]
-        
+
         # Fill missing values
         self.dataset = self.dataset.ffill()
-        self.dataset = self.dataset.bfill() # ensures the first row has no NaN values
+        self.dataset = self.dataset.bfill()  # ensures the first row has no NaN values
 
         # Resample the data if required
         if freq:
-            if operation == 'sum':
+            if operation == "sum":
                 self.dataset = self.dataset.resample(freq).sum()
-            elif operation == 'mean':
+            elif operation == "mean":
                 self.dataset = self.dataset.resample(freq).mean()
-            elif operation == 'pad':
+            elif operation == "pad":
                 self.dataset = self.dataset.resample(freq).pad()
-            elif operation == 'ffill':
+            elif operation == "ffill":
                 self.dataset = self.dataset.resample(freq).ffill()
-            elif operation == 'bfill':
+            elif operation == "bfill":
                 self.dataset = self.dataset.resample(freq).bfill()
             else:
                 raise ValueError(f"Unsupported resampling operation: {operation}")
 
         # Decide the boundaries for train, val, test
-        if self.boundaries == (0,0,0):
-            if self.htune: # if we are doing hyperparameter tuning
+        if self.boundaries == (0, 0, 0):
+            if self.htune:  # if we are doing hyperparameter tuning
                 # 60% train, 20% val, 20% test
-                self.boundaries = [int(self.dataset.shape[0]*0.6),
-                                   int(self.dataset.shape[0]*0.8),
-                                   self.dataset.shape[0]-1]
+                self.boundaries = [
+                    int(self.dataset.shape[0] * 0.6),
+                    int(self.dataset.shape[0] * 0.8),
+                    self.dataset.shape[0] - 1,
+                ]
             else:
                 # 80% train, 20% test
-                self.boundaries = [int(self.dataset.shape[0]*0.8),
-                                   int(self.dataset.shape[0]*0.8),
-                                   self.dataset.shape[0]-1]
+                self.boundaries = [
+                    int(self.dataset.shape[0] * 0.8),
+                    int(self.dataset.shape[0] * 0.8),
+                    self.dataset.shape[0] - 1,
+                ]
 
         # Normalize the dataset if required
         if self.normalize:
@@ -804,8 +970,10 @@ class MoiraiDataset(BaseDataset):
             scaler = StandardScaler()
             scaler = scaler.fit(self.dataset.iloc[: self.boundaries[1]])
             data_normalized = scaler.transform(self.dataset)
-            self.dataset = pd.DataFrame(data_normalized, columns=self.dataset.columns, index=self.dataset.index)
-    
+            self.dataset = pd.DataFrame(
+                data_normalized, columns=self.dataset.columns, index=self.dataset.index
+            )
+
     def gen_train_val_data(self):
         """Generates training and validation data based on the boundaries
 
@@ -816,113 +984,143 @@ class MoiraiDataset(BaseDataset):
         # Each column is a separate time series
         # Each time series is appended to the data list
         for i in range(self.dataset.shape[1]):
-            data.append({
-                "start": Period(self.start_date, freq=self.freq),
-                "target": self.dataset.iloc[:,i].values,
-                "item_id": self.dataset.columns[i]
-            })
-        
+            data.append(
+                {
+                    "start": Period(self.start_date, freq=self.freq),
+                    "target": self.dataset.iloc[:, i].values,
+                    "item_id": self.dataset.columns[i],
+                }
+            )
+
         self.dataset = MoiraiTorch(data)
         self.data = data
-    
+
     def gen_test_data(self):
         """Generates test data based on the boundaries
 
         Returns:
             np.ndarray: Test data
-        """          
+        """
         data = []
         num_windows = (self.dataset.shape[0] - self.boundaries[1]) // self.horizon_len
         for i in range(self.dataset.shape[1]):
             for j in range(num_windows):
                 start_idx = self.boundaries[1] + j * self.horizon_len
                 end_idx = start_idx + self.horizon_len
-                data.append((
-                    {# input
-                    "start": Period(self.start_date, freq=self.freq),
-                    "target": self.dataset.iloc[:start_idx, i].values,
-                    "item_id": self.dataset.columns[i]
-                    },
-                    {# label
-                    "start": Period(self.start_date, freq=self.freq),
-                    "target": self.dataset.iloc[start_idx:end_idx, i].values,
-                    "item_id": self.dataset.columns[i]
-                    }
-                ))
-        
+                data.append(
+                    (
+                        {  # input
+                            "start": Period(self.start_date, freq=self.freq),
+                            "target": self.dataset.iloc[:start_idx, i].values,
+                            "item_id": self.dataset.columns[i],
+                        },
+                        {  # label
+                            "start": Period(self.start_date, freq=self.freq),
+                            "target": self.dataset.iloc[start_idx:end_idx, i].values,
+                            "item_id": self.dataset.columns[i],
+                        },
+                    )
+                )
+
         self.dataset = MoiraiTorch(data)
         self.data = data
-    
+
     def default_transforms(self) -> transforms.Compose:
-        """Default transformations for the dataset
-        """
+        """Default transformations for the dataset"""
         transforms_list = []
 
         # Convert the target data to numpy array
-        transforms_list.append(AsNumpy(
-            field="target",
-            expected_ndim=1 if self.target_dim == 1 else 2,
-            dtype=np.float32,
-        ))
+        transforms_list.append(
+            AsNumpy(
+                field="target",
+                expected_ndim=1 if self.target_dim == 1 else 2,
+                dtype=np.float32,
+            )
+        )
 
         if self.target_dim == 1:
             # Fix missing values
-            transforms_list.append(AddObservedValues(
-                target_field="target",
-                output_field="observed_target",
-                imputation_method=CausalMeanNaNFix(),
-                dtype=bool,
-            ))
+            transforms_list.append(
+                AddObservedValues(
+                    target_field="target",
+                    output_field="observed_target",
+                    imputation_method=CausalMeanNaNFix(),
+                    dtype=bool,
+                )
+            )
 
             # Add dimension to target
             transforms_list.append(ArrExpandDims(field="target", axis=0))
             transforms_list.append(ArrExpandDims(field="observed_target", axis=0))
         else:
-            transforms_list.append(AddObservedValues(
-                target_field="target",
-                output_field="observed_target",
-                dtype=bool,
-            ))
+            transforms_list.append(
+                AddObservedValues(
+                    target_field="target",
+                    output_field="observed_target",
+                    dtype=bool,
+                )
+            )
 
         if self.feat_dynamic_real_dim > 0:
-            transforms_list.append(AsNumpy(
-                field="feat_dynamic_real",
-                expected_ndim=2,
-                dtype=np.float32,
-            ))
-            transforms_list.append(AddObservedValues(
-                target_field="feat_dynamic_real",
-                output_field="observed_feat_dynamic_real",
-                dtype=bool,
-            ))
+            transforms_list.append(
+                AsNumpy(
+                    field="feat_dynamic_real",
+                    expected_ndim=2,
+                    dtype=np.float32,
+                )
+            )
+            transforms_list.append(
+                AddObservedValues(
+                    target_field="feat_dynamic_real",
+                    output_field="observed_feat_dynamic_real",
+                    dtype=bool,
+                )
+            )
 
         if self.past_feat_dynamic_real_dim > 0:
-            transforms_list.append(AsNumpyArray(
-                field="past_feat_dynamic_real",
-                expected_ndim=2,
-                dtype=np.float32,
-            ))
-            transforms_list.append(AddObservedValuesIndicator(
-                target_field="past_feat_dynamic_real",
-                output_field="past_observed_feat_dynamic_real",
-                dtype=bool,
-            ))
-        
+            transforms_list.append(
+                AsNumpyArray(
+                    field="past_feat_dynamic_real",
+                    expected_ndim=2,
+                    dtype=np.float32,
+                )
+            )
+            transforms_list.append(
+                AddObservedValuesIndicator(
+                    target_field="past_feat_dynamic_real",
+                    output_field="past_observed_feat_dynamic_real",
+                    dtype=bool,
+                )
+            )
+
         # Convert list of tranforms to a single transformation
         comp_transform = transforms.Compose(transforms_list)
-        
+
         return comp_transform
-    
+
     @property
     def past_length(self) -> int:
-        return self.context_len + self.horizon_len if self.patch_size == "auto" else self.context_len
-    
-    def add_past_fields(self, data: dict, ts_fields:list=[],
-                        past_ts_fields:list=[],dummy_val:float=0.0,
-                        lead_time: int = 0, target_field: str = "target",
-                        is_pad_field: str = "is_pad", observed_value_field: str = "observed_target",
-                        start_field: str = "start", forecast_start_field: str = "forecast_start",
-                        output_NTC: bool = True, mode="train"):
+        return (
+            self.context_len + self.horizon_len
+            if self.patch_size == "auto"
+            else self.context_len
+        )
+
+    def add_past_fields(
+        self,
+        data: dict,
+        ts_fields: list = [],
+        past_ts_fields: list = [],
+        dummy_val: float = 0.0,
+        lead_time: int = 0,
+        target_field: str = "target",
+        is_pad_field: str = "is_pad",
+        observed_value_field: str = "observed_target",
+        start_field: str = "start",
+        forecast_start_field: str = "forecast_start",
+        output_NTC: bool = True,
+        mode="train",
+    ):
         """Add the following fields:
         (a) past_target: The past target data
         (b) past_observed_target: The past target data with missing values indicator
@@ -937,7 +1135,9 @@ class MoiraiDataset(BaseDataset):
 
         # Sample indices from the target field using the instance sampler
         if mode == "train":
-            sampled_indices = [self.past_length + i*pred_len for i in range(num_windows+1)]
+            sampled_indices = [
+                self.past_length + i * pred_len for i in range(num_windows + 1)
+            ]
         elif mode == "test":
             sampled_indices = custom_train_instance_split(target)
         else:
@@ -946,14 +1146,17 @@ class MoiraiDataset(BaseDataset):
         # Columns to be sliced
         slice_cols = ts_fields + past_ts_fields + [target_field, observed_value_field]
 
-
         transformed_data = []
         # Iterate over the sampled indices
         for i in range(len(sampled_indices)):
             idx = sampled_indices[i]
             # Calculate the padding length if the index is less than past_length
             d = data.copy()
-            pad_length = max(0, self.past_length - d[target_field][...,(idx - self.past_length) : idx].shape[-1])
+            pad_length = max(
+                0,
+                self.past_length
+                - d[target_field][..., (idx - self.past_length) : idx].shape[-1],
+            )
 
             # Iterate over the fields to be sliced
             for field in slice_cols:
@@ -967,15 +1170,18 @@ class MoiraiDataset(BaseDataset):
                         dtype=d[field].dtype,
                     )
                     past_piece = np.concatenate(
-                        [pad_block, d[field][...,(idx - self.past_length) : idx]], axis=-1
+                        [pad_block, d[field][..., (idx - self.past_length) : idx]],
+                        axis=-1,
                     )
-                
+
                 # # Slice the future piece of the field
                 # future_piece = d[field][..., (idx + lead_time) : (idx + lead_time + pred_len)]
-                future_piece = np.full(shape=d[field].shape[:-1] + (pred_len,),
-                                        fill_value=dummy_val,
-                                        dtype=d[field].dtype)
-                
+                future_piece = np.full(
+                    shape=d[field].shape[:-1] + (pred_len,),
+                    fill_value=dummy_val,
+                    dtype=d[field].dtype,
+                )
+
                 # If the field is in time series fields, concatenate past and future pieces
                 if field in ts_fields:
                     piece = np.concatenate([past_piece, future_piece], axis=-1)
@@ -992,13 +1198,13 @@ class MoiraiDataset(BaseDataset):
                         del d[field]
                     else:
                         d[field] = past_piece
-            
+
             # Create a padding indicator for the past piece
             pad_indicator = np.zeros(self.past_length)
             if pad_length > 0:
                 pad_indicator[:pad_length] = 1
             d["past_" + (is_pad_field)] = pad_indicator
-            
+
             # Set the forecast start field
             if isinstance(d[start_field], pd.Timestamp):
                 d[forecast_start_field] = (d[start_field] + idx + lead_time).timestamp()
@@ -1009,9 +1215,8 @@ class MoiraiDataset(BaseDataset):
         # Return the transformed data
         return transformed_data
 
-    def prep_train_test_data(self,mode="train"):
-        """Apply transforms on the data and add the past fields (past target, past observed target, etc)
-        """
+    def prep_train_test_data(self, mode="train"):
+        """Apply transforms on the data and add the past fields (past target, past observed target, etc)"""
         if mode == "train":
             # STEP 1: Apply the transforms on the data
             while self.train_transforms.transforms:
@@ -1024,21 +1229,20 @@ class MoiraiDataset(BaseDataset):
             self.data = transformed_data
             # STEP 3: Convert the data to a MoiraiTorch object
             self.batched_data = MoiraiTorch(self.data)
-        
+
         elif mode == "test":
             # STEP 1: Apply the transforms on the data
-            data = [x[0] for x in self.data] # only input part
+            data = [x[0] for x in self.data]  # only input part
             while self.test_transforms.transforms:
                 t = self.test_transforms.transforms.pop(0)
                 data = [t(x) for x in data]
             # STEP 2: Linearize the data and add the required fields
             transformed_data = []
             for x in data:
-                transformed_data.extend(self.add_past_fields(data=x,mode="test"))
+                transformed_data.extend(self.add_past_fields(data=x, mode="test"))
             # STEP 3: Convert the data to a MoiraiTorch object
             self.batched_data = MoiraiTorch(transformed_data)
-        
-    
+
     def get_dataloader(self):
         """Returns the iterator for data batches for the dataset based on the mode
 
@@ -1053,24 +1257,35 @@ class MoiraiDataset(BaseDataset):
                 pin_memory = self.kwargs.get("pin_memory", False)
                 persistent_workers = self.kwargs.get("persistent_workers", False)
 
-                return DataLoader(self.batched_data, batch_size=batch_size, shuffle=True,
-                                num_workers=num_workers, pin_memory=pin_memory, persistent_workers=persistent_workers)
-            return DataLoader(self.batched_data, batch_size=self.batch_size, shuffle=True)
+                return DataLoader(
+                    self.batched_data,
+                    batch_size=batch_size,
+                    shuffle=True,
+                    num_workers=num_workers,
+                    pin_memory=pin_memory,
+                    persistent_workers=persistent_workers,
+                )
+            return DataLoader(
+                self.batched_data, batch_size=self.batch_size, shuffle=True
+            )
         else:
             self.prep_train_test_data(mode="test")
-            return DataLoader(self.batched_data, batch_size=self.batch_size, shuffle=False)
-    
+            return DataLoader(
+                self.batched_data, batch_size=self.batch_size, shuffle=False
+            )
+
     def __getitem__(self, idx):
         return super().__getitem__(idx)
-    
+
     def __len__(self):
         return len(self.dataset[0]["target"])
+
 
 class Moirai_old_Dataset(BaseDataset):
     """
     Dataset class for Moirai model
     Data Format:
-    
+
     """
 
     def __init__(
@@ -1083,10 +1298,10 @@ class Moirai_old_Dataset(BaseDataset):
         horizon_len=32,
         patch_size="auto",
         batch_size=16,
-        freq = None,
+        freq=None,
         start_date=None,
         end_date=None,
-        operation='mean',
+        operation="mean",
         normalize=True,
         mode="train",
         **kwargs,
@@ -1109,7 +1324,7 @@ class Moirai_old_Dataset(BaseDataset):
         if start_date:
             start_date = pd.Timestamp(start_date)
             self.dataset = self.dataset[self.dataset.index >= start_date]
-        
+
         if end_date:
             end_date = pd.Timestamp(end_date)
             self.dataset = self.dataset[self.dataset.index <= end_date]
@@ -1118,15 +1333,15 @@ class Moirai_old_Dataset(BaseDataset):
         self.dataset = self.dataset.bfill()
 
         if freq:
-            if operation == 'sum':
+            if operation == "sum":
                 self.dataset = self.dataset.resample(freq).sum()
-            elif operation == 'mean':
+            elif operation == "mean":
                 self.dataset = self.dataset.resample(freq).mean()
-            elif operation == 'pad':
+            elif operation == "pad":
                 self.dataset = self.dataset.resample(freq).pad()
-            elif operation == 'ffill':
+            elif operation == "ffill":
                 self.dataset = self.dataset.resample(freq).ffill()
-            elif operation == 'bfill':
+            elif operation == "bfill":
                 self.dataset = self.dataset.resample(freq).bfill()
             else:
                 raise ValueError(f"Unsupported resampling operation: {operation}")
@@ -1134,8 +1349,8 @@ class Moirai_old_Dataset(BaseDataset):
         if boundaries == (0, 0, 0):
             # Default boundaries: train 60%, val 20%, test 20%
             self.boundaries = [
-                int(len(self.data)*0.8),
-                int(len(self.data)*0.8),
+                int(len(self.data) * 0.8),
+                int(len(self.data) * 0.8),
                 len(self.data),
             ]
         else:
@@ -1146,22 +1361,27 @@ class Moirai_old_Dataset(BaseDataset):
             scaler = StandardScaler()
             scalar = scaler.fit(self.dataset.iloc[: self.boundaries[1]])
             data_normalized = scaler.transform(self.dataset)
-            self.dataset = pd.DataFrame(data_normalized, columns=self.dataset.columns, index=self.dataset.index)
+            self.dataset = pd.DataFrame(
+                data_normalized, columns=self.dataset.columns, index=self.dataset.index
+            )
 
         test_offset = self.boundaries[2] - self.boundaries[1]
         self.dataset = PandasDataset(dict(self.dataset))
 
         train_template, test_template = ts_split(self.dataset, offset=-test_offset)
 
-        
-        # split the data based on boundaries 
+        # split the data based on boundaries
         if self.mode == "train":
             self.dataset = train_template
         elif self.mode == "val":
             self.dataset = train_template
         else:
-            self.dataset = test_template.generate_instances(prediction_length=self.horizon_len, windows=test_offset//self.horizon_len, distance=self.horizon_len)
-    
+            self.dataset = test_template.generate_instances(
+                prediction_length=self.horizon_len,
+                windows=test_offset // self.horizon_len,
+                distance=self.horizon_len,
+            )
+
     def get_dataloader(self):
         if self.mode == "train":
             return DataLoader(self.dataset, batch_size=self.batchsize, shuffle=True)

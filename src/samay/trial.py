@@ -1,10 +1,14 @@
-from .model import MomentModel
 from .dataset import MomentDataset
+from .model import MomentModel
 
 
 def main():
     # dataset = TimesfmDataset(name="tycho", path='/nethome/sli999/data/Tycho/timesfm_US_covid_pivot.csv')
-    dataset = MomentDataset(name="ett", datetime_col='date', path='/nethome/sli999/TSFMProject/src/tsfmproject/models/moment/data/ETTh1.csv')
+    dataset = MomentDataset(
+        name="ett",
+        datetime_col="date",
+        path="/nethome/sli999/TSFMProject/src/tsfmproject/models/moment/data/ETTh1.csv",
+    )
 
     # repo = "google/timesfm-1.0-200m-pytorch"
     repo = "AutonLab/MOMENT-1-large"
@@ -20,15 +24,15 @@ def main():
     #     "quantiles": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
     # }
     config = {
-        'task_name': 'forecasting',
-        'forecast_horizon': 192,
-        'head_dropout': 0.1,
-        'weight_decay': 0,
-        'freeze_encoder': True, # Freeze the patch embedding layer
-        'freeze_embedder': True, # Freeze the transformer encoder
-        'freeze_head': False, # The linear forecasting head must be trained
+        "task_name": "forecasting",
+        "forecast_horizon": 192,
+        "head_dropout": 0.1,
+        "weight_decay": 0,
+        "freeze_encoder": True,  # Freeze the patch embedding layer
+        "freeze_embedder": True,  # Freeze the transformer encoder
+        "freeze_head": False,  # The linear forecasting head must be trained
     }
-    
+
     # tfm = TimesfmModel(config=config, repo=repo)
     mmt = MomentModel(config=config, repo=repo)
     # finetuned_model = tfm.finetune(dataset)

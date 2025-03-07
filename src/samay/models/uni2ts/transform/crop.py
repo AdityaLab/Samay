@@ -20,7 +20,7 @@ from typing import Any
 
 import numpy as np
 
-from uni2ts.common.typing import UnivarTimeSeries
+from samay.models.uni2ts.common.typing import UnivarTimeSeries
 
 from ._base import Transformation
 from ._mixin import MapFuncMixin
@@ -46,9 +46,9 @@ class PatchCrop(MapFuncMixin, Transformation):
     optional_fields: tuple[str, ...] = ("past_feat_dynamic_real",)
 
     def __post_init__(self):
-        assert (
-            self.min_time_patches <= self.max_patches
-        ), "min_patches must be <= max_patches"
+        assert self.min_time_patches <= self.max_patches, (
+            "min_patches must be <= max_patches"
+        )
         assert len(self.fields) > 0, "fields must be non-empty"
 
     def __call__(self, data_entry: dict[str, Any]) -> dict[str, Any]:

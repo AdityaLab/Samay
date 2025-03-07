@@ -5,7 +5,7 @@ import warnings
 from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
-import chronos
+# import chronos
 import torch
 import torch.nn as nn
 from transformers import (
@@ -46,7 +46,8 @@ class ChronosConfig:
         ), f"Special token id's must be smaller than {self.n_special_tokens=}"
 
     def create_tokenizer(self) -> "ChronosTokenizer":
-        class_ = getattr(chronos, self.tokenizer_class)
+        # class_ = getattr(chronos, self.tokenizer_class)
+        class_ = MeanScaleUniformBins
         return class_(**self.tokenizer_kwargs, config=self)
 
 
@@ -533,6 +534,30 @@ class ChronosPipeline:
             )
 
         return torch.cat(predictions, dim=-1)
+    
+    def predict_quantiles(
+        self,
+        context: Union[torch.Tensor, List[torch.Tensor]],
+        prediction_length: Optional[int] = None,
+        quantile_levels: List[float] = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
+        **predict_kwargs,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Refer to the base method (``BaseChronosPipeline.predict_quantiles``).
+        """
+        prediction_samples = (
+            self.predict(context, prediction_length=prediction_length, **predict_kwargs)
+            .detach()
+            .swapaxes(1, 2)
+        )
+        mean = prediction_samples.mean(dim=-1)
+        quantiles = torch.quantile(
+            prediction_samples,
+            q=torch.tensor(quantile_levels, dtype=prediction_samples.dtype),
+            dim=-1,
+        ).permute(1, 2, 0)
+
+        return quantiles, mean
 
     @classmethod
     def from_pretrained(cls, *args, **kwargs):
@@ -558,3 +583,16 @@ class ChronosPipeline:
             tokenizer=chronos_config.create_tokenizer(),
             model=ChronosModel(config=chronos_config, model=inner_model),
         )
+    
+if __name__ == "__main__":
+    pipeline = ChronosPipeline.from_pretrained(
+        "amazon/chronos-t5-small",
+        device_map="cuda",
+        torch_dtype=torch.bfloat16,
+    )
+    t5model = pipeline.model.model
+    dummpy_input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]]).to("cuda")
+    dummy_attention_mask = torch.tensor([[1, 1, 1, 1, 1, 1, 1, 1, 1, 1]]).to("cuda")
+    dummy_label = torch.tensor([[11, 12, 13, 14, 15, 16, 17, 18, 19, 20]]).to("cuda")
+    output = t5model(dummpy_input_ids, attention_mask=dummy_attention_mask, labels=dummy_label)
+    print(output.__dict__.keys())

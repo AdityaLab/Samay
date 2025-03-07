@@ -248,7 +248,6 @@ class TimeSeriesdata(object):
     return bts_train, bts_pred, bfeats_train, bfeats_pred, bcf_train, bcf_pred
 
   def torch_dataset(self, mode='train', shift=1):
-    """Tensorflow Dataset."""
     if mode == 'train':
       gen_fn = lambda: self.train_gen(shift)
     else:
@@ -267,6 +266,7 @@ class CustomTorchDataset(Dataset):
         self.output_shapes = output_shapes
 
         self.data = list(self._generate_data())
+        print(len(self.data), self.data[0][0].shape)
     
     def _generate_data(self):
         for item in self.gen_fn():
