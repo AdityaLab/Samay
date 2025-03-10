@@ -675,7 +675,7 @@ class MoiraiDataset(BaseDataset):
         boundaries=(0, 0, 0),
         context_len=128,
         horizon_len=32,
-        patch_size="auto",
+        patch_size=16,
         batch_size=16,
         freq = None,
         start_date=None,
@@ -726,7 +726,6 @@ class MoiraiDataset(BaseDataset):
             self.gen_test_data()
         else:
             raise ValueError(f"Unsupported mode: {self.mode}")
-        
 
     def _read_data(self):
         """This function reads the data from the data_path and sets the dataset, infers frequency
@@ -932,7 +931,6 @@ class MoiraiDataset(BaseDataset):
         """
         pred_len = self.horizon_len
         target = data[target_field]
-        observed_field = data[observed_value_field]
         num_windows = 1 + ((target.shape[-1] - self.past_length) // pred_len)
 
         # Sample indices from the target field using the instance sampler
@@ -945,7 +943,6 @@ class MoiraiDataset(BaseDataset):
 
         # Columns to be sliced
         slice_cols = ts_fields + past_ts_fields + [target_field, observed_value_field]
-
 
         transformed_data = []
         # Iterate over the sampled indices
@@ -1000,8 +997,7 @@ class MoiraiDataset(BaseDataset):
             d["past_" + (is_pad_field)] = pad_indicator
             
             # Set the forecast start field
-            if isinstance(d[start_field], pd.Timestamp):
-                d[forecast_start_field] = (d[start_field] + idx + lead_time).timestamp()
+            d[forecast_start_field] = (d[start_field] + idx + lead_time).to_timestamp()
 
             # Append the transformed data
             transformed_data.append(d)
@@ -1012,6 +1008,15 @@ class MoiraiDataset(BaseDataset):
     def prep_train_test_data(self,mode="train"):
         """Apply transforms on the data and add the past fields (past target, past observed target, etc)
         """
+        ts_fields = []
+        if self.feat_dynamic_real_dim > 0:
+            ts_fields.append("feat_dynamic_real")
+            ts_fields.append("observed_feat_dynamic_real")
+        past_ts_fields = []
+        if self.past_feat_dynamic_real_dim > 0:
+            past_ts_fields.append("past_feat_dynamic_real")
+            past_ts_fields.append("past_observed_feat_dynamic_real")
+
         if mode == "train":
             # STEP 1: Apply the transforms on the data
             while self.train_transforms.transforms:
@@ -1020,7 +1025,10 @@ class MoiraiDataset(BaseDataset):
             # STEP 2: Linearize the data and add the required fields
             transformed_data = []
             for x in self.data:
-                transformed_data.extend(self.add_past_fields(x))
+                transformed_data.extend(self.add_past_fields(data=x,mode="train",
+                                                             ts_fields=ts_fields,past_ts_fields=past_ts_fields
+                                                            )
+                                        )
             self.data = transformed_data
             # STEP 3: Convert the data to a MoiraiTorch object
             self.batched_data = MoiraiTorch(self.data)
@@ -1034,10 +1042,12 @@ class MoiraiDataset(BaseDataset):
             # STEP 2: Linearize the data and add the required fields
             transformed_data = []
             for x in data:
-                transformed_data.extend(self.add_past_fields(data=x,mode="test"))
+                transformed_data.extend(self.add_past_fields(data=x,mode="test",
+                                                             ts_fields=ts_fields,past_ts_fields=past_ts_fields
+                                                            )
+                                        )
             # STEP 3: Convert the data to a MoiraiTorch object
             self.batched_data = MoiraiTorch(transformed_data)
-        
     
     def get_dataloader(self):
         """Returns the iterator for data batches for the dataset based on the mode

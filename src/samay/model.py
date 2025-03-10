@@ -12,6 +12,7 @@ import torch
 from samay.models.chronosforecasting.chronos.chronos import ChronosPipeline
 from sklearn.metrics import mean_squared_error
 from torch.utils.data import DataLoader
+from torchvision import transforms
 
 from samay.models.chronosforecasting.scripts import finetune
 from samay.models.chronosforecasting.scripts.jsonlogger import JsonFileHandler, JsonFormatter
@@ -24,12 +25,13 @@ from samay.models.uni2ts.model.moirai_moe import MoiraiMoEForecast, MoiraiMoEMod
 from samay.models.uni2ts.model.moirai.finetune import MoiraiFinetune
 from samay.dataset import MoiraiDataset
 from samay.utils import get_least_used_gpu
-from samay.moirai_utils import convert_module_kwargs
+from samay.moirai_utils import convert_module_kwargs, filter_dict
 from samay.models.uni2ts.cli.train import DataModule
 # For moirai finetuning
 from samay.models.uni2ts.optim import SchedulerType, get_scheduler
 from samay.models.uni2ts.module.ts_embed import MultiInSizeLinear, MultiOutSizeLinear
 from samay.models.uni2ts.module.norm import RMSNorm
+from gluonts.model.forecast import Forecast, QuantileForecast, SampleForecast
 from samay.models.uni2ts.module.position import (
     BinaryAttentionBias,
     LearnedEmbedding,
@@ -688,12 +690,15 @@ class MoiraiTSModel(Basemodel):
             )
         self.model.to(self.device)
 
-    def evaluate(self, dataset:MoiraiDataset, metrics=["MSE"], **kwargs):
+    def evaluate(self, dataset:MoiraiDataset, metrics:list[str]=["MSE"],
+                 output_transforms:transforms.Compose=None,num_sample_flag:bool=False,**kwargs):
         """For a given test dataset, we evaluate the model using the given metrics.
 
         Args:
             dataset (MoiraiDataset): Dataset to evaluate the model on.
             metrics (list, optional): Metrics you want to evaluate the model on. Defaults to ["MSE"].
+            output_transforms (transforms.Compose, optional): A set of transforms to be applied on the model output. Defaults to None.
+            num_sample_flage (bool, optional): If True, the model will use number of samples to sample from the distribution for forecasting. Defaults to False.
 
         Raises:
             ValueError: Any metric other than "MSE" or "MASE is not supported.
@@ -704,8 +709,54 @@ class MoiraiTSModel(Basemodel):
             dict: Predictions for each column (variate).
             dict: Histories for each column (variate).
         """
-        predictor = self.model.create_predictor(batch_size=self.batch_size)
-        forecast = predictor.predict(dataset.dataset.input)
+        # predictor = self.model.create_predictor(batch_size=self.batch_size)
+        # forecast = predictor.predict(dataset.dataset.input)
+
+        # required fields for the forecast
+        inp_names = ["past_target", "past_observed_target", "past_is_pad",]
+        if self.feat_dynamic_real_dim > 0:
+            inp_names.extend(["feat_dynamic_real", "observed_feat_dynamic_real"])
+        if self.past_feat_dynamic_real_dim > 0:
+            inp_names.extend(["past_feat_dynamic_real", "past_observed_feat_dynamic_real"])
+
+        # get the batched data
+        inference_loader = dataset.get_dataloader()
+
+        # set model in eval mode
+        self.model.eval()
+
+        # predict
+        forecast = []
+        with torch.no_grad():
+            for batch in inference_loader:
+                for k, v in batch.items():
+                    if isinstance(v, torch.Tensor):
+                        batch[k] = v.to(self.device)
+                inputs = filter_dict(batch, inp_names)
+                outputs = self.model.forward(**inputs).detach().cpu().numpy() # convert the tensor output to numpy array
+                
+                # Apply output transforms
+                if output_transforms is not None:
+                    outputs = output_transforms(outputs)
+                
+                # sample if needed
+                if num_sample_flag:
+                    num_collected_samples = outputs[0].shape[0]
+                    collected_samples = [outputs]
+                    # do so until we have enough samples
+                    while num_collected_samples < self.num_samples:
+                        outputs = self.model.forward(**inputs).detach().cpu().numpy()
+                        # Apply output transforms
+                        if output_transforms is not None:
+                            outputs = output_transforms(outputs)
+                        collected_samples.append(outputs)
+                        num_collected_samples += outputs[0].shape[0]
+                    # stack the collected samples
+                    outputs = np.stack([np.concatenate(s)[:self.num_samples] for s in zip(*collected_samples)])
+                    # assert that we have the right number of samples
+                    assert len(outputs[0]) == self.num_samples, "We do not have enough samples"
+                
+                forecast.extend([np.array(x) for x in outputs.tolist()])                
 
         # Iterators for input, label and forecast
         input_it = iter(dataset.dataset.input)
@@ -721,9 +772,12 @@ class MoiraiTSModel(Basemodel):
 
             # Iterate over each window
             for input, label, forecast in zip(input_it, label_it, forecast_it):
-                true_values = np.array(label["target"])
-                past_values = np.array(input["target"])
-                pred_values = np.median(forecast.samples, axis=0)
+                true_values = label["target"].squeeze() if isinstance(label["target"], np.ndarray) else np.array(label["target"])
+                past_values = input["target"].squeeze() if isinstance(input["target"], np.ndarray) else np.array(input["target"])
+                if isinstance(forecast, SampleForecast):
+                    pred_values = np.median(forecast.samples, axis=0) # if using SampleForecast() class
+                elif isinstance(forecast, np.ndarray):
+                    pred_values = np.median(forecast, axis=0)
                 length = len(past_values)
 
                 eval = []
@@ -893,6 +947,7 @@ class MoiraiTSModel(Basemodel):
                             inputs[k] = inputs[k].requires_grad_()
                 optimizer.zero_grad() # reset gradients
                 # distribution of predictions
+                torch.autograd.set_detect_anomaly(True)
                 outputs = FinetunedModel.forward(target=inputs["target"],
                                                 observed_mask=inputs["observed_mask"],
                                                 sample_id=inputs["sample_id"],
@@ -905,7 +960,8 @@ class MoiraiTSModel(Basemodel):
                                                                                               "sample_id","variate_id",]
                                                         }
                                                     )
-                loss = loss.requires_grad_()
+                # loss = loss.requires_grad_()
+                print(f"In finetune: loss:{loss}")
                 loss.backward()
                 optimizer.step()
                 # scheduler.step()

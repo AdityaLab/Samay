@@ -4,6 +4,7 @@ import torch
 from torch.utils.data import Dataset
 from uni2ts.distribution import MixtureOutput
 from typing import Callable, List, Dict, Any, Union, Type, Optional
+from pandas._libs.tslibs.period import Period
 
 # For custom transforms
 import numpy as np
@@ -11,6 +12,28 @@ import numpy as np
 import lightning as L
 
 # ------------------- HELPER FUNCTIONS -------------------
+def filter_dict(d:dict, keys:List[str], ignore_missing:bool=False):
+    """Filters the dictionary d to only include the keys in the list keys.
+
+    Args:
+        d (dict): The source dictionary to filter.
+        keys (List[str]): The keys to keep in the dictionary.
+        ignore_missing (bool, optional): If a given key is not in d then do we ignore or not. Defaults to False.
+
+    Returns:
+        _type_: _description_
+    """
+    result = {}
+
+    for key in keys:
+        try:
+            result[key] = d[key]
+        except KeyError:
+            if not ignore_missing:
+                raise
+
+    return result
+
 def handle_distr_output(distr:dict):
     """Converts the distr_output dictionary to a DistributionOutput object."""
     if "_target_" in distr:
@@ -110,10 +133,13 @@ class MoiraiTorch(Dataset):
                 for i in range(len(row)):
                     mod_row.append({})
                     for k,v in row[i].items():
-                        if k == "start":
-                            mod_row[i]["start"] = v if isinstance(v, torch.Tensor) else torch.tensor(v.to_timestamp().timestamp(), dtype=torch.float32)
-                        elif k == "forecast_start":
-                            mod_row[i]["forecast_start"] = v if isinstance(v, torch.Tensor) else torch.tensor(v.to_timestamp().timestamp(), dtype=torch.float32)
+                        if k == "start" or k=="forecast_start":
+                            v1 = v
+                            if isinstance(v1, pd.Timestamp):
+                                v1 = v1.timestamp() # converts to float (Unix timestamp)
+                            elif isinstance(v1, Period):
+                                v1 = v1.to_timestamp().timestamp()
+                            mod_row[i][k] = v if isinstance(v, torch.Tensor) else torch.tensor(v1, dtype=torch.float32)
                         else:
                             mod_row[i][k] = v
                 return tuple(mod_row)
@@ -122,10 +148,13 @@ class MoiraiTorch(Dataset):
             else:
                 mod_row = {}
                 for k,v in row.items():
-                    if k == "start":
-                        mod_row["start"] = v if isinstance(v, torch.Tensor) else torch.tensor(v.to_timestamp().timestamp(), dtype=torch.float32)
-                    elif k == "forecast_start":
-                        mod_row["forecast_start"] = v if isinstance(v, torch.Tensor) else torch.tensor(v.to_timestamp().timestamp(), dtype=torch.float32)
+                    if k == "start" or k=="forecast_start":
+                        v1 = v
+                        if isinstance(v1, pd.Timestamp):
+                            v1 = v1.timestamp() # converts to float (Unix timestamp)
+                        elif isinstance(v1, Period):
+                            v1 = v1.to_timestamp().timestamp()
+                        mod_row[k] = v if isinstance(v, torch.Tensor) else torch.tensor(v1, dtype=torch.float32)
                     else:
                         mod_row[k] = v
                 return mod_row
@@ -134,10 +163,13 @@ class MoiraiTorch(Dataset):
         elif isinstance(self.data, dict):
             row, mod_row = {k: v[idx] for k, v in self.data.items()}, {}
             for k,v in row.items():
-                if k == "start":
-                    mod_row["start"] = v if isinstance(v, torch.Tensor) else torch.tensor(v.to_timestamp().timestamp(), dtype=torch.float32)
-                elif k == "forecast_start":
-                    mod_row["forecast_start"] = v if isinstance(v, torch.Tensor) else torch.tensor(v.to_timestamp().timestamp(), dtype=torch.float32)
+                if k == "start" or k=="forecast_start":
+                    v1 = v
+                    if isinstance(v1, pd.Timestamp):
+                        v1 = v1.timestamp() # converts to float (Unix timestamp)
+                    elif isinstance(v1, Period):
+                        v1 = v1.to_timestamp().timestamp()
+                    mod_row[k] = v if isinstance(v, torch.Tensor) else torch.tensor(v1, dtype=torch.float32)
                 else:
                     mod_row[k] = v
             return mod_row
