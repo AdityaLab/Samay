@@ -1,0 +1,10 @@
+{
+    "repo": "Salesforce/moirai-moe-1.0-R-small",
+    "config": {
+        "context_len": 128,
+        "horizon_len": 64,
+        "num_layers": 100,
+        "model_type": "moirai-moe",
+        "model_size": "small"
+    }
+}

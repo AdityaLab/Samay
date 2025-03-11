@@ -1,6 +1,6 @@
-import os 
+import os
 import sys
-import torch
+
 import numpy as np
 import pandas as pd
 
@@ -124,11 +124,3 @@ if __name__ == "__main__":
         print("Leaderboard updated and saved")
         print("Leaderboard: ")
         print(df)
-
-
-
-
-
-
-
-    
