@@ -8,6 +8,7 @@ Current repository contains the following models:
 2. [MOMENT](https://arxiv.org/abs/2402.03885)
 3. [TimesFM](https://arxiv.org/html/2310.10688v2)
 4. [Chronos](https://arxiv.org/abs/2403.07815)
+5. [TinytTimeMixers](https://arxiv.org/abs/2401.03955)
 
 More models will be added soon...
 
@@ -17,12 +18,6 @@ You can add the package to your project by running the following command:
 
 ```bash
 pip install git+https://github.com/AdityaLab/Samay.git
-```
-
-For linux users with CUDA installed, you can install the package with GPU support by running:
-
-```bash
-pip install https://github.com/SamayAI/Samay/releases/download/v0.1.0/samay-0.1.0-cp311-cp311-linux_x86_64.whl
 ```
 
 **Note:** If the installation fails because rust is missing run:
