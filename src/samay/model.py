@@ -4,15 +4,19 @@ import os
 import sys
 from pathlib import Path
 import yaml
+import math
 
 import numpy as np
 import pandas as pd
 import torch
+import matplotlib.pyplot as plt
 # from chronos import ChronosPipeline
 from samay.models.chronosforecasting.chronos.chronos import ChronosPipeline
 from sklearn.metrics import mean_squared_error
 from torch.utils.data import DataLoader
 from torchvision import transforms
+from jaxtyping import Bool, Float, Int
+from einops import rearrange, reduce, repeat
 
 from samay.models.chronosforecasting.scripts import finetune
 from samay.models.chronosforecasting.scripts.jsonlogger import JsonFileHandler, JsonFormatter
@@ -659,6 +663,7 @@ class MoiraiTSModel(Basemodel):
         self.feat_dynamic_real_dim = config.get("feat_dynamic_real_dim", 0)
         self.past_feat_dynamic_real_dim = config.get("past_feat_dynamic_real_dim", 0)
         self.model_type = model_type
+        self.finetuned_model = None
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -690,8 +695,57 @@ class MoiraiTSModel(Basemodel):
             )
         self.model.to(self.device)
 
+    def preprocess_inputs(self, inputs:dict):
+        """Preprocess the inputs to the model - specifically adds the following fields:
+        +--------------------+--------------------------------------+-----------------------+----------------------------------+
+        | FIELD              | DESCRIPTION                          | TYPE                  | SHAPE                            |
+        +--------------------+--------------------------------------+-----------------------+----------------------------------+
+        | target             | Batched time series data             | torch.tensor[float]   | (batch_size, seq_len, max_patch) |
+        | observed_mask      | Binary mask for the context part     | torch.tensor[bool]    | (batch_size, seq_len, max_patch) |
+        | prediction_mask    | Binary mask for the prediction part  | torch.tensor[bool]    | (batch_size, seq_len)            |
+        | time_id            | Time index                           | torch.tensor[int]     | (batch_size, seq_len)            |
+        | sample_id          | Time index                           | torch.tensor[int]     | (batch_size, seq_len)            |
+        | variate_id         | Index indicating the variate         | torch.tensor[int]     | (batch_size, seq_len)            |
+        | patch_size         | Patch size the model should use      | torch.tensor[int]     | (batch_size, seq_len)            |
+        +--------------------+--------------------------------------+-----------------------+----------------------------------+
+
+        Args:
+            inputs (dict): Dictionary containing the input data.
+
+        Returns:
+            dict: Preprocessed input data.            
+        """
+        (target, observed_mask, sample_id,
+         time_id, variate_id, prediction_mask) = self.model._convert(patch_size=self.patch_size, past_target=inputs["past_target"],
+                                                                     past_observed_target=inputs["past_observed_target"],past_is_pad=inputs["past_is_pad"])
+        inputs["target"] = target
+        inputs["observed_mask"] = observed_mask
+        inputs["sample_id"] = sample_id
+        inputs["time_id"] = time_id
+        inputs["variate_id"] = variate_id
+        inputs["prediction_mask"] = prediction_mask
+        inputs["patch_size"] = torch.tensor(np.full(shape=sample_id.shape, fill_value=self.patch_size, dtype=np.int64), dtype=torch.int64)
+
+        return inputs
+
+    def _format_preds(
+        self,
+        preds: Float[torch.Tensor, "sample batch combine_seq patch"],
+        context_token_len: int,
+        pred_token_len: int,
+    ) -> Float[torch.Tensor, "batch sample future_time *tgt"]:
+        start = self.target_dim * context_token_len
+        end = start + self.target_dim * pred_token_len
+        preds = preds[..., start:end, :self.patch_size]
+        preds = rearrange(
+            preds,
+            "sample ... (dim seq) patch -> ... sample (seq patch) dim",
+            dim=self.target_dim,
+        )[..., : self.horizon_len, :]
+        return preds.squeeze(-1)
+    
     def evaluate(self, dataset:MoiraiDataset, metrics:list[str]=["MSE"],
-                 output_transforms:transforms.Compose=None,num_sample_flag:bool=False,**kwargs):
+                 output_transforms:transforms.Compose=None,num_sample_flag:bool=False,zero_shot:bool=True,**kwargs):
         """For a given test dataset, we evaluate the model using the given metrics.
 
         Args:
@@ -699,6 +753,7 @@ class MoiraiTSModel(Basemodel):
             metrics (list, optional): Metrics you want to evaluate the model on. Defaults to ["MSE"].
             output_transforms (transforms.Compose, optional): A set of transforms to be applied on the model output. Defaults to None.
             num_sample_flage (bool, optional): If True, the model will use number of samples to sample from the distribution for forecasting. Defaults to False.
+            zero_shot (bool, optional): If True, the standard model will be used, else the finetuned model will be used. Defaults to True.
 
         Raises:
             ValueError: Any metric other than "MSE" or "MASE is not supported.
@@ -733,7 +788,94 @@ class MoiraiTSModel(Basemodel):
                     if isinstance(v, torch.Tensor):
                         batch[k] = v.to(self.device)
                 inputs = filter_dict(batch, inp_names)
-                outputs = self.model.forward(**inputs).detach().cpu().numpy() # convert the tensor output to numpy array
+                if zero_shot: # Finetune forward asks for keys like target, observed_mask, etc.
+                    outputs = self.model.forward(**inputs).detach().cpu().numpy() # convert the tensor output to numpy array
+                elif not zero_shot and self.finetuned_model is not None:
+                    # get the context and prediction token lengths
+                    context_token_len = math.ceil(self.context_len/self.patch_size)
+                    pred_token_len = math.ceil(self.horizon_len/self.patch_size)
+                    num_context_tokens = context_token_len * self.target_dim
+                    num_pred_tokens = pred_token_len * self.target_dim
+
+                    # prepare the inputs
+                    pred_index = torch.arange(
+                        start=context_token_len - 1, end=num_context_tokens, step=context_token_len
+                    )
+                    assign_index = torch.arange(
+                        start=num_context_tokens,
+                        end=num_context_tokens + num_pred_tokens,
+                        step=pred_token_len,
+                    )
+                    
+                    old_keys = list(inputs.keys())
+                    inputs = self.preprocess_inputs(inputs)
+                    new_keys = list(inputs.keys())
+                    inputs = filter_dict(inputs, list(set(new_keys) - set(old_keys)))
+                    for k, v in inputs.items():
+                        if isinstance(v, torch.Tensor):
+                            inputs[k] = v.to(self.device)
+                    
+                    # get the forecast
+                    if pred_token_len == 1:
+                        distr = self.finetuned_model.forward(**inputs)
+                        preds = distr.sample(torch.Size((self.num_samples,)))
+                        preds[..., assign_index, :] = preds[..., pred_index, :]
+                        outputs = self._format_preds(preds=preds, context_token_len=context_token_len,
+                                                     pred_token_len=pred_token_len)
+                    else:
+                        distr = self.finetuned_model.forward(**inputs)
+                        preds = distr.sample(torch.Size((self.num_samples,)))
+
+                        expand_target = inputs["target"].unsqueeze(0).repeat(
+                            self.num_samples, 1, 1, 1
+                        )
+                        expand_prediction_mask = inputs["prediction_mask"].unsqueeze(0).repeat(
+                            self.num_samples, 1, 1
+                        )
+                        expand_observed_mask = inputs["observed_mask"].unsqueeze(0).expand(
+                            self.num_samples, -1, -1, -1
+                        )
+                        expand_sample_id = inputs["sample_id"].unsqueeze(0).expand(
+                            self.num_samples, -1, -1
+                        )
+                        expand_time_id = inputs["time_id"].unsqueeze(0).expand(
+                            self.num_samples, -1, -1
+                        )
+                        expand_variate_id = inputs["variate_id"].unsqueeze(0).expand(
+                            self.num_samples, -1, -1
+                        )
+                        expand_patch_size = inputs["patch_size"].unsqueeze(0).expand(
+                            self.num_samples, -1, -1
+                        )
+
+                        expand_target[..., assign_index, :] = preds[..., pred_index, :]
+                        expand_prediction_mask[..., assign_index] = False
+
+                        remain_step = pred_token_len - 1
+                        while remain_step > 0:
+                            distr = self.finetuned_model.forward(
+                                expand_target,
+                                expand_observed_mask,
+                                expand_sample_id,
+                                expand_time_id,
+                                expand_variate_id,
+                                expand_prediction_mask,
+                                expand_patch_size,
+                            )
+                            preds = distr.sample(torch.Size((1,)))
+                            _, _, bs, token, ps = preds.shape
+                            preds = preds.view(-1, bs, token, ps)
+
+                            pred_index = assign_index
+                            assign_index = assign_index + 1
+                            expand_target[..., assign_index, :] = preds[..., pred_index, :]
+                            expand_prediction_mask[..., assign_index] = False
+
+                            remain_step -= 1
+
+                        outputs = self._format_preds(preds=expand_target, context_token_len=context_token_len,
+                                                     pred_token_len=pred_token_len)
+
                 
                 # Apply output transforms
                 if output_transforms is not None:
@@ -817,39 +959,6 @@ class MoiraiTSModel(Basemodel):
         preds = [np.array(preds[key]) for key in preds.keys()]
 
         return eval_results, trues, preds, histories
-    
-    def preprocess_inputs(self, inputs:dict):
-        """Preprocess the inputs to the model - specifically adds the following fields:
-        +--------------------+--------------------------------------+-----------------------+----------------------------------+
-        | FIELD              | DESCRIPTION                          | TYPE                  | SHAPE                            |
-        +--------------------+--------------------------------------+-----------------------+----------------------------------+
-        | target             | Batched time series data             | torch.tensor[float]   | (batch_size, seq_len, max_patch) |
-        | observed_mask      | Binary mask for the context part     | torch.tensor[bool]    | (batch_size, seq_len, max_patch) |
-        | prediction_mask    | Binary mask for the prediction part  | torch.tensor[bool]    | (batch_size, seq_len)            |
-        | time_id            | Time index                           | torch.tensor[int]     | (batch_size, seq_len)            |
-        | sample_id          | Time index                           | torch.tensor[int]     | (batch_size, seq_len)            |
-        | variate_id         | Index indicating the variate         | torch.tensor[int]     | (batch_size, seq_len)            |
-        | patch_size         | Patch size the model should use      | torch.tensor[int]     | (batch_size, seq_len)            |
-        +--------------------+--------------------------------------+-----------------------+----------------------------------+
-
-        Args:
-            inputs (dict): Dictionary containing the input data.
-
-        Returns:
-            dict: Preprocessed input data.            
-        """
-        (target, observed_mask, sample_id,
-         time_id, variate_id, prediction_mask) = self.model._convert(patch_size=self.patch_size, past_target=inputs["past_target"],
-                                                                     past_observed_target=inputs["past_observed_target"],past_is_pad=inputs["past_is_pad"])
-        inputs["target"] = target
-        inputs["observed_mask"] = observed_mask
-        inputs["sample_id"] = sample_id
-        inputs["time_id"] = time_id
-        inputs["variate_id"] = variate_id
-        inputs["prediction_mask"] = prediction_mask
-        inputs["patch_size"] = torch.tensor(np.full(shape=sample_id.shape, fill_value=self.patch_size, dtype=np.int64), dtype=torch.int64)
-
-        return inputs
 
     def finetune(self, dataset, **kwargs):
         """Finetune the model on the given dataset.
@@ -868,7 +977,7 @@ class MoiraiTSModel(Basemodel):
         # lr = 1e-4 if "lr" not in fin_model_config else float(fin_model_config["lr"])
         lr = 1e-3
         self.batch_size = kwargs["batch_size"] if "batch_size" in kwargs else self.batch_size
-        epochs = 20
+        epochs = 10
         assert epochs <= kwargs["max_epochs"], "epochs should be less than or equal to max_epochs"
 
         # Number of batches per epoch required for calculating the number of training steps
@@ -936,8 +1045,9 @@ class MoiraiTSModel(Basemodel):
         #     num_training_steps=FinetunedModel.hparams.num_training_steps,
         # )
 
-        avg_loss = 0
+        loss_vals = []
         for epoch in range(epochs):
+            avg_loss = 0
             for i, (inputs) in enumerate(dataloader): # each batch is processed
                 inputs = self.preprocess_inputs(inputs) # patchify and other fields added
                 for k,v in inputs.items():
@@ -960,19 +1070,25 @@ class MoiraiTSModel(Basemodel):
                                                                                               "sample_id","variate_id",]
                                                         }
                                                     )
-                # loss = loss.requires_grad_()
-                print(f"In finetune: loss:{loss}")
                 loss.backward()
                 optimizer.step()
                 # scheduler.step()
                 avg_loss += loss.item()
             avg_loss /= len(dataloader)
+            print(f"Epoch {epoch}: Train loss: {avg_loss:.3f}")
+            loss_vals.append(avg_loss)
         print("Finetuning done")
 
-        # # Update the model
-        # updated_state = dict(FinetunedModel.state_dict())
-        # self.model.module.load_state_dict(state_dict=updated_state, strict=False)
-        return FinetunedModel
+        # Plot the loss values
+        plt.grid(True)
+        plt.plot(loss_vals)
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.title("Training Loss")
+        plt.savefig(f"training_loss_{epochs}_epochs.png")
+
+        self.finetuned_model = FinetunedModel
+        print("Fineuned model updated")
         
 
 if __name__ == "__main__":
