@@ -8,8 +8,8 @@ import pandas as pd
 # if src_path not in sys.path:
 #     sys.path.insert(0, src_path)
 
-from src.samay.model import TimesfmModel, MomentModel, ChronosModel
-from src.samay.dataset import TimesfmDataset, MomentDataset, ChronosDataset
+from src.samay.model import TimesfmModel, MomentModel, ChronosModel, ChronosBoltModel, TinyTimeMixerModel
+from src.samay.dataset import TimesfmDataset, MomentDataset, ChronosDataset, ChronosBoltDataset, TinyTimeMixerDataset
 from src.samay.utils import load_args
 from src.samay.metric import *
 
@@ -29,7 +29,7 @@ SALES_NAMES = {
     "restaurant": ['D'],
 }
 
-MODEL_NAMES = ["timesfm", "moment", "chronos"]
+MODEL_NAMES = ["timesfm", "moment", "chronos", "chronosbolt", "ttm"]
 MODEL_CONTEXT_LEN = {
     "timesfm": 32,
     "moment": 512,
@@ -69,7 +69,7 @@ def calc_pred_and_context_len(freq):
     
 
 if __name__ == "__main__":
-    model_name = MODEL_NAMES[2]
+    model_name = MODEL_NAMES[1]
     # create csv file for leaderboard if not already created
     csv_path = f"leaderboard/{model_name}.csv"
 
@@ -86,17 +86,24 @@ if __name__ == "__main__":
     elif model_name == "chronos":
         arg_path = "config/chronos.json"
         args = load_args(arg_path)
+    elif model_name == "ttm":
+        arg_path = "config/tinytimemixer.json"
+        args = load_args(arg_path)
 
     NAMES = ECON_NAMES | SALES_NAMES
 
     for dataset_name, freqs in NAMES.items():
         for freq in freqs:
-            pred_len, context_len = calc_pred_and_context_len(freq)
+            # pred_len, context_len = calc_pred_and_context_len(freq)
+            pred_len, context_len = 96, 512
             if model_name == "timesfm":
                 args["config"]["horizon_len"] = pred_len
                 args["config"]["context_len"] = context_len
             elif model_name == "moment":
                 args["config"]["forecast_horizon"] = pred_len
+            elif model_name == "ttm":
+                args["config"]["horizon_len"] = pred_len
+                args["config"]["context_len"] = context_len
             if len(freqs) == 1:
                 dataset_path = f"data/gifteval/{dataset_name}/data.csv"
             else:
@@ -104,7 +111,7 @@ if __name__ == "__main__":
             print(f"Creating leaderboard for dataset: {dataset_name}, context_len: {context_len}, horizon_len: {pred_len}")
             if model_name == "timesfm":
                 model = TimesfmModel(**args)
-                dataset = TimesfmDataset(datetime_col='timestamp', path=dataset_path, mode='test', context_len=args["config"]["context_len"], horizon_len=args["config"]["horizon_len"], normalize=False)
+                dataset = TimesfmDataset(datetime_col='timestamp', path=dataset_path, mode='test', context_len=args["config"]["context_len"], horizon_len=args["config"]["horizon_len"], boundaries=(-1, -1, -1), batchsize=64)
                 metrics = model.evaluate(dataset)
 
             elif model_name == "moment":
@@ -114,14 +121,26 @@ if __name__ == "__main__":
                 dataset = MomentDataset(datetime_col='timestamp', path=dataset_path, mode='test', horizon_len=args["config"]["forecast_horizon"], normalize=False)
                 finetuned_model = model.finetune(train_dataset, task_name="forecasting")
                 metrics = model.evaluate(dataset, task_name="forecasting")
+                print(metrics)
 
             elif model_name == "chronos":
                 model = ChronosModel(**args)
                 dataset_config = load_args("config/chronos_dataset.json")
                 dataset_config["context_length"] = context_len
                 dataset_config["prediction_length"] = pred_len
-                dataset = ChronosDataset(datetime_col='timestamp', path=dataset_path, mode='test', config=dataset_config)
+                dataset = ChronosDataset(datetime_col='timestamp', path=dataset_path, mode='test', config=dataset_config, batch_size=4)
                 metrics = model.evaluate(dataset, horizon_len=dataset_config["prediction_length"], quantile_levels=[0.1, 0.5, 0.9])
+
+            elif model_name == "chronosbolt":
+                repo = "amazon/chronos-bolt-small"
+                model = ChronosBoltModel(repo=repo)
+                dataset = ChronosBoltDataset(datetime_col='timestamp', path=dataset_path, mode='test', batch_size=8, context_len=context_len, horizon_len=pred_len)
+                metrics = model.evaluate(dataset, horizon_len=pred_len, quantile_levels=[0.1, 0.5, 0.9])
+
+            elif model_name == "ttm":
+                model = TinyTimeMixerModel(**args)
+                dataset = TinyTimeMixerDataset(datetime_col='timestamp', path=dataset_path, mode='test', context_len=context_len, horizon_len=pred_len)
+                metrics = model.evaluate(dataset)
 
             df = pd.read_csv(csv_path)
             if dataset_name in df["dataset"].values:
