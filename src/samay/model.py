@@ -764,9 +764,6 @@ class MoiraiTSModel(Basemodel):
             dict: Predictions for each column (variate).
             dict: Histories for each column (variate).
         """
-        # predictor = self.model.create_predictor(batch_size=self.batch_size)
-        # forecast = predictor.predict(dataset.dataset.input)
-
         # required fields for the forecast
         inp_names = ["past_target", "past_observed_target", "past_is_pad",]
         if self.feat_dynamic_real_dim > 0:
@@ -901,6 +898,7 @@ class MoiraiTSModel(Basemodel):
                 forecast.extend([np.array(x) for x in outputs.tolist()])                
 
         # Iterators for input, label and forecast
+        print("Forecasting done....now testing")
         input_it = iter(dataset.dataset.input)
         label_it = iter(dataset.dataset.label)
         forecast_it = iter(forecast)
@@ -921,6 +919,7 @@ class MoiraiTSModel(Basemodel):
                 elif isinstance(forecast, np.ndarray):
                     pred_values = np.median(forecast, axis=0)
                 length = len(past_values)
+                print(f"Checking: true: {true_values[:3]}, pred: {pred_values[:3]}")
 
                 eval = []
                 for metric in metrics:
@@ -977,7 +976,7 @@ class MoiraiTSModel(Basemodel):
         # lr = 1e-4 if "lr" not in fin_model_config else float(fin_model_config["lr"])
         lr = 1e-3
         self.batch_size = kwargs["batch_size"] if "batch_size" in kwargs else self.batch_size
-        epochs = 10
+        epochs = 25
         assert epochs <= kwargs["max_epochs"], "epochs should be less than or equal to max_epochs"
 
         # Number of batches per epoch required for calculating the number of training steps
@@ -1085,7 +1084,7 @@ class MoiraiTSModel(Basemodel):
         plt.xlabel("Epoch")
         plt.ylabel("Loss")
         plt.title("Training Loss")
-        plt.savefig(f"training_loss_{epochs}_epochs.png")
+        plt.savefig(f"training_loss_{epochs}_epochs_wo_scheduler.png")
 
         self.finetuned_model = FinetunedModel
         print("Fineuned model updated")
