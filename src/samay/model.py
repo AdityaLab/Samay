@@ -978,10 +978,11 @@ class MoiraiTSModel(Basemodel):
         with open(model_config, "r") as file:
             fin_model_config = yaml.safe_load(file)
         
-        lr = 1e-4 if "lr" not in fin_model_config else float(fin_model_config["lr"])
+        # lr = 1e-4 if "lr" not in fin_model_config else float(fin_model_config["lr"])
+        lr=1e-5
         weight_decay = 1e-1 if "weight_decay" not in fin_model_config else float(fin_model_config["weight_decay"])
         self.batch_size = kwargs["batch_size"] if "batch_size" in kwargs else self.batch_size
-        epochs = 2
+        epochs = 5
         assert epochs <= kwargs["max_epochs"], "epochs should be less than or equal to max_epochs"
 
         # Number of batches per epoch required for calculating the number of training steps
@@ -1030,7 +1031,22 @@ class MoiraiTSModel(Basemodel):
         FinetunedModel.train() # Set model to training mode
 
         # Freeze the transformer layers
-        # First we finetune the whole model
+        # First we finetune the whole model - Not good
+        # Freeze the last two encoder layers and param_proj
+        for mn, m in FinetunedModel.named_modules():
+            for pn, p in m.named_parameters():
+                if not p.requires_grad:
+                    continue
+
+                fpn = f"{mn}.{pn}" if mn else pn
+                # print(f"Checking fpn before freezing: {fpn}")
+
+                # Freeze everything except the last 2 encoder layers and param_proj
+                if fpn.split(".")[1] in ["in_proj", "res_proj", "feat_proj"]: # Freeze all initial layers
+                    p.requires_grad = False
+                elif fpn.split(".")[1] == "encoder":
+                    if len(fpn.split(".")) > 3 and fpn.split(".")[2] == "layers" and int(fpn.split(".")[3]) < 4: # Freeze all but last two encoder layers
+                        p.requires_grad = False
 
         # Load the dataset
         dataloader = dataset.get_dataloader() # look at if mode=="train" case for more info
@@ -1058,6 +1074,7 @@ class MoiraiTSModel(Basemodel):
                     continue
 
                 fpn = f"{mn}.{pn}" if mn else pn
+
                 if pn.endswith("bias"):
                     no_decay.add(fpn)
                 elif pn.endswith("weight") and isinstance(m, whitelist_params):
@@ -1121,6 +1138,7 @@ class MoiraiTSModel(Basemodel):
                                                                                               "sample_id","variate_id",]
                                                         }
                                                     )
+
                 loss.backward()
                 optimizer.step()
                 # scheduler.step()
