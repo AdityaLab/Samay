@@ -919,7 +919,7 @@ class MoiraiTSModel(Basemodel):
                 elif isinstance(forecast, np.ndarray):
                     pred_values = np.median(forecast, axis=0)
                 length = len(past_values)
-                print(f"Checking: true: {true_values[:3]}, pred: {pred_values[:3]}")
+                # print(f"Checking: true: {true_values[:3]}, pred: {pred_values[:3]}")
 
                 eval = []
                 for metric in metrics:
@@ -974,7 +974,8 @@ class MoiraiTSModel(Basemodel):
             fin_model_config = yaml.safe_load(file)
         
         # lr = 1e-4 if "lr" not in fin_model_config else float(fin_model_config["lr"])
-        lr = 1e-3
+        lr = 1e-4
+        weight_decay = 1e-1 if "weight_decay" not in fin_model_config else float(fin_model_config["weight_decay"])
         self.batch_size = kwargs["batch_size"] if "batch_size" in kwargs else self.batch_size
         epochs = 25
         assert epochs <= kwargs["max_epochs"], "epochs should be less than or equal to max_epochs"
@@ -1028,10 +1029,55 @@ class MoiraiTSModel(Basemodel):
         # Load the dataset
         dataloader = dataset.get_dataloader() # look at if mode=="train" case for more info
 
+        decay = set()
+        no_decay = set()
+
+        whitelist_params = (
+            LearnedProjection,
+            MultiInSizeLinear,
+            MultiOutSizeLinear,
+            nn.Linear,
+        )
+        blacklist_params = (
+            BinaryAttentionBias,
+            LearnedEmbedding,
+            RMSNorm,
+            nn.Embedding,
+            nn.LayerNorm,
+        )
+
+        for mn, m in FinetunedModel.named_modules():
+            for pn, p in m.named_parameters():
+                if not p.requires_grad:
+                    continue
+
+                fpn = f"{mn}.{pn}" if mn else pn
+                if pn.endswith("bias"):
+                    no_decay.add(fpn)
+                elif pn.endswith("weight") and isinstance(m, whitelist_params):
+                    decay.add(fpn)
+                elif pn.endswith("weight") and isinstance(m, blacklist_params):
+                    no_decay.add(fpn)
+
         # validate that we considered every parameter
         param_dict = {pn: p for pn, p in FinetunedModel.named_parameters() if p.requires_grad}
 
-        optim_groups = [{"params":list(param_dict.values())}]
+        optim_groups = [
+            {
+                "params": filter(
+                    lambda p: p.requires_grad,
+                    [v for k,v in param_dict.items() if k in (list(no_decay))],
+                ),
+                "weight_decay": weight_decay,
+            },
+            {
+                "params": filter(
+                    lambda p: p.requires_grad,
+                    [v for k,v in param_dict.items() if k not in (list(no_decay))],
+                ),
+                "weight_decay": 0.0,
+            }
+        ]
         optimizer = torch.optim.AdamW(optim_groups,
                                      lr=lr,
                                      betas=(FinetunedModel.hparams.beta1, FinetunedModel.hparams.beta2),
@@ -1074,7 +1120,7 @@ class MoiraiTSModel(Basemodel):
                 # scheduler.step()
                 avg_loss += loss.item()
             avg_loss /= len(dataloader)
-            print(f"Epoch {epoch}: Train loss: {avg_loss:.3f}")
+            print(f"Epoch {epoch}: Loss: {avg_loss:.3f}")
             loss_vals.append(avg_loss)
         print("Finetuning done")
 

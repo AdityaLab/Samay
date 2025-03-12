@@ -301,7 +301,7 @@ class MoiraiFinetune(L.LightningModule):
                     lambda p: p.requires_grad,
                     [v for k,v in param_dict.items() if k not in (list(no_decay))],
                 ),
-                "weight_decay": self.hparams.weight_decay,
+                "weight_decay": 0.0,
             }
         ]
 
