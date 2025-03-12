@@ -35,6 +35,11 @@ from samay.models.uni2ts.module.position import (
 )
 from samay.models.uni2ts.module.transformer import TransformerEncoder
 from samay.models.uni2ts.module.ts_embed import FeatLinear, MultiInSizeLinear
+from uni2ts.distribution.mixture import MixtureOutput
+from uni2ts.distribution.normal import NormalFixedScaleOutput
+from uni2ts.distribution.student_t import StudentTOutput
+from uni2ts.distribution.log_normal import LogNormalOutput
+from uni2ts.distribution.negative_binomial import NegativeBinomialOutput
 
 
 def encode_distr_output(
@@ -134,7 +139,15 @@ class MoiraiMoEModule(
             shared_time_qk_proj=True,
             d_ff=d_ff,
         )
-        self.distr_output = distr_output
+        # self.distr_output = distr_output
+        # components is a list of distribution output objects
+        student_t = StudentTOutput()
+        normal_fixed_scale = NormalFixedScaleOutput()
+        negative_binomial = NegativeBinomialOutput()
+        log_normal = LogNormalOutput()
+        self.distr_output = MixtureOutput(components=[student_t, normal_fixed_scale, negative_binomial, log_normal])
+        # args_dim component of self.param_proj has the dimension of parameters
+        # of each component of the mixture distribution
         self.param_proj = self.distr_output.get_param_proj(d_model, patch_sizes)
 
     def forward(
