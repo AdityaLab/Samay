@@ -64,6 +64,7 @@ from samay.models.uni2ts.transform import (
 )
 
 from .module import MoiraiModule
+from samay.models.uni2ts.model.moirai_moe import MoiraiMoEModule
 
 
 class MoiraiFinetune(L.LightningModule):
@@ -102,6 +103,9 @@ class MoiraiFinetune(L.LightningModule):
         lr: float = 1e-3,
         weight_decay: float = 1e-2,
         log_on_step: bool = False,
+        model_type: str = "moirai",
+        model_size: str = "small",
+        repo: Optional[str] = None,
     ):
         assert (module is not None) or (
             module_kwargs is not None
@@ -111,7 +115,22 @@ class MoiraiFinetune(L.LightningModule):
         ), f"num_warmup_steps ({num_warmup_steps}) should be <= num_training_steps ({num_training_steps})."
         super().__init__()
         self.save_hyperparameters(ignore=["module"])
-        self.module = MoiraiModule(**module_kwargs) if module is None else module
+        # self.module = MoiraiModule(**module_kwargs) if module is None else module
+
+        # Take the pretrained module
+        if model_type == "moirai": # standard moirai
+            if repo is None:
+                repo = f"Salesforce/moirai-1.1-R-{model_size}"
+            # self.module = MoiraiModule(**module_kwargs) if module is None else module
+            self.module = MoiraiModule.from_pretrained(repo) if module is None else module
+
+        elif model_type == "moirai-moe": # moirai with Mixture of Experts
+            # As of now we just take the repo as input and load the model
+            # However, the pretrained config has the checkpoint only for patch_size=16
+            # But we need to finetune for all patch_sizes to deal with varied frequencies
+            if repo is None:
+                repo = f"Salesforce/moirai-moe-1.0-R-{model_size}"
+            self.module = MoiraiMoEModule.from_pretrained(repo) if module is None else module
 
     def forward(
         self,

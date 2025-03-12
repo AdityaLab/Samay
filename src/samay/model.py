@@ -694,6 +694,7 @@ class MoiraiTSModel(Basemodel):
                 past_feat_dynamic_real_dim=self.past_feat_dynamic_real_dim,
             )
         self.model.to(self.device)
+        print(f"In MoiraiTSModel init: type: {type(self.model)}, patch_sizes: {self.model.module.patch_sizes}")
 
     def preprocess_inputs(self, inputs:dict):
         """Preprocess the inputs to the model - specifically adds the following fields:
@@ -968,16 +969,19 @@ class MoiraiTSModel(Basemodel):
         Returns:
             _type_: _description_
         """
-        # Parameters
-        model_config = "../src/samay/models/uni2ts/cli/conf/finetune/model/moirai_small.yaml"
+        model_size = self.repo.split("-")[-1]
+        if self.model_type == "moirai":
+            model_config = f"../src/samay/models/uni2ts/cli/conf/finetune/model/moirai_1.1_R_{model_size}.yaml"
+        elif self.model_type == "moirai-moe":
+            model_config = f"../src/samay/models/uni2ts/cli/conf/finetune/model/moirai_moe_1.0_R_{model_size}.yaml"
+        
         with open(model_config, "r") as file:
             fin_model_config = yaml.safe_load(file)
         
-        # lr = 1e-4 if "lr" not in fin_model_config else float(fin_model_config["lr"])
-        lr = 1e-4
+        lr = 1e-4 if "lr" not in fin_model_config else float(fin_model_config["lr"])
         weight_decay = 1e-1 if "weight_decay" not in fin_model_config else float(fin_model_config["weight_decay"])
         self.batch_size = kwargs["batch_size"] if "batch_size" in kwargs else self.batch_size
-        epochs = 25
+        epochs = 2
         assert epochs <= kwargs["max_epochs"], "epochs should be less than or equal to max_epochs"
 
         # Number of batches per epoch required for calculating the number of training steps
@@ -1003,7 +1007,7 @@ class MoiraiTSModel(Basemodel):
         # For now, self.model.module.patch_sizes i just [16] from the config file
         # But in finetune, we are using patch_sizes as [8,16,32,64,128]
         # So, we need to update the patch_sizes in the model
-        self.model.module.patch_sizes = list(module_args["patch_sizes"])
+        # self.model.module.patch_sizes = list(module_args["patch_sizes"])
             
         # Load the model
         FinetunedModel = MoiraiFinetune(min_patches=fin_model_config["min_patches"],
@@ -1016,8 +1020,10 @@ class MoiraiTSModel(Basemodel):
                                         beta1=fin_model_config["beta1"],
                                         beta2=fin_model_config["beta2"],
                                         val_metric=fin_model_config["val_metric"],
-                                        weight_decay=fin_model_config["weight_decay"]
-                                        )
+                                        weight_decay=fin_model_config["weight_decay"],
+                                        model_type=self.model_type,
+                                        model_size=model_size,
+                                    )
         
         # Pytorch version
         FinetunedModel.to(self.device)
