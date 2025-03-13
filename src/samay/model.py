@@ -979,10 +979,10 @@ class MoiraiTSModel(Basemodel):
             fin_model_config = yaml.safe_load(file)
         
         # lr = 1e-4 if "lr" not in fin_model_config else float(fin_model_config["lr"])
-        lr=1e-5
+        lr=5e-6
         weight_decay = 1e-1 if "weight_decay" not in fin_model_config else float(fin_model_config["weight_decay"])
         self.batch_size = kwargs["batch_size"] if "batch_size" in kwargs else self.batch_size
-        epochs = 5
+        epochs = 10
         assert epochs <= kwargs["max_epochs"], "epochs should be less than or equal to max_epochs"
 
         # Number of batches per epoch required for calculating the number of training steps
@@ -1045,7 +1045,7 @@ class MoiraiTSModel(Basemodel):
                 if fpn.split(".")[1] in ["in_proj", "res_proj", "feat_proj"]: # Freeze all initial layers
                     p.requires_grad = False
                 elif fpn.split(".")[1] == "encoder":
-                    if len(fpn.split(".")) > 3 and fpn.split(".")[2] == "layers" and int(fpn.split(".")[3]) < 4: # Freeze all but last two encoder layers
+                    if len(fpn.split(".")) > 3 and fpn.split(".")[2] == "layers" and int(fpn.split(".")[3]) < 5: # Freeze all but last two encoder layers
                         p.requires_grad = False
 
         # Load the dataset
