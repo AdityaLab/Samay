@@ -982,7 +982,7 @@ class MoiraiTSModel(Basemodel):
         lr=5e-6
         weight_decay = 1e-1 if "weight_decay" not in fin_model_config else float(fin_model_config["weight_decay"])
         self.batch_size = kwargs["batch_size"] if "batch_size" in kwargs else self.batch_size
-        epochs = 10
+        epochs = 5
         assert epochs <= kwargs["max_epochs"], "epochs should be less than or equal to max_epochs"
 
         # Number of batches per epoch required for calculating the number of training steps
