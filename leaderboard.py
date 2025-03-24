@@ -29,6 +29,76 @@ SALES_NAMES = {
     "restaurant": ['D'],
 }
 
+MONASH_NAMES = {
+    # "weather": "1D",
+    "tourism_yearly": ["1YE"],
+    "tourism_quarterly": ["1Q"],
+    "tourism_monthly": ["1M"],
+    "cif_2016": ["1M"],
+    # "london_smart_meters": ["30min"],
+    "australian_electricity_demand": ["30min"],
+    # "wind_farms_minutely": ["1min"],
+    "bitcoin": ["1D"],
+    "pedestrian_counts": ["1h"],
+    "vehicle_trips": ["1D"],
+    "kdd_cup_2018": ["1H"],
+    "nn5_daily": ["1D"],
+    "nn5_weekly": ["1W"],
+    # "kaggle_web_traffic": ["1D"],
+    # "kaggle_web_traffic_weekly": ["1W"],
+    "solar_10_minutes": ["10min"],
+    "solar_weekly": ["1W"],
+    "car_parts": ["1M"],
+    "fred_md": ["1M"],
+    "traffic_hourly": ["1h"],
+    "traffic_weekly": ["1W"],
+    "hospital": ["1M"],
+    "covid_deaths": ["1D"],
+    "sunspot": ["1D"],
+    "saugeenday": ["1D"],
+    "us_births": ["1D"],
+    "solar_4_seconds": ["4s"],
+    "wind_4_seconds": ["4s"],
+    "rideshare": ["1h"],
+    "oikolab_weather": ["1h"],
+    "temperature_rain": ["1D"]
+}
+
+MONASH_SETTINGS = {
+    # "weather": 30,
+    "tourism_yearly": 4,
+    "tourism_quarterly": 8,
+    "tourism_monthly": 24,
+    "cif_2016": 12,
+    # "london_smart_meters": 60,
+    "australian_electricity_demand": 60,
+    # "wind_farms_minutely": 60,
+    "bitcoin": 30,
+    "pedestrian_counts": 48,
+    "vehicle_trips": 30,
+    "kdd_cup_2018": 48,
+    "nn5_daily": 56,
+    "nn5_weekly": 8,
+    # "kaggle_web_traffic": 59,
+    # "kaggle_web_traffic_weekly": 8,
+    "solar_10_minutes": 60,
+    "solar_weekly": 5,
+    "car_parts": 12,
+    "fred_md": 12,
+    "traffic_hourly": 48,
+    "traffic_weekly": 8,
+    "hospital": 12,
+    "covid_deaths": 30,
+    "sunspot": 30,
+    "saugeenday": 30,
+    "us_births": 30,
+    "solar_4_seconds": 60,
+    "wind_4_seconds": 60,
+    "rideshare": 48,
+    "oikolab_weather": 48,
+    "temperature_rain": 30
+}
+
 MODEL_NAMES = ["timesfm", "moment", "chronos", "chronosbolt", "ttm"]
 MODEL_CONTEXT_LEN = {
     "timesfm": 32,
@@ -71,7 +141,9 @@ def calc_pred_and_context_len(freq):
 if __name__ == "__main__":
     model_name = MODEL_NAMES[1]
     # create csv file for leaderboard if not already created
-    csv_path = f"leaderboard/{model_name}.csv"
+    # csv_path = f"leaderboard/{model_name}.csv"
+    csv_path = f"leaderboard/monash_{model_name}.csv"
+    msh = False
 
     if not os.path.exists(csv_path):
         df = pd.DataFrame(columns=["dataset", "mse", "mae", "mase", "mape", "rmse", "nrmse", "smape", "msis", "nd", "mwsq", "crps"])
@@ -90,12 +162,16 @@ if __name__ == "__main__":
         arg_path = "config/tinytimemixer.json"
         args = load_args(arg_path)
 
-    NAMES = ECON_NAMES | SALES_NAMES
+    # NAMES = ECON_NAMES | SALES_NAMES
+    NAMES = MONASH_NAMES
+    msh = True
 
     for dataset_name, freqs in NAMES.items():
         for freq in freqs:
             # pred_len, context_len = calc_pred_and_context_len(freq)
             pred_len, context_len = 96, 512
+            if msh:
+                pred_len, context_len = MONASH_SETTINGS[dataset_name], 512
             if model_name == "timesfm":
                 args["config"]["horizon_len"] = pred_len
                 args["config"]["context_len"] = context_len
@@ -104,10 +180,13 @@ if __name__ == "__main__":
             elif model_name == "ttm":
                 args["config"]["horizon_len"] = pred_len
                 args["config"]["context_len"] = context_len
-            if len(freqs) == 1:
-                dataset_path = f"data/gifteval/{dataset_name}/data.csv"
+            if msh:
+                dataset_path = f"data/monash/{dataset_name}/test/data.csv"
             else:
-                dataset_path = f"data/gifteval/{dataset_name}/{freq}/data.csv"
+                if len(freqs) == 1:
+                    dataset_path = f"data/gifteval/{dataset_name}/data.csv"
+                else:
+                    dataset_path = f"data/gifteval/{dataset_name}/{freq}/data.csv"
             print(f"Creating leaderboard for dataset: {dataset_name}, context_len: {context_len}, horizon_len: {pred_len}")
             if model_name == "timesfm":
                 model = TimesfmModel(**args)
@@ -134,7 +213,7 @@ if __name__ == "__main__":
             elif model_name == "chronosbolt":
                 repo = "amazon/chronos-bolt-small"
                 model = ChronosBoltModel(repo=repo)
-                dataset = ChronosBoltDataset(datetime_col='timestamp', path=dataset_path, mode='test', batch_size=8, context_len=context_len, horizon_len=pred_len)
+                dataset = ChronosBoltDataset(datetime_col='timestamp', path=dataset_path, mode='test', batch_size=16, context_len=context_len, horizon_len=pred_len)
                 metrics = model.evaluate(dataset, horizon_len=pred_len, quantile_levels=[0.1, 0.5, 0.9])
 
             elif model_name == "ttm":

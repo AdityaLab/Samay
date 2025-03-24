@@ -695,7 +695,7 @@ class TinyTimeMixerDataset(BaseDataset):
         datetime_col="ds",
         path=None,
         boundaries=[0, 0, 0],
-        batch_size=64,
+        batch_size=128,
         mode=None,
         stride=10,
         context_len=512,
