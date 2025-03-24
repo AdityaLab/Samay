@@ -35,6 +35,11 @@ from uni2ts.module.position import (
 )
 from uni2ts.module.transformer import TransformerEncoder
 from uni2ts.module.ts_embed import MultiInSizeLinear
+from uni2ts.distribution.mixture import MixtureOutput
+from uni2ts.distribution.normal import NormalFixedScaleOutput
+from uni2ts.distribution.student_t import StudentTOutput
+from uni2ts.distribution.log_normal import LogNormalOutput
+from uni2ts.distribution.negative_binomial import NegativeBinomialOutput
 
 
 def encode_distr_output(
@@ -97,7 +102,9 @@ class MoiraiModule(
         self.max_seq_len = max_seq_len
         self.scaling = scaling
 
-        self.mask_encoding = nn.Embedding(num_embeddings=1, embedding_dim=d_model)
+        self.mask_encoding = nn.Embedding(num_embeddings=1, # number of embeddings
+                                          embedding_dim=d_model # length of each embedding vector
+                                        ) 
         self.scaler = PackedStdScaler() if scaling else PackedNOPScaler()
         self.in_proj = MultiInSizeLinear(
             in_features_ls=patch_sizes,
@@ -125,8 +132,18 @@ class MoiraiModule(
             shared_time_qk_proj=True,
             d_ff=None,
         )
-        self.distr_output = distr_output
-        self.param_proj = self.distr_output.get_param_proj(d_model, patch_sizes)
+        
+        # self.distr_output = distr_output
+        # components is a list of distribution output objects
+        student_t = StudentTOutput()
+        normal_fixed_scale = NormalFixedScaleOutput()
+        negative_binomial = NegativeBinomialOutput()
+        log_normal = LogNormalOutput()
+        self.distr_output = MixtureOutput(components=[student_t, normal_fixed_scale, negative_binomial, log_normal])
+        # args_dim component of self.param_proj has the dimension of parameters
+        # of each component of the mixture distribution
+        self.param_proj = self.distr_output.get_param_proj(in_features=d_model, # hidden dimension
+                                                           out_features=patch_sizes)
 
     def forward(
         self,
@@ -158,21 +175,35 @@ class MoiraiModule(
         :param patch_size: patch size for each token
         :return: predictive distribution
         """
+
+        # Scaling the target (main data) 
         loc, scale = self.scaler(
             target,
+            # observed_mask * ~prediction_mask separates the observed data from the prediction window
+            # unsqueeze(-1) adds a new dimension to the end of the tensor 
             observed_mask * ~prediction_mask.unsqueeze(-1),
             sample_id,
             variate_id,
         )
         scaled_target = (target - loc) / scale
+
+        # Projecting to representations
         reprs = self.in_proj(scaled_target, patch_size)
+
+        # Masking the prediction window
         masked_reprs = mask_fill(reprs, prediction_mask, self.mask_encoding.weight)
+
+        # Applying transformer layers
         reprs = self.encoder(
             masked_reprs,
             packed_attention_mask(sample_id),
             time_id=time_id,
             var_id=variate_id,
         )
+
+        # Projecting to distribution parameters
         distr_param = self.param_proj(reprs, patch_size)
+
+        # Constructing distribution object
         distr = self.distr_output.distribution(distr_param, loc=loc, scale=scale)
         return distr

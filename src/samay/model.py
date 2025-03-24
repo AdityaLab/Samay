@@ -3,13 +3,42 @@ import logging
 import os
 import sys
 from pathlib import Path
+import yaml
+import math
 
+from .models.chronosforecasting.chronos.chronos_bolt import ChronosBoltPipeline, ChronosBoltConfig
+from .models.TinyTimeMixer.models.tinytimemixer.modeling_tinytimemixer import TinyTimeMixerForPrediction
 import numpy as np
 import pandas as pd
 import torch
-from chronos import ChronosPipeline
+import matplotlib.pyplot as plt
+# from chronos import ChronosPipeline
+from samay.models.chronosforecasting.chronos.chronos import ChronosPipeline
 from sklearn.metrics import mean_squared_error
 from torch.utils.data import DataLoader
+
+from torchvision import transforms
+from jaxtyping import Bool, Float, Int
+from einops import rearrange, reduce, repeat
+
+from samay.models.uni2ts.model.moirai import MoiraiForecast, MoiraiModule
+from samay.models.uni2ts.model.moirai_moe import MoiraiMoEForecast, MoiraiMoEModule
+from samay.models.uni2ts.model.moirai.finetune import MoiraiFinetune
+from samay.dataset import MoiraiDataset
+from samay.moirai_utils import convert_module_kwargs, filter_dict
+from samay.models.uni2ts.cli.train import DataModule
+# For moirai finetuning
+from samay.models.uni2ts.optim import SchedulerType, get_scheduler
+from samay.models.uni2ts.module.ts_embed import MultiInSizeLinear, MultiOutSizeLinear
+from samay.models.uni2ts.module.norm import RMSNorm
+# from gluonts.model.forecast import Forecast, QuantileForecast, SampleForecast
+from samay.models.uni2ts.module.position import (
+    BinaryAttentionBias,
+    LearnedEmbedding,
+    LearnedProjection,
+)
+import torch.nn as nn
+import lightning as L
 
 from .models.chronosforecasting.chronos.chronos import ChronosPipeline, ChronosConfig
 from .models.lptm.model.backbone import LPTMPipeline
@@ -18,8 +47,6 @@ from .models.moment.momentfm.utils.masking import Masking
 from .models.timesfm import timesfm as tfm
 from .models.timesfm.timesfm import pytorch_patched_decoder as ppd
 
-# from .models.uni2ts.model.moirai import MoiraiForecast, MoiraiModule
-# from .models.uni2ts.model.moirai_moe import MoiraiMoEForecast, MoiraiMoEModule
 from .utils import get_least_used_gpu, visualize
 from .metric import *
 
@@ -202,7 +229,6 @@ class TimesfmModel(Basemodel):
         }
         
 
-
 class ChronosModel(Basemodel):
     def __init__(self, config=None, repo=None):
         super().__init__(config=config, repo=repo)
@@ -215,7 +241,6 @@ class ChronosModel(Basemodel):
         else:
             print("Initializing a new Chronos model without pre-trained weights")
             self.pipeline = ChronosPipeline(config=ChronosConfig(**config))
-
 
     def finetune(self, dataset, **kwargs):
         # Todo: finetune model
@@ -291,6 +316,7 @@ class ChronosModel(Basemodel):
                 context=input_seq,
                 prediction_length=horizon_len,
                 quantile_levels=quantile_levels,
+                limit_prediction_length=False,
             )
             trues.append(forecast_seq.detach().cpu().numpy())
             mean = mean.reshape(forecast_seq.shape[0], forecast_seq.shape[1], forecast_seq.shape[2])
@@ -298,6 +324,130 @@ class ChronosModel(Basemodel):
             quantiles = quantiles.reshape(quantiles.shape[-1], forecast_seq.shape[0], forecast_seq.shape[1], forecast_seq.shape[2])
             quantile_forecasts.append(quantiles.detach().cpu().numpy())
             input_seq = input_seq.reshape(shape[0], shape[1], shape[2])
+            histories.append(input_seq.detach().cpu().numpy())
+        
+        trues = np.concatenate(trues, axis=0)
+        preds = np.concatenate(preds, axis=0)
+        histories = np.concatenate(histories, axis=0)
+        quantile_forecasts = np.concatenate(quantile_forecasts, axis=1)
+
+        mse = MSE(trues, preds)
+        mae = MAE(trues, preds)
+        mase = MASE(trues, preds)
+        mape = MAPE(trues, preds)
+        rmse = RMSE(trues, preds)
+        nrmse = NRMSE(trues, preds)
+        smape = SMAPE(trues, preds)
+        msis = MSIS(trues, preds)
+        nd = ND(trues, preds)
+        mwsq = MWSQ(trues, preds, quantile_forecasts)
+        crps = CRPS(trues, preds, quantile_forecasts)
+
+        return {
+            "mse": mse,
+            "mae": mae,
+            "mase": mase,
+            "mape": mape,
+            "rmse": rmse,
+            "nrmse": nrmse,
+            "smape": smape,
+            "msis": msis,
+            "nd": nd,
+            "mwsq": mwsq,
+            "crps": crps,
+        }
+    
+
+class ChronosBoltModel(Basemodel):
+    def __init__(self, config=None, repo=None):
+        super().__init__(config=config, repo=repo)
+        if repo:
+            print("Loading Chronos model from Huggingface repository")
+            try:
+                self.pipeline = ChronosBoltPipeline.from_pretrained(repo, device_map=self.device)
+            except:
+                raise ValueError(f"Repository {repo} not found")
+        else:
+            print("Initializing a new Chronos model without pre-trained weights")
+            self.pipeline = ChronosBoltPipeline(config=ChronosBoltConfig(**config))
+
+
+    def finetune(self, dataset, **kwargs):
+        # Todo: finetune model
+        finetune_model = self.pipeline.model
+        dataloader = dataset.get_data_loader()
+        finetune_model.to(self.device)
+        finetune_model.train()
+        optimizer = torch.optim.AdamW(finetune_model.parameters(), lr=1e-4)
+        
+        avg_loss = 0
+
+        for epoch in range(10):
+            for i, data in enumerate(dataloader):
+                context, forecast = data
+                context = context.to(self.device)
+                forecast = forecast.to(self.device)
+                c_shape = context.shape
+                context = context.reshape(c_shape[0]*c_shape[1], c_shape[2])
+                f_shape = forecast.shape
+                forecast = forecast.reshape(f_shape[0]*f_shape[1], f_shape[2])
+                optimizer.zero_grad()
+                output = finetune_model(context=context, target=forecast)
+                loss = output.loss
+                loss.backward()
+                optimizer.step()
+                avg_loss += loss.item()
+            avg_loss /= len(dataloader)
+            print(f"Epoch {epoch}, Loss: {avg_loss}")
+
+        finetune_model.eval()
+                
+
+    def plot(self, dataset, horizon_len, quantile_levels, **kwargs):
+        dataloader = dataset.get_data_loader()
+        trues, preds, histories = [], [], []
+        for i, data in enumerate(dataloader):
+            context, forecast_seq = data
+            c_shape = context.shape
+            context = context.reshape(c_shape[0]*c_shape[1], c_shape[2])
+            context = torch.tensor(context)
+            quantiles, mean = self.pipeline.predict_quantiles(
+                context=context,
+                prediction_length=horizon_len,
+                quantile_levels=quantile_levels,
+            )
+            trues.append(forecast_seq.detach().cpu().numpy())
+            mean = mean.reshape(forecast_seq.shape[0], forecast_seq.shape[1], forecast_seq.shape[2])
+            preds.append(mean.detach().cpu().numpy())
+            input_seq = context.reshape(c_shape[0], c_shape[1], c_shape[2])
+            histories.append(input_seq.detach().cpu().numpy())
+        
+        trues = np.concatenate(trues, axis=0)
+        preds = np.concatenate(preds, axis=0)
+        histories = np.concatenate(histories, axis=0)
+
+        visualize(task_name="forecasting", trues=trues, preds=preds, history=histories, **kwargs)
+
+
+    def evaluate(self, dataset, horizon_len, quantile_levels, **kwargs):
+        dataloader = dataset.get_data_loader()
+        trues, preds, histories, quantile_forecasts = [], [], [], []
+        for i, data in enumerate(dataloader):
+            context, forecast_seq = data
+            c_shape = context.shape
+            context = context.reshape(c_shape[0]*c_shape[1], c_shape[2])
+            context = torch.tensor(context)
+            quantiles, mean = self.pipeline.predict_quantiles(
+                context=context,
+                prediction_length=horizon_len,
+                quantile_levels=quantile_levels,
+            )
+            trues.append(forecast_seq.detach().cpu().numpy())
+            mean = mean.reshape(forecast_seq.shape[0], forecast_seq.shape[1], forecast_seq.shape[2])
+            preds.append(mean.detach().cpu().numpy())
+            quantiles = quantiles.reshape(quantiles.shape[-1], forecast_seq.shape[0], forecast_seq.shape[1], forecast_seq.shape[2])
+            quantile_forecasts.append(quantiles.detach().cpu().numpy())
+            input_seq = context.reshape(c_shape[0], c_shape[1], c_shape[2])
             histories.append(input_seq.detach().cpu().numpy())
         
         trues = np.concatenate(trues, axis=0)
@@ -869,6 +1019,104 @@ class MomentModel(Basemodel):
             return accuracy, embeddings, labels
 
 
+class TinyTimeMixerModel(Basemodel):
+    def __init__(self, config=None, repo=None):
+        super().__init__(config=config, repo=repo)
+        if repo:
+            context_len = config["context_len"]
+            horizon_len = config["horizon_len"]
+            if context_len == 512 and horizon_len == 96:
+                revision = "main"
+            else:
+                revision = f"{context_len}-{horizon_len}-r2"
+            self.model = TinyTimeMixerForPrediction.from_pretrained(repo, revision=revision, prediction_filter_length=horizon_len)
+            self.model = self.model.to(self.device)
+        else:
+            raise ValueError("TinyTimeMixer model requires a repository")
+
+    def finetune(self, dataset, **kwargs):
+        dataloader = dataset.get_data_loader()
+        self.model.train()
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-4)
+        for epoch in range(5):
+            total_loss = 0
+            for i, data in enumerate(dataloader):
+                context, forecast_seq = data
+                context = context.float().permute(0, 2, 1).to(self.device)
+                forecast_seq = forecast_seq.float().permute(0, 2, 1).to(self.device)
+                optimizer.zero_grad()
+                output = self.model(past_values=context, future_values=forecast_seq)
+                loss = output.loss
+                loss.backward()
+                optimizer.step()
+                total_loss += loss.item()
+            avg_loss = total_loss / len(dataloader)
+            print(f"Epoch {epoch}, Loss: {avg_loss}")
+        self.model.eval()
+
+    def plot(self, dataset, **kwargs):
+        dataloader = dataset.get_data_loader()
+        trues, preds, histories = [], [], []
+        self.model.eval()
+        with torch.no_grad():
+            for i, data in enumerate(dataloader):
+                context, forecast_seq = data
+                context = context.float().permute(0, 2, 1).to(self.device)
+                forecast_seq = forecast_seq.float().permute(0, 2, 1).to(self.device)
+                output = self.model(past_values=context, future_values=forecast_seq)
+                pred = output.prediction_outputs
+                trues.append(forecast_seq.permute(0, 2, 1).detach().cpu().numpy())
+                preds.append(pred.permute(0, 2, 1).detach().cpu().numpy())
+                histories.append(context.permute(0, 2, 1).detach().cpu().numpy())
+            
+            trues = np.concatenate(trues, axis=0)
+            preds = np.concatenate(preds, axis=0)
+            histories = np.concatenate(histories, axis=0)
+
+        visualize(task_name="forecasting", trues=trues, preds=preds, history=histories, **kwargs)
+
+    def evaluate(self, dataset, **kwargs):
+        dataloader = dataset.get_data_loader()
+        trues, preds, histories = [], [], []
+        self.model.eval()
+        with torch.no_grad():
+            for i, data in enumerate(dataloader):
+                context, forecast_seq = data
+                context = context.float().permute(0, 2, 1).to(self.device)
+                forecast_seq = forecast_seq.float().permute(0, 2, 1).to(self.device)
+                output = self.model(past_values=context, future_values=forecast_seq)
+                pred = output.prediction_outputs
+                trues.append(forecast_seq.permute(0, 2, 1).detach().cpu().numpy())
+                preds.append(pred.permute(0, 2, 1).detach().cpu().numpy())
+                histories.append(context.permute(0, 2, 1).detach().cpu().numpy())
+            
+            trues = np.concatenate(trues, axis=0)
+            preds = np.concatenate(preds, axis=0)
+            histories = np.concatenate(histories, axis=0)
+
+        mse = MSE(trues, preds)
+        mae = MAE(trues, preds)
+        mase = MASE(trues, preds)
+        mape = MAPE(trues, preds)
+        rmse = RMSE(trues, preds)
+        nrmse = NRMSE(trues, preds)
+        smape = SMAPE(trues, preds)
+        msis = MSIS(trues, preds)
+        nd = ND(trues, preds)
+
+        return {
+            "mse": mse,
+            "mae": mae,
+            "mase": mase,
+            "mape": mape,
+            "rmse": rmse,
+            "nrmse": nrmse,
+            "smape": smape,
+            "msis": msis,
+            "nd": nd,
+        }
+
+
 class MoiraiTSModel(Basemodel):
     def __init__(
         self,
@@ -879,6 +1127,7 @@ class MoiraiTSModel(Basemodel):
         **kwargs,
     ):
         super().__init__(config=config, repo=repo)
+        # config.get(<key>, <default_value> if key not found)
         self.horizon_len = config.get("horizon_len", 32)
         self.context_len = config.get("context_len", 128)
         self.patch_size = config.get("patch_size", 16)
@@ -888,10 +1137,11 @@ class MoiraiTSModel(Basemodel):
         self.feat_dynamic_real_dim = config.get("feat_dynamic_real_dim", 0)
         self.past_feat_dynamic_real_dim = config.get("past_feat_dynamic_real_dim", 0)
         self.model_type = model_type
+        self.finetuned_model = None
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        if model_type == "moirai":
+        if model_type == "moirai": # standard moirai
             if self.repo is None:
                 self.repo = f"Salesforce/moirai-1.1-R-{model_size}"
             self.model = MoiraiForecast(
@@ -904,7 +1154,7 @@ class MoiraiTSModel(Basemodel):
                 feat_dynamic_real_dim=self.feat_dynamic_real_dim,
                 past_feat_dynamic_real_dim=self.past_feat_dynamic_real_dim,
             )
-        elif model_type == "moirai-moe":
+        elif model_type == "moirai-moe": # moirai with Mixture of Experts
             if self.repo is None:
                 self.repo = f"Salesforce/moirai-moe-1.0-R-{model_size}"
             self.model = MoiraiMoEForecast(
@@ -918,11 +1168,212 @@ class MoiraiTSModel(Basemodel):
                 past_feat_dynamic_real_dim=self.past_feat_dynamic_real_dim,
             )
         self.model.to(self.device)
+        print(f"In MoiraiTSModel init: type: {type(self.model)}, patch_sizes: {self.model.module.patch_sizes}")
 
-    def evaluate(self, dataset, metrics=["MSE"], **kwargs):
-        predictor = self.model.create_predictor(batch_size=self.batch_size)
-        forecast = predictor.predict(dataset.dataset.input)
+    def preprocess_inputs(self, inputs:dict):
+        """Preprocess the inputs to the model - specifically adds the following fields:
+        +--------------------+--------------------------------------+-----------------------+----------------------------------+
+        | FIELD              | DESCRIPTION                          | TYPE                  | SHAPE                            |
+        +--------------------+--------------------------------------+-----------------------+----------------------------------+
+        | target             | Batched time series data             | torch.tensor[float]   | (batch_size, seq_len, max_patch) |
+        | observed_mask      | Binary mask for the context part     | torch.tensor[bool]    | (batch_size, seq_len, max_patch) |
+        | prediction_mask    | Binary mask for the prediction part  | torch.tensor[bool]    | (batch_size, seq_len)            |
+        | time_id            | Time index                           | torch.tensor[int]     | (batch_size, seq_len)            |
+        | sample_id          | Time index                           | torch.tensor[int]     | (batch_size, seq_len)            |
+        | variate_id         | Index indicating the variate         | torch.tensor[int]     | (batch_size, seq_len)            |
+        | patch_size         | Patch size the model should use      | torch.tensor[int]     | (batch_size, seq_len)            |
+        +--------------------+--------------------------------------+-----------------------+----------------------------------+
 
+        Args:
+            inputs (dict): Dictionary containing the input data.
+
+        Returns:
+            dict: Preprocessed input data.            
+        """
+        (target, observed_mask, sample_id,
+         time_id, variate_id, prediction_mask) = self.model._convert(patch_size=self.patch_size, past_target=inputs["past_target"],
+                                                                     past_observed_target=inputs["past_observed_target"],past_is_pad=inputs["past_is_pad"])
+        inputs["target"] = target
+        inputs["observed_mask"] = observed_mask
+        inputs["sample_id"] = sample_id
+        inputs["time_id"] = time_id
+        inputs["variate_id"] = variate_id
+        inputs["prediction_mask"] = prediction_mask
+        inputs["patch_size"] = torch.tensor(np.full(shape=sample_id.shape, fill_value=self.patch_size, dtype=np.int64), dtype=torch.int64)
+
+        return inputs
+
+    def _format_preds(
+        self,
+        preds: Float[torch.Tensor, "sample batch combine_seq patch"],
+        context_token_len: int,
+        pred_token_len: int,
+    ) -> Float[torch.Tensor, "batch sample future_time *tgt"]:
+        start = self.target_dim * context_token_len
+        end = start + self.target_dim * pred_token_len
+        preds = preds[..., start:end, :self.patch_size]
+        preds = rearrange(
+            preds,
+            "sample ... (dim seq) patch -> ... sample (seq patch) dim",
+            dim=self.target_dim,
+        )[..., : self.horizon_len, :]
+        return preds.squeeze(-1)
+    
+    def evaluate(self, dataset:MoiraiDataset, metrics:list[str]=["MSE"],
+                 output_transforms:transforms.Compose=None,num_sample_flag:bool=False,zero_shot:bool=True,**kwargs):
+        """For a given test dataset, we evaluate the model using the given metrics.
+
+        Args:
+            dataset (MoiraiDataset): Dataset to evaluate the model on.
+            metrics (list, optional): Metrics you want to evaluate the model on. Defaults to ["MSE"].
+            output_transforms (transforms.Compose, optional): A set of transforms to be applied on the model output. Defaults to None.
+            num_sample_flage (bool, optional): If True, the model will use number of samples to sample from the distribution for forecasting. Defaults to False.
+            zero_shot (bool, optional): If True, the standard model will be used, else the finetuned model will be used. Defaults to True.
+
+        Raises:
+            ValueError: Any metric other than "MSE" or "MASE is not supported.
+
+        Returns:
+            dict: Evaluation results for each column (variate).
+            dict: True values for each column (variate).
+            dict: Predictions for each column (variate).
+            dict: Histories for each column (variate).
+        """
+        # required fields for the forecast
+        inp_names = ["past_target", "past_observed_target", "past_is_pad",]
+        if self.feat_dynamic_real_dim > 0:
+            inp_names.extend(["feat_dynamic_real", "observed_feat_dynamic_real"])
+        if self.past_feat_dynamic_real_dim > 0:
+            inp_names.extend(["past_feat_dynamic_real", "past_observed_feat_dynamic_real"])
+
+        # get the batched data
+        inference_loader = dataset.get_dataloader()
+
+        # set model in eval mode
+        self.model.eval()
+
+        # predict
+        forecast = []
+        with torch.no_grad():
+            for batch in inference_loader:
+                for k, v in batch.items():
+                    if isinstance(v, torch.Tensor):
+                        batch[k] = v.to(self.device)
+                inputs = filter_dict(batch, inp_names)
+                if zero_shot: # Finetune forward asks for keys like target, observed_mask, etc.
+                    outputs = self.model.forward(**inputs).detach().cpu().numpy() # convert the tensor output to numpy array
+                elif not zero_shot and self.finetuned_model is not None:
+                    # get the context and prediction token lengths
+                    context_token_len = math.ceil(self.context_len/self.patch_size)
+                    pred_token_len = math.ceil(self.horizon_len/self.patch_size)
+                    num_context_tokens = context_token_len * self.target_dim
+                    num_pred_tokens = pred_token_len * self.target_dim
+
+                    # prepare the inputs
+                    pred_index = torch.arange(
+                        start=context_token_len - 1, end=num_context_tokens, step=context_token_len
+                    )
+                    assign_index = torch.arange(
+                        start=num_context_tokens,
+                        end=num_context_tokens + num_pred_tokens,
+                        step=pred_token_len,
+                    )
+                    
+                    old_keys = list(inputs.keys())
+                    inputs = self.preprocess_inputs(inputs)
+                    new_keys = list(inputs.keys())
+                    inputs = filter_dict(inputs, list(set(new_keys) - set(old_keys)))
+                    for k, v in inputs.items():
+                        if isinstance(v, torch.Tensor):
+                            inputs[k] = v.to(self.device)
+                    
+                    # get the forecast
+                    if pred_token_len == 1:
+                        distr = self.finetuned_model.forward(**inputs)
+                        preds = distr.sample(torch.Size((self.num_samples,)))
+                        preds[..., assign_index, :] = preds[..., pred_index, :]
+                        outputs = self._format_preds(preds=preds, context_token_len=context_token_len,
+                                                     pred_token_len=pred_token_len)
+                    else:
+                        distr = self.finetuned_model.forward(**inputs)
+                        preds = distr.sample(torch.Size((self.num_samples,)))
+
+                        expand_target = inputs["target"].unsqueeze(0).repeat(
+                            self.num_samples, 1, 1, 1
+                        )
+                        expand_prediction_mask = inputs["prediction_mask"].unsqueeze(0).repeat(
+                            self.num_samples, 1, 1
+                        )
+                        expand_observed_mask = inputs["observed_mask"].unsqueeze(0).expand(
+                            self.num_samples, -1, -1, -1
+                        )
+                        expand_sample_id = inputs["sample_id"].unsqueeze(0).expand(
+                            self.num_samples, -1, -1
+                        )
+                        expand_time_id = inputs["time_id"].unsqueeze(0).expand(
+                            self.num_samples, -1, -1
+                        )
+                        expand_variate_id = inputs["variate_id"].unsqueeze(0).expand(
+                            self.num_samples, -1, -1
+                        )
+                        expand_patch_size = inputs["patch_size"].unsqueeze(0).expand(
+                            self.num_samples, -1, -1
+                        )
+
+                        expand_target[..., assign_index, :] = preds[..., pred_index, :]
+                        expand_prediction_mask[..., assign_index] = False
+
+                        remain_step = pred_token_len - 1
+                        while remain_step > 0:
+                            distr = self.finetuned_model.forward(
+                                expand_target,
+                                expand_observed_mask,
+                                expand_sample_id,
+                                expand_time_id,
+                                expand_variate_id,
+                                expand_prediction_mask,
+                                expand_patch_size,
+                            )
+                            preds = distr.sample(torch.Size((1,)))
+                            _, _, bs, token, ps = preds.shape
+                            preds = preds.view(-1, bs, token, ps)
+
+                            pred_index = assign_index
+                            assign_index = assign_index + 1
+                            expand_target[..., assign_index, :] = preds[..., pred_index, :]
+                            expand_prediction_mask[..., assign_index] = False
+
+                            remain_step -= 1
+
+                        outputs = self._format_preds(preds=expand_target, context_token_len=context_token_len,
+                                                     pred_token_len=pred_token_len)
+
+                
+                # Apply output transforms
+                if output_transforms is not None:
+                    outputs = output_transforms(outputs)
+                
+                # sample if needed
+                if num_sample_flag:
+                    num_collected_samples = outputs[0].shape[0]
+                    collected_samples = [outputs]
+                    # do so until we have enough samples
+                    while num_collected_samples < self.num_samples:
+                        outputs = self.model.forward(**inputs).detach().cpu().numpy()
+                        # Apply output transforms
+                        if output_transforms is not None:
+                            outputs = output_transforms(outputs)
+                        collected_samples.append(outputs)
+                        num_collected_samples += outputs[0].shape[0]
+                    # stack the collected samples
+                    outputs = np.stack([np.concatenate(s)[:self.num_samples] for s in zip(*collected_samples)])
+                    # assert that we have the right number of samples
+                    assert len(outputs[0]) == self.num_samples, "We do not have enough samples"
+                
+                forecast.extend([np.array(x) for x in outputs.tolist()])                
+
+        # Iterators for input, label and forecast
+        print("Forecasting done....now testing")
         input_it = iter(dataset.dataset.input)
         label_it = iter(dataset.dataset.label)
         forecast_it = iter(forecast)
@@ -932,23 +1383,29 @@ class MoiraiTSModel(Basemodel):
         histories = {}
         eval_windows = []
 
-        with torch.no_grad():
+        with torch.no_grad(): # No need to compute gradients
+
+            # Iterate over each window
             for input, label, forecast in zip(input_it, label_it, forecast_it):
-                true_values = np.array(label["target"])
-                past_values = np.array(input["target"])
-                pred_values = np.median(forecast.samples, axis=0)
+                true_values = label["target"].squeeze() if isinstance(label["target"], np.ndarray) else np.array(label["target"])
+                past_values = input["target"].squeeze() if isinstance(input["target"], np.ndarray) else np.array(input["target"])
+                if isinstance(forecast, SampleForecast):
+                    pred_values = np.median(forecast.samples, axis=0) # if using SampleForecast() class
+                elif isinstance(forecast, np.ndarray):
+                    pred_values = np.median(forecast, axis=0)
                 length = len(past_values)
+                # print(f"Checking: true: {true_values[:3]}, pred: {pred_values[:3]}")
 
                 eval = []
                 for metric in metrics:
                     if metric == "MSE":
                         eval.append(mean_squared_error(true_values, pred_values))
+                    
+                    # MASE = current model's MAE / naive model's MAE
                     elif metric == "MASE":
                         forecast_error = np.mean(np.abs(true_values - pred_values))
-                        naive_error = np.mean(
-                            np.abs(true_values[1:] - true_values[:-1])
-                        )
-                        if naive_error == 0:
+                        naive_error = np.mean(np.abs(true_values[1:] - true_values[:-1]))
+                        if naive_error == 0: # Avoid division by zero
                             eval.append(np.inf)
                         else:
                             eval.append(forecast_error / naive_error)
@@ -956,6 +1413,7 @@ class MoiraiTSModel(Basemodel):
                         raise ValueError(f"Unsupported metric: {metric}")
                 eval_windows.append(eval)
 
+                # Update history, true values and predictions
                 if length not in histories.keys():
                     histories[length] = []
                     trues[length] = []
@@ -969,12 +1427,212 @@ class MoiraiTSModel(Basemodel):
         for i in range(len(metrics)):
             eval_results[metrics[i]] = eval_windows[i]
 
+        # Convert to numpy arrays
         histories = [np.array(histories[key]) for key in histories.keys()]
         trues = [np.array(trues[key]) for key in trues.keys()]
         preds = [np.array(preds[key]) for key in preds.keys()]
 
         return eval_results, trues, preds, histories
 
+    def finetune(self, dataset, **kwargs):
+        """Finetune the model on the given dataset.
+
+        Args:
+            dataset (MoiraiDataset): Dataset containing the input data and relevant functions like dataloaders etc.
+
+        Returns:
+            _type_: _description_
+        """
+        model_size = self.repo.split("-")[-1]
+        if self.model_type == "moirai":
+            model_config = f"../src/samay/models/uni2ts/cli/conf/finetune/model/moirai_1.1_R_{model_size}.yaml"
+        elif self.model_type == "moirai-moe":
+            model_config = f"../src/samay/models/uni2ts/cli/conf/finetune/model/moirai_moe_1.0_R_{model_size}.yaml"
+        
+        with open(model_config, "r") as file:
+            fin_model_config = yaml.safe_load(file)
+        
+        # lr = 1e-4 if "lr" not in fin_model_config else float(fin_model_config["lr"])
+        lr=5e-6
+        weight_decay = 1e-1 if "weight_decay" not in fin_model_config else float(fin_model_config["weight_decay"])
+        self.batch_size = kwargs["batch_size"] if "batch_size" in kwargs else self.batch_size
+        epochs = 5
+        assert epochs <= kwargs["max_epochs"], "epochs should be less than or equal to max_epochs"
+
+        # Number of batches per epoch required for calculating the number of training steps
+        num_batches = len(dataset.dataset)//self.batch_size
+        if "num_batches_per_epoch" in kwargs.keys(): # If num_batches_per_epoch is provided
+            num_batches_per_epoch = kwargs["num_batches_per_epoch"]
+            epochs = min(epochs, num_batches//num_batches_per_epoch)
+        else:
+            num_batches_per_epoch = num_batches//epochs
+        
+        training_steps = num_batches_per_epoch * kwargs["max_epochs"]
+        module_args = convert_module_kwargs(fin_model_config["module_kwargs"]) # remove _target_ fields
+        self.patch_size = self.model.module.in_proj.in_features_ls[0] # update patch_size
+
+        # Trainer configuration (from uni2ts/cli/train.py)
+        # mod_torch is the trainer configuration without _target_ fields or any key 
+        # whose value is neither a list or dictionary
+        if kwargs["tf32"]:
+            assert kwargs["mod_torch"]["precision"] == 32, "Precision should be 32 for tf32"
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+        
+        # For now, self.model.module.patch_sizes i just [16] from the config file
+        # But in finetune, we are using patch_sizes as [8,16,32,64,128]
+        # So, we need to update the patch_sizes in the model
+        # self.model.module.patch_sizes = list(module_args["patch_sizes"])
+            
+        # Load the model
+        FinetunedModel = MoiraiFinetune(min_patches=fin_model_config["min_patches"],
+                                        min_mask_ratio=fin_model_config["min_mask_ratio"],
+                                        max_mask_ratio=fin_model_config["max_mask_ratio"],
+                                        max_dim=fin_model_config["max_dim"],
+                                        num_training_steps=training_steps,
+                                        num_warmup_steps=fin_model_config["num_warmup_steps"],
+                                        module_kwargs=module_args,
+                                        beta1=fin_model_config["beta1"],
+                                        beta2=fin_model_config["beta2"],
+                                        val_metric=fin_model_config["val_metric"],
+                                        weight_decay=fin_model_config["weight_decay"],
+                                        model_type=self.model_type,
+                                        model_size=model_size,
+                                    )
+        
+        # Pytorch version
+        FinetunedModel.to(self.device)
+        FinetunedModel.train() # Set model to training mode
+
+        # Freeze the transformer layers
+        # First we finetune the whole model - Not good
+        # Freeze the last two encoder layers and param_proj
+        for mn, m in FinetunedModel.named_modules():
+            for pn, p in m.named_parameters():
+                if not p.requires_grad:
+                    continue
+
+                fpn = f"{mn}.{pn}" if mn else pn
+                # print(f"Checking fpn before freezing: {fpn}")
+
+                # Freeze everything except the last 2 encoder layers and param_proj
+                if fpn.split(".")[1] in ["in_proj", "res_proj", "feat_proj"]: # Freeze all initial layers
+                    p.requires_grad = False
+                elif fpn.split(".")[1] == "encoder":
+                    if len(fpn.split(".")) > 3 and fpn.split(".")[2] == "layers" and int(fpn.split(".")[3]) < 5: # Freeze all but last two encoder layers
+                        p.requires_grad = False
+
+        # Load the dataset
+        dataloader = dataset.get_dataloader() # look at if mode=="train" case for more info
+
+        decay = set()
+        no_decay = set()
+
+        whitelist_params = (
+            LearnedProjection,
+            MultiInSizeLinear,
+            MultiOutSizeLinear,
+            nn.Linear,
+        )
+        blacklist_params = (
+            BinaryAttentionBias,
+            LearnedEmbedding,
+            RMSNorm,
+            nn.Embedding,
+            nn.LayerNorm,
+        )
+
+        for mn, m in FinetunedModel.named_modules():
+            for pn, p in m.named_parameters():
+                if not p.requires_grad:
+                    continue
+
+                fpn = f"{mn}.{pn}" if mn else pn
+
+                if pn.endswith("bias"):
+                    no_decay.add(fpn)
+                elif pn.endswith("weight") and isinstance(m, whitelist_params):
+                    decay.add(fpn)
+                elif pn.endswith("weight") and isinstance(m, blacklist_params):
+                    no_decay.add(fpn)
+
+        # validate that we considered every parameter
+        param_dict = {pn: p for pn, p in FinetunedModel.named_parameters() if p.requires_grad}
+
+        optim_groups = [
+            {
+                "params": filter(
+                    lambda p: p.requires_grad,
+                    [v for k,v in param_dict.items() if k in (list(no_decay))],
+                ),
+                "weight_decay": weight_decay,
+            },
+            {
+                "params": filter(
+                    lambda p: p.requires_grad,
+                    [v for k,v in param_dict.items() if k not in (list(no_decay))],
+                ),
+                "weight_decay": 0.0,
+            }
+        ]
+        optimizer = torch.optim.AdamW(optim_groups,
+                                     lr=lr,
+                                     betas=(FinetunedModel.hparams.beta1, FinetunedModel.hparams.beta2),
+                                     eps=1e-6)
+        
+        # scheduler = get_scheduler(
+        #     SchedulerType.COSINE_WITH_RESTARTS,
+        #     optimizer,
+        #     num_warmup_steps=FinetunedModel.hparams.num_warmup_steps,
+        #     num_training_steps=FinetunedModel.hparams.num_training_steps,
+        # )
+
+        loss_vals = []
+        for epoch in range(epochs):
+            avg_loss = 0
+            for i, (inputs) in enumerate(dataloader): # each batch is processed
+                inputs = self.preprocess_inputs(inputs) # patchify and other fields added
+                for k,v in inputs.items():
+                    if isinstance(v, torch.Tensor):
+                        inputs[k] = v.to(self.device)
+                        if v.dtype == torch.float32 or v.dtype == torch.float64:
+                            inputs[k] = inputs[k].requires_grad_()
+                optimizer.zero_grad() # reset gradients
+                # distribution of predictions
+                torch.autograd.set_detect_anomaly(True)
+                outputs = FinetunedModel.forward(target=inputs["target"],
+                                                observed_mask=inputs["observed_mask"],
+                                                sample_id=inputs["sample_id"],
+                                                time_id=inputs["time_id"],
+                                                variate_id=inputs["variate_id"],
+                                                prediction_mask=inputs["prediction_mask"],
+                                                patch_size=inputs["patch_size"])
+                loss = FinetunedModel.hparams.loss_func(pred=outputs,
+                                                        **{field: inputs[field] for field in ["target","prediction_mask","observed_mask",
+                                                                                              "sample_id","variate_id",]
+                                                        }
+                                                    )
+
+                loss.backward()
+                optimizer.step()
+                # scheduler.step()
+                avg_loss += loss.item()
+            avg_loss /= len(dataloader)
+            print(f"Epoch {epoch}: Loss: {avg_loss:.3f}")
+            loss_vals.append(avg_loss)
+        print("Finetuning done")
+
+        # Plot the loss values
+        plt.grid(True)
+        plt.plot(loss_vals)
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.title("Training Loss")
+        plt.savefig(f"training_loss_{epochs}_epochs_wo_scheduler.png")
+
+        self.finetuned_model = FinetunedModel
+        print("Fineuned model updated")
+        
 
 if __name__ == "__main__":
     name = "timesfm"

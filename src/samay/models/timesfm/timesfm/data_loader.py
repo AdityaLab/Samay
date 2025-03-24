@@ -184,12 +184,13 @@ class TimeSeriesdata(object):
     """Generator for validation/test data."""
     if mode == 'val':
       start = self.val_range[0]
-      end = self.val_range[1] - self.pred_len + 1
+      end = self.val_range[1] - self.pred_len
     elif mode == 'test':
       start = self.test_range[0]
-      end = self.test_range[1] - self.pred_len + 1
+      end = self.test_range[1] - self.pred_len
     else:
       raise NotImplementedError('Eval mode not implemented')
+    # print(start, end)
     num_ts = len(self.ts_cols)
     hist_len = self.hist_len
     logging.info('Hist len: %s', hist_len)
@@ -199,7 +200,7 @@ class TimeSeriesdata(object):
     else:
       epoch_len = len(perm)
     for i in range(0, epoch_len, shift):
-      idx = perm[i]
+      idx = min(perm[i] + hist_len, end)
       for batch_idx in range(0, num_ts, self.batch_size):
         tsidx = np.arange(batch_idx, min(batch_idx + self.batch_size, num_ts))
         dtimes = np.arange(idx - hist_len, idx + self.pred_len)
@@ -226,6 +227,14 @@ class TimeSeriesdata(object):
     """Get features and ts in specified windows."""
     if hist_len is None:
       hist_len = self.hist_len
+    if dtimes[0] < 0:
+      pad_len = -dtimes[0]
+      self.data_mat = np.pad(self.data_mat, ((0, 0), (pad_len, 0)))
+      self.time_mat = np.pad(self.time_mat, ((0, 0), (pad_len, 0)))
+      self.num_feat_mat = np.pad(self.num_feat_mat, ((0, 0), (pad_len, 0)))
+      self.cat_feat_mat = np.pad(self.cat_feat_mat, ((0, 0), (pad_len, 0)))
+      dtimes = np.arange(0, dtimes.shape[0])
+
     data_times = dtimes[dtimes < self.data_mat.shape[1]]
     bdata = self.data_mat[:, data_times]   # unique_id, y
     bts = bdata[tsidx, :]
@@ -245,6 +254,7 @@ class TimeSeriesdata(object):
     bfeats_pred = bfeats[:, hist_len:]    # holiday features, 0
     bcf_train = bcf[:, 0:hist_len]        # 0
     bcf_pred = bcf[:, hist_len:]          # 0
+    # print(bts_train.shape, bts_pred.shape)
     return bts_train, bts_pred, bfeats_train, bfeats_pred, bcf_train, bcf_pred
 
   def torch_dataset(self, mode='train', shift=1):
@@ -266,7 +276,7 @@ class CustomTorchDataset(Dataset):
         self.output_shapes = output_shapes
 
         self.data = list(self._generate_data())
-        print(len(self.data), self.data[0][0].shape)
+        # print(len(self.data), self.data[0][0].shape)
     
     def _generate_data(self):
         for item in self.gen_fn():

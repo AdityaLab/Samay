@@ -8,6 +8,8 @@ Current repository contains the following models:
 2. [MOMENT](https://arxiv.org/abs/2402.03885)
 3. [TimesFM](https://arxiv.org/html/2310.10688v2)
 4. [Chronos](https://arxiv.org/abs/2403.07815)
+5. [MOIRAI](https://arxiv.org/abs/2402.02592)
+6. [TinytTimeMixers](https://arxiv.org/abs/2401.03955)
 
 More models will be added soon...
 
@@ -17,12 +19,6 @@ You can add the package to your project by running the following command:
 
 ```bash
 pip install git+https://github.com/AdityaLab/Samay.git
-```
-
-For linux users with CUDA installed, you can install the package with GPU support by running:
-
-```bash
-pip install https://github.com/SamayAI/Samay/releases/download/v0.1.0/samay-0.1.0-cp311-cp311-linux_x86_64.whl
 ```
 
 **Note:** If the installation fails because rust is missing run:
@@ -138,6 +134,50 @@ val_dataset = TimesfmDataset(name="ett", datetime_col='date', path='data/ETTh1.c
 
 ```python
 avg_loss, trues, preds, histories = tfm.evaluate(val_dataset)
+```
+
+### MOIRAI
+
+Install the package: `pip install git+https://github.com/AdityaLab/Samay.git`.
+
+#### Loading  Model
+
+```python
+from samay.dataset import MoiraiDataset
+from samay.model import MoiraiTSModel
+
+repo = "Salesforce/moirai-moe-1.0-R-small"
+config = {
+        "context_len": 128,
+        "horizon_len": 64,
+        "num_layers": 100,
+        "model_type": "moirai-moe",
+        "model_size": "small"
+    }
+
+moirai_model = MoiraiTSModel(repo=repo, config=config)
+```
+
+#### Loading Dataset
+
+```python
+data_config = {"name" : "ett",
+                "path" : "../src/samay/models/moment/data/ETTh1.csv",
+                "date_col" : "date",
+                "freq": "h"
+            }
+
+train_dataset = MoiraiDataset(name=data_config['name'], mode="train", path=data_config['path'], datetime_col=data_config['date_col'], freq=data_config['freq'],
+                            context_len=config['context_len'], horizon_len=config['horizon_len'])
+
+test_dataset = MoiraiDataset(name=data_config['name'], mode="test", path=data_config['path'], datetime_col=data_config['date_col'], freq=data_config['freq'],
+                            context_len=config['context_len'], horizon_len=config['horizon_len'])
+```
+
+#### Zero-Forecasting
+
+```python
+eval_results, trues, preds, histories = moirai_model.evaluate(test_dataset, metrics=["MSE", "MASE"])
 ```
 
 ### Support
