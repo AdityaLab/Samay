@@ -103,16 +103,26 @@ def load_args(file_path):
     with open(file_path, "r") as file:
         return json.load(file)                                                            
 
-def arrow_to_csv(arrow_dir):
+def arrow_to_csv(arrow_dir, freq=None):
     data = load_from_disk(arrow_dir)
     df = data.to_pandas()
     start_date = df['start'].iloc[0]
     df = df.drop(columns=['start'])
+    print(start_date)
     df_expanded = df.explode('target', ignore_index=True)
+    df_expanded = df_expanded[['target', 'item_id']]
+    # if the target column is not numeric but an array, explode again
+    if isinstance(df_expanded['target'].iloc[0], np.ndarray):
+        print(df_expanded['target'].iloc[0].shape)
+        df_expanded['group_id'] = ["T" + str(i) for i in range(1, len(df_expanded)+1)]
+        df_expanded = df_expanded.explode('target', ignore_index=True)
+        df_expanded['item_id'] = df_expanded['group_id']
+        df_expanded.drop(columns=['group_id'], inplace=True)
     df_expanded.infer_objects()
+    print(df_expanded.head())
     max_length = max(group['target'].size for _, group in df_expanded.groupby('item_id'))
     pivot_df = pd.DataFrame({item: group['target'].tolist() + [0] * (max_length - len(group['target'])) for item, group in df_expanded.groupby('item_id')})
-    pivot_df['timestamp'] = pd.date_range(start=start_date, periods=len(pivot_df), freq='D')
+    pivot_df['timestamp'] = pd.date_range(start=start_date, periods=len(pivot_df), freq=freq)
     csv_file = arrow_dir + "/data.csv"
     pivot_df.to_csv(csv_file, index=False)
     print(f"Conversion complete for {arrow_dir}.")

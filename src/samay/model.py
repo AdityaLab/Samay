@@ -741,7 +741,7 @@ class MomentModel(Basemodel):
         # arguments
         max_lr = 1e-4 if 'lr' not in kwargs else kwargs['lr']
         max_epoch = 5 if 'epoch' not in kwargs else kwargs['epoch']
-        max_norm = 5.0 if 'norm' not in kwargs else kwargs['norm']
+        max_norm = 1.0 if 'norm' not in kwargs else kwargs['norm']
         mask_ratio = 0.25 if 'mask_ratio' not in kwargs else kwargs['mask_ratio']
 
         if task_name == "imputation" or task_name == "detection":
@@ -1025,10 +1025,12 @@ class TinyTimeMixerModel(Basemodel):
         if repo:
             context_len = config["context_len"]
             horizon_len = config["horizon_len"]
-            if context_len == 512 and horizon_len == 96:
+            horizon_list = [96, 192, 336, 720]
+            closest_larger_horizon = min([x for x in horizon_list if x >= horizon_len])
+            if context_len == 512 and closest_larger_horizon == 96:
                 revision = "main"
             else:
-                revision = f"{context_len}-{horizon_len}-r2"
+                revision = f"{context_len}-{closest_larger_horizon}-r2"
             self.model = TinyTimeMixerForPrediction.from_pretrained(repo, revision=revision, prediction_filter_length=horizon_len)
             self.model = self.model.to(self.device)
         else:
