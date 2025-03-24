@@ -35,8 +35,8 @@ from gluonts.transform import (
 from gluonts.transform.split import TFTInstanceSplitter
 from jaxtyping import Bool, Float, Int
 
-from uni2ts.common.torch_util import safe_div
-from uni2ts.loss.packed import PackedNLLLoss as _PackedNLLLoss
+from samay.models.uni2ts.common.torch_util import safe_div
+from samay.models.uni2ts.loss.packed import PackedNLLLoss as _PackedNLLLoss
 
 from .module import MoiraiMoEModule
 
@@ -133,6 +133,9 @@ class MoiraiMoEForecast(L.LightningModule):
         if self.hparams.past_feat_dynamic_real_dim > 0:
             past_ts_fields.append("past_feat_dynamic_real")
             past_ts_fields.append("past_observed_feat_dynamic_real")
+        
+        # This splitter separates the series into past and future
+        # Past series consists of the context alone
         instance_splitter = TFTInstanceSplitter(
             instance_sampler=TestSplitSampler(),
             past_length=self.past_length,
@@ -252,13 +255,16 @@ class MoiraiMoEForecast(L.LightningModule):
         ] = None,
         num_samples: Optional[int] = None,
     ) -> Float[torch.Tensor, "batch sample future_time *tgt"]:
+        
+        # batch is the batch size
+        # past_time is the number of time steps in the past - context length
+        # tgt is the target dimension - self.hparams.target_dim
         context_step = self.context_token_length(self.hparams.patch_size)
-        context_token = self.hparams.target_dim * context_step
+        context_token = self.hparams.target_dim * context_step # number of context tokens needed
         predict_step = self.prediction_token_length(self.hparams.patch_size)
-        predict_token = self.hparams.target_dim * predict_step
+        predict_token = self.hparams.target_dim * predict_step # number of prediction tokens needed
 
-        (
-            target,
+        (   target,
             observed_mask,
             sample_id,
             time_id,
@@ -286,7 +292,7 @@ class MoiraiMoEForecast(L.LightningModule):
             end=context_token + predict_token,
             step=predict_step,
         )
-
+        
         if predict_step == 1:
             distr = self.module(
                 target,
@@ -390,15 +396,18 @@ class MoiraiMoEForecast(L.LightningModule):
     ) -> tuple[
         Int[torch.Tensor, "batch past_token"], Int[torch.Tensor, "batch future_token"]
     ]:
-        past_seq_id = reduce(
-            self._patched_seq_pad(patch_size, past_observed_target, -2, left=True),
-            "... (seq patch) dim -> ... seq",
-            "max",
-            patch=patch_size,
-        )
-        past_seq_id = torch.clamp(
-            past_seq_id.cummax(dim=-1).values.cumsum(dim=-1) - 1, min=0
-        )
+        # self._patched_seq_pad pads the past observed target  at the second last dimension
+        # so that it is divisible by patch size - so that the second last dimension can be
+        # split as (seq patch)
+        past_seq_id = reduce(self._patched_seq_pad(patch_size,
+                                                   past_observed_target,
+                                                   -2, # pad on the second last dimension
+                                                   left=True # pad on the left
+                                                   ),
+                             "... (seq patch) dim -> ... seq", # pattern of reduction - reduce the patch dimension
+                             "max", patch=patch_size)
+
+        past_seq_id = torch.clamp(past_seq_id.cummax(dim=-1).values.cumsum(dim=-1) - 1, min=0)
         batch_shape = " ".join(map(str, past_observed_target.shape[:-2]))
         future_seq_id = (
             repeat(
@@ -453,376 +462,265 @@ class MoiraiMoEForecast(L.LightningModule):
         prediction_mask = []
         dim_count = 0
 
-        past_seq_id, future_seq_id = self._generate_time_id(
-            patch_size, past_observed_target
+        past_seq_id, future_seq_id = self._generate_time_id(patch_size, past_observed_target)
+
+        if future_target is None: # if future target is not provided, pad with zeros
+            future_target = torch.zeros(size=batch_shape + (self.hparams.prediction_length, past_target.shape[-1],),
+                                        dtype=past_target.dtype,
+                                        device=device
+                                    )
+        # We are using torch.nn.functional.pad to pad the fields so that during training when model tries to check with different patch sizes
+        # the weight vector has enough elements to handle the largest of patch_sizes
+        target.extend(
+            [   # pad the past target on the left
+                torch.nn.functional.pad(input=rearrange(self._patched_seq_pad(patch_size, past_target, -2, left=True), # pad on the second last dimension
+                                                        "... (seq patch) dim -> ... (dim seq) patch", # rearrange the tensor
+                                                        patch=patch_size),
+                                        pad=(0, self.max_patch_size - patch_size), # right pad the tensor's last dim with (max_patch - patch)
+                                        ),
+                # pad the future target on the right
+                torch.nn.functional.pad(input=rearrange(self._patched_seq_pad(patch_size, future_target, -2, left=False), # pad on the second last dimension
+                                                        "... (seq patch) dim -> ... (dim seq) patch", # rearrange the tensor
+                                                        patch=patch_size),
+                                        pad=(0, self.max_patch_size - patch_size), # right pad the tensor's last dim with (max_patch - patch)
+                                        )
+            ]
+        )
+        
+        if future_observed_target is None: # if future observed target is not provided, pad with ones - since future target has no missing values
+            future_observed_target = torch.ones(size=batch_shape + (self.hparams.prediction_length, past_observed_target.shape[-1],),
+                                                dtype=torch.bool,
+                                                device=device)
+        observed_mask.extend(
+            [   # pad the past observed target on the left
+                torch.nn.functional.pad(input=rearrange(self._patched_seq_pad(patch_size, past_observed_target, -2, left=True), # pad on the second last dimension
+                                                        "... (seq patch) dim -> ... (dim seq) patch", # rearrange the tensor
+                                                        patch=patch_size),
+                                        pad=(0, self.max_patch_size - patch_size), # right pad the tensor's last dim with (max_patch - patch)
+                                        ),
+                # pad the future observed target on the right
+                torch.nn.functional.pad(input=rearrange(self._patched_seq_pad(patch_size, future_observed_target, -2, left=False), # pad on the second last dimension
+                                                        "... (seq patch) dim -> ... (dim seq) patch", # rearrange the tensor
+                                                        patch=patch_size),
+                                        pad=(0, self.max_patch_size - patch_size), # right pad the tensor's last dim with (max_patch - patch)
+                                        ),
+            ]
         )
 
-        if future_target is None:
-            future_target = torch.zeros(
-                batch_shape
-                + (
-                    self.hparams.prediction_length,
-                    past_target.shape[-1],
-                ),
-                dtype=past_target.dtype,
-                device=device,
-            )
-        target.extend(
-            [
-                torch.nn.functional.pad(
-                    rearrange(
-                        self._patched_seq_pad(patch_size, past_target, -2, left=True),
-                        "... (seq patch) dim -> ... (dim seq) patch",
-                        patch=patch_size,
-                    ),
-                    (0, self.max_patch_size - patch_size),
-                ),
-                torch.nn.functional.pad(
-                    rearrange(
-                        self._patched_seq_pad(
-                            patch_size, future_target, -2, left=False
-                        ),
-                        "... (seq patch) dim -> ... (dim seq) patch",
-                        patch=patch_size,
-                    ),
-                    (0, self.max_patch_size - patch_size),
-                ),
-            ]
-        )
-        if future_observed_target is None:
-            future_observed_target = torch.ones(
-                batch_shape
-                + (
-                    self.hparams.prediction_length,
-                    past_observed_target.shape[-1],
-                ),
-                dtype=torch.bool,
-                device=device,
-            )
-        observed_mask.extend(
-            [
-                torch.nn.functional.pad(
-                    rearrange(
-                        self._patched_seq_pad(
-                            patch_size, past_observed_target, -2, left=True
-                        ),
-                        "... (seq patch) dim -> ... (dim seq) patch",
-                        patch=patch_size,
-                    ),
-                    (0, self.max_patch_size - patch_size),
-                ),
-                torch.nn.functional.pad(
-                    rearrange(
-                        self._patched_seq_pad(
-                            patch_size, future_observed_target, -2, left=False
-                        ),
-                        "... (seq patch) dim -> ... (dim seq) patch",
-                        patch=patch_size,
-                    ),
-                    (0, self.max_patch_size - patch_size),
-                ),
-            ]
-        )
-        if future_is_pad is None:
-            future_is_pad = torch.zeros(
-                batch_shape + (self.hparams.prediction_length,),
-                dtype=torch.long,
-                device=device,
-            )
+        if future_is_pad is None: # if future is pad is not provided, pad with zeros
+            future_is_pad = torch.zeros(size=batch_shape + (self.hparams.prediction_length,),
+                                        dtype=torch.long,
+                                        device=device,
+                                        )
+
         sample_id.extend(
-            [
-                repeat(
-                    reduce(
-                        (
-                            self._patched_seq_pad(
-                                patch_size, past_is_pad, -1, left=True, value=1
-                            )
-                            == 0
-                        ).int(),
-                        "... (seq patch) -> ... seq",
-                        "max",
-                        patch=patch_size,
+            [   # repeats the reduced tensor values along given dimension to match new dimensions
+                repeat(reduce((self._patched_seq_pad(patch_size, past_is_pad, -1, left=True, value=1) == 0).int(),
+                              "... (seq patch) -> ... seq",
+                              "max",
+                              patch=patch_size,
+                            ),
+                        "... seq -> ... (dim seq)",
+                        dim=past_target.shape[-1],
                     ),
-                    "... seq -> ... (dim seq)",
-                    dim=past_target.shape[-1],
-                ),
-                repeat(
-                    reduce(
-                        (
-                            self._patched_seq_pad(
-                                patch_size, future_is_pad, -1, left=False, value=1
-                            )
-                            == 0
-                        ).int(),
-                        "... (seq patch) -> ... seq",
-                        "max",
-                        patch=patch_size,
+
+                # repeat the reduced tensor values along given dimension to match new dimensions
+                repeat(reduce((self._patched_seq_pad(patch_size, future_is_pad, -1, left=False, value=1) == 0).int(),
+                              "... (seq patch) -> ... seq",
+                              "max",
+                              patch=patch_size,
+                            ),
+                        "... seq -> ... (dim seq)",
+                        dim=past_target.shape[-1],
                     ),
-                    "... seq -> ... (dim seq)",
-                    dim=past_target.shape[-1],
-                ),
             ]
         )
-        time_id.extend(
-            [past_seq_id] * past_target.shape[-1]
-            + [future_seq_id] * past_target.shape[-1]
-        )
+
+        time_id.extend([past_seq_id] * past_target.shape[-1] + [future_seq_id] * past_target.shape[-1])
+
         variate_id.extend(
-            [
-                repeat(
-                    torch.arange(past_target.shape[-1], device=device) + dim_count,
-                    f"dim -> {' '.join(map(str, batch_shape))} (dim past)",
-                    past=self.context_token_length(patch_size),
-                ),
-                repeat(
-                    torch.arange(past_target.shape[-1], device=device) + dim_count,
-                    f"dim -> {' '.join(map(str, batch_shape))} (dim future)",
-                    future=self.prediction_token_length(patch_size),
-                ),
+            [   # torch.arange: 1d tensor of shape (past_target.shape[-1],), range of values (dim_count, dim_count + past_target.shape[-1])
+                # repeat: repeat the tensor values along the given dimension to match the new dimensions
+                repeat(torch.arange(past_target.shape[-1], device=device) + dim_count,
+                       f"dim -> {' '.join(map(str, batch_shape))} (dim past)",
+                       past=self.context_token_length(patch_size)
+                    ),
+
+                # torch.arange: 1d tensor of shape (past_target.shape[-1],), range of values (dim_count, dim_count + past_target.shape[-1])
+                # repeat: repeat the tensor values along the given dimension to match the new dimensions
+                repeat(torch.arange(past_target.shape[-1], device=device) + dim_count,
+                       f"dim -> {' '.join(map(str, batch_shape))} (dim future)",
+                       future=self.prediction_token_length(patch_size)
+                    ),
             ]
         )
-        dim_count += past_target.shape[-1]
+
+        dim_count += past_target.shape[-1] # increment the dim count to track variate_id
+
         prediction_mask.extend(
             [
-                torch.zeros(
-                    batch_shape
-                    + (self.context_token_length(patch_size) * past_target.shape[-1],),
-                    dtype=torch.bool,
-                    device=device,
-                ),
-                torch.ones(
-                    batch_shape
-                    + (
-                        self.prediction_token_length(patch_size)
-                        * past_target.shape[-1],
-                    ),
-                    dtype=torch.bool,
-                    device=device,
-                ),
+                # past is the part we have observed - so we set the prediction mask to zeros
+                torch.zeros(size=batch_shape + (self.context_token_length(patch_size) * past_target.shape[-1],),
+                            dtype=torch.bool,
+                            device=device
+                        ),
+
+                # future is thde part we want to predict - so we set the prediction mask to ones
+                torch.ones(size=batch_shape + (self.prediction_token_length(patch_size) * past_target.shape[-1],),
+                           dtype=torch.bool,
+                           device=device,
+                        ),
             ]
         )
 
         if feat_dynamic_real is not None:
             if observed_feat_dynamic_real is None:
-                raise ValueError(
-                    "observed_feat_dynamic_real must be provided if feat_dynamic_real is provided"
-                )
+                raise ValueError("observed_feat_dynamic_real must be provided if feat_dynamic_real is provided")
 
             target.extend(
                 [
-                    torch.nn.functional.pad(
-                        rearrange(
-                            self._patched_seq_pad(
-                                patch_size,
-                                feat_dynamic_real[
-                                    ..., : self.hparams.context_length, :
-                                ],
-                                -2,
-                                left=True,
-                            ),
-                            "... (seq patch) dim -> ... (dim seq) patch",
-                            patch=patch_size,
-                        ),
-                        (0, self.max_patch_size - patch_size),
-                    ),
-                    torch.nn.functional.pad(
-                        rearrange(
-                            self._patched_seq_pad(
-                                patch_size,
-                                feat_dynamic_real[
-                                    ..., self.hparams.context_length :, :
-                                ],
-                                -2,
-                                left=False,
-                            ),
-                            "... (seq patch) dim -> ... (dim seq) patch",
-                            patch=patch_size,
-                        ),
-                        (0, self.max_patch_size - patch_size),
-                    ),
+                    torch.nn.functional.pad(input=rearrange(self._patched_seq_pad(patch_size,feat_dynamic_real[..., :self.hparams.context_length,:],-2,left=True),
+                                                      "... (seq patch) dim -> ... (dim seq) patch",
+                                                      patch=patch_size
+                                                    ),
+                                            pad=(0, self.max_patch_size - patch_size)
+                                        ),
+
+                    torch.nn.functional.pad(input=rearrange(self._patched_seq_pad(patch_size,feat_dynamic_real[..., self.hparams.context_length:, :],-2,left=False),
+                                                            "... (seq patch) dim -> ... (dim seq) patch",
+                                                            patch=patch_size
+                                                        ),
+                                            pad=(0, self.max_patch_size - patch_size)
+                                        ),
                 ]
             )
+
             observed_mask.extend(
                 [
-                    torch.nn.functional.pad(
-                        rearrange(
-                            self._patched_seq_pad(
-                                patch_size,
-                                observed_feat_dynamic_real[
-                                    ..., : self.hparams.context_length, :
-                                ],
-                                -2,
-                                left=True,
-                            ),
-                            "... (seq patch) dim -> ... (dim seq) patch",
-                            patch=patch_size,
-                        ),
-                        (0, self.max_patch_size - patch_size),
-                    ),
-                    torch.nn.functional.pad(
-                        rearrange(
-                            self._patched_seq_pad(
-                                patch_size,
-                                observed_feat_dynamic_real[
-                                    ..., self.hparams.context_length :, :
-                                ],
-                                -2,
-                                left=False,
-                            ),
-                            "... (seq patch) dim -> ... (dim seq) patch",
-                            patch=patch_size,
-                        ),
-                        (0, self.max_patch_size - patch_size),
-                    ),
+                    torch.nn.functional.pad(input=rearrange(self._patched_seq_pad(patch_size,observed_feat_dynamic_real[..., :self.hparams.context_length, :],-2,left=True),
+                                                            "... (seq patch) dim -> ... (dim seq) patch",
+                                                            patch=patch_size
+                                                        ),
+                                            pad=(0, self.max_patch_size - patch_size)
+                                        ),
+
+                    torch.nn.functional.pad(input=rearrange(self._patched_seq_pad(patch_size,observed_feat_dynamic_real[..., self.hparams.context_length:, :],-2,left=False),
+                                                            "... (seq patch) dim -> ... (dim seq) patch",
+                                                            patch=patch_size
+                                                        ),
+                                            pad=(0, self.max_patch_size - patch_size)
+                                        ),
                 ]
             )
+
             sample_id.extend(
                 [
-                    repeat(
-                        reduce(
-                            (
-                                self._patched_seq_pad(
-                                    patch_size, past_is_pad, -1, left=True
-                                )
-                                == 0
-                            ).int(),
-                            "... (seq patch) -> ... seq",
-                            "max",
-                            patch=patch_size,
+                    repeat(reduce((self._patched_seq_pad(patch_size, past_is_pad, -1, left=True) == 0).int(),
+                                  "... (seq patch) -> ... seq",
+                                  "max",
+                                  patch=patch_size
+                                ),
+                            "... seq -> ... (dim seq)",
+                            dim=feat_dynamic_real.shape[-1]
                         ),
-                        "... seq -> ... (dim seq)",
-                        dim=feat_dynamic_real.shape[-1],
-                    ),
-                    torch.ones(
-                        batch_shape
-                        + (
-                            self.prediction_token_length(patch_size)
-                            * feat_dynamic_real.shape[-1],
-                        ),
-                        dtype=torch.long,
-                        device=device,
-                    ),
+
+                    torch.ones(size=batch_shape + (self.prediction_token_length(patch_size) * feat_dynamic_real.shape[-1],),
+                               dtype=torch.long,
+                               device=device
+                            ),
                 ]
             )
-            time_id.extend(
-                [past_seq_id] * feat_dynamic_real.shape[-1]
-                + [future_seq_id] * feat_dynamic_real.shape[-1]
-            )
+
+            time_id.extend([past_seq_id] * feat_dynamic_real.shape[-1] + [future_seq_id] * feat_dynamic_real.shape[-1])
+
             variate_id.extend(
                 [
-                    repeat(
-                        torch.arange(feat_dynamic_real.shape[-1], device=device)
-                        + dim_count,
-                        f"dim -> {' '.join(map(str, batch_shape))} (dim past)",
-                        past=self.context_token_length(patch_size),
-                    ),
-                    repeat(
-                        torch.arange(feat_dynamic_real.shape[-1], device=device)
-                        + dim_count,
-                        f"dim -> {' '.join(map(str, batch_shape))} (dim future)",
-                        future=self.prediction_token_length(patch_size),
-                    ),
+                    repeat(torch.arange(feat_dynamic_real.shape[-1], device=device) + dim_count,
+                           f"dim -> {' '.join(map(str, batch_shape))} (dim past)",
+                           past=self.context_token_length(patch_size)
+                        ),
+
+                    repeat(torch.arange(feat_dynamic_real.shape[-1], device=device) + dim_count,
+                           f"dim -> {' '.join(map(str, batch_shape))} (dim future)",
+                           future=self.prediction_token_length(patch_size),
+                        ),
                 ]
             )
+
             dim_count += feat_dynamic_real.shape[-1]
+            
             prediction_mask.extend(
                 [
-                    torch.zeros(
-                        batch_shape
-                        + (
-                            self.context_token_length(patch_size)
-                            * feat_dynamic_real.shape[-1],
-                        ),
-                        dtype=torch.bool,
-                        device=device,
-                    ),
-                    torch.zeros(
-                        batch_shape
-                        + (
-                            self.prediction_token_length(patch_size)
-                            * feat_dynamic_real.shape[-1],
-                        ),
-                        dtype=torch.bool,
-                        device=device,
-                    ),
+                    torch.zeros(size=batch_shape + (self.context_token_length(patch_size) * feat_dynamic_real.shape[-1],),
+                                dtype=torch.bool,
+                                device=device,
+                            ),
+
+                    torch.zeros(size=batch_shape + (self.prediction_token_length(patch_size) * feat_dynamic_real.shape[-1],),
+                                dtype=torch.bool,
+                                device=device
+                            ),
                 ]
             )
 
         if past_feat_dynamic_real is not None:
             if past_observed_feat_dynamic_real is None:
-                raise ValueError(
-                    "past_observed_feat_dynamic_real must be provided if past_feat_dynamic_real is provided"
-                )
+                raise ValueError("past_observed_feat_dynamic_real must be provided if past_feat_dynamic_real is provided")
+
             target.append(
-                torch.nn.functional.pad(
-                    rearrange(
-                        self._patched_seq_pad(
-                            patch_size, past_feat_dynamic_real, -2, left=True
-                        ),
-                        "... (seq patch) dim -> ... (dim seq) patch",
-                        patch=patch_size,
-                    ),
-                    (0, self.max_patch_size - patch_size),
-                )
+                torch.nn.functional.pad(input=rearrange(self._patched_seq_pad(patch_size, past_feat_dynamic_real, -2, left=True),
+                                                        "... (seq patch) dim -> ... (dim seq) patch",
+                                                        patch=patch_size,
+                                                    ),
+                                        pad=(0, self.max_patch_size - patch_size),
+                                    )
             )
+
             observed_mask.append(
-                torch.nn.functional.pad(
-                    rearrange(
-                        self._patched_seq_pad(
-                            patch_size, past_observed_feat_dynamic_real, -2, left=True
-                        ),
-                        "... (seq patch) dim -> ... (dim seq) patch",
-                        patch=patch_size,
-                    ),
-                    (0, self.max_patch_size - patch_size),
-                )
+                torch.nn.functional.pad(input=rearrange(self._patched_seq_pad(patch_size, past_observed_feat_dynamic_real, -2, left=True),
+                                                        "... (seq patch) dim -> ... (dim seq) patch",
+                                                        patch=patch_size,
+                                                    ),
+                                        pad=(0, self.max_patch_size - patch_size),
+                                    )
             )
+
             sample_id.append(
-                repeat(
-                    reduce(
-                        (
-                            self._patched_seq_pad(
-                                patch_size, past_is_pad, -1, left=True
-                            )
-                            == 0
-                        ).int(),
-                        "... (seq patch) -> ... seq",
-                        "max",
-                        patch=patch_size,
-                    ),
-                    "... seq -> ... (dim seq)",
-                    dim=past_feat_dynamic_real.shape[-1],
-                )
+                repeat(reduce((self._patched_seq_pad(patch_size, past_is_pad, -1, left=True) == 0).int(),
+                              "... (seq patch) -> ... seq",
+                              "max",
+                              patch=patch_size,
+                            ),
+                            "... seq -> ... (dim seq)",
+                            dim=past_feat_dynamic_real.shape[-1],
+                        )
             )
+
             time_id.extend([past_seq_id] * past_feat_dynamic_real.shape[-1])
 
             variate_id.append(
-                repeat(
-                    torch.arange(past_feat_dynamic_real.shape[-1], device=device)
-                    + dim_count,
-                    f"dim -> {' '.join(map(str, batch_shape))} (dim past)",
-                    past=self.context_token_length(patch_size),
-                )
-            )
-            dim_count += past_feat_dynamic_real.shape[-1]
-            prediction_mask.append(
-                torch.zeros(
-                    batch_shape
-                    + (
-                        self.context_token_length(patch_size)
-                        * past_feat_dynamic_real.shape[-1],
-                    ),
-                    dtype=torch.bool,
-                    device=device,
-                )
+                repeat(torch.arange(past_feat_dynamic_real.shape[-1], device=device) + dim_count,
+                       f"dim -> {' '.join(map(str, batch_shape))} (dim past)",
+                       past=self.context_token_length(patch_size),
+                    )
             )
 
-        target = torch.cat(target, dim=-2)
-        observed_mask = torch.cat(observed_mask, dim=-2)
-        sample_id = torch.cat(sample_id, dim=-1)
-        time_id = torch.cat(time_id, dim=-1)
-        variate_id = torch.cat(variate_id, dim=-1)
-        prediction_mask = torch.cat(prediction_mask, dim=-1)
+            dim_count += past_feat_dynamic_real.shape[-1]
+
+            prediction_mask.append(
+                torch.zeros(size=batch_shape + (self.context_token_length(patch_size) * past_feat_dynamic_real.shape[-1],),
+                            dtype=torch.bool,
+                            device=device,
+                        )
+            )
+
+        target = torch.cat(target, dim=-2) # (16 8 16) + (16 4 16) --> (16 12 16)
+        observed_mask = torch.cat(observed_mask, dim=-2) # (16 8 16) + (16 4 16) --> (16 12 16)
+        sample_id = torch.cat(sample_id, dim=-1) # (16 8) + (16 4) --> (16 12)
+        time_id = torch.cat(time_id, dim=-1) # (16 8) + (16 4) --> (16 12)
+        variate_id = torch.cat(variate_id, dim=-1) # (16 8) + (16 4) --> (16 12)
+        prediction_mask = torch.cat(prediction_mask, dim=-1) # (16 8) + (16 4) --> (16 12)
+        
         return (
             target,
             observed_mask,
@@ -849,6 +747,10 @@ class MoiraiMoEForecast(L.LightningModule):
         return preds.squeeze(-1)
 
     def get_default_transform(self) -> Transformation:
+        # AsNumpyArray casts the input to a numpy array with the specified dtype
+        # AddObservedValuesIndicator adds a boolean mask for observed values (True for observed, False for missing)
+        # CausalMeanValueImputation imputes missing values with the mean of the observed values
+        # ExpandDimArray adds a new dimension to the input array
         transform = AsNumpyArray(
             field="target",
             expected_ndim=1 if self.hparams.target_dim == 1 else 2,

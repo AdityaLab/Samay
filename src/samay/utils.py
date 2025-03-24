@@ -3,7 +3,9 @@ import subprocess
 import numpy as np
 import pandas as pd
 import json
+import matplotlib.pyplot as plt
 from .models.moment.momentfm.utils.data import load_from_tsfile
+import yaml
 from datasets import load_from_disk 
 from matplotlib import pyplot as plt
 
@@ -122,21 +124,29 @@ def visualize(task_name="forecasting", trues=None, preds=None, history=None, mas
     If task_name is "forecasting", trues, preds, and history should be provided, which channel_idx and time_idx are optional.
     If task_name is "anomaly_detection", trues and preds should be provided, which start and end are optional.
     If task_name is "imputation", trues, preds, and masks should be provided, which channel_idx and time_idx are optional.
+
+    channel_idx correpsonds to a specific variate (column) in the dataset.
+    time_idx corresponds to a specific window (context + horizon) in the augmented dataset.
     """
     trues = np.array(trues)
     preds = np.array(preds)
     if task_name == "forecasting":
-        histories = np.array(history)
-        channel_idx = np.random.randint(0, trues.shape[1]) if "channel_idx" not in kwargs else kwargs["channel_idx"]
-        time_idx = np.random.randint(0, trues.shape[0]) if "time_idx" not in kwargs else kwargs["time_idx"] 
-        history = histories[time_idx, channel_idx, :] 
+        channel_idx = np.random.randint(0, trues.shape[1]) if "channel_idx" not in kwargs else kwargs["channel_idx"] # variate index
+        time_idx = np.random.randint(0, trues.shape[0]) if "time_idx" not in kwargs else kwargs["time_idx"] # a specific series of context + prediction
+        dataset = kwargs["dataset"] if "dataset" in kwargs else None
+        freq = kwargs["freq"] if "freq" in kwargs else None
+        
+        if isinstance(history, np.ndarray):
+            print(history.shape)
+            history = history[time_idx, channel_idx, -context_len:]
+        elif isinstance(history, list):
+            history = history[time_idx][channel_idx][-context_len:]
         true = trues[time_idx, channel_idx, :]
         pred = preds[time_idx, channel_idx, :]
 
-        num_history = len(history)
-
         # Set figure size proportional to the number of forecasts
-        plt.figure(figsize=(0.02 * num_history, 5))
+        plt.figure(figsize=(0.2 * len(history), 4))
+
 
         # Plotting the first time series from history
         plt.plot(range(len(history)), history, label=f'History ({len(history)} timesteps)', c='darkblue')
@@ -145,10 +155,10 @@ def visualize(task_name="forecasting", trues=None, preds=None, history=None, mas
         plt.plot(range(offset, offset + len(true)), true, label=f'Ground Truth ({len(true)} timesteps)', color='darkblue', linestyle='--', alpha=0.5)
         plt.plot(range(offset, offset + len(pred)), pred, label=f'Forecast ({len(pred)} timesteps)', color='red', linestyle='--')
 
-        plt.title(f"(idx={time_idx}, channel={channel_idx})", fontsize=18)
+        plt.title(f"{dataset} ({freq}) -- (window={time_idx}, variate index={channel_idx})", fontsize=18)
         plt.xlabel('Time', fontsize=14)
         plt.ylabel('Value', fontsize=14)
-        plt.legend(fontsize=14)
+        plt.legend(fontsize=14, loc='upper left')
         plt.show()
 
     elif task_name == "detection":
@@ -173,6 +183,29 @@ def visualize(task_name="forecasting", trues=None, preds=None, history=None, mas
         axs[1].imshow(np.tile(masks[np.newaxis, time_idx, channel_idx], reps=(8, 1)), cmap='binary')
         plt.show()
 
+def read_yaml(file_path):
+    """
+    Read a YAML file.
+    """
+    with open(file_path, "r") as file:
+        return yaml.safe_load(file)
+
+def prep_finetune_config(file_path: str=None, config: dict=None):
+    """
+    Prepare the finetune configuration.
+    """
+    assert file_path is not None or config is not None, "Either file_path or config must be provided."
+
+    if config is None:
+        config = read_yaml(file_path)
+
+    return {"batch_size": config["train_dataloader"]["batch_size"],
+             "max_epochs": config["trainer"]["max_epochs"],
+              "seed": config["seed"],
+              "tf32": config["tf32"],
+              "mod_torch": {k:v for k,v in config["trainer"].items() if k != "_target_" and type(v) not in [dict, list]}}
+
+  
 if __name__ == "__main__":
     # ts_path = "/nethome/sli999/TSFMProject/src/tsfmproject/models/moment/data/ECG5000_TRAIN.ts"
     # csv_path = "/nethome/sli999/TSFMProject/src/tsfmproject/models/moment/data/ECG5000_TRAIN.csv"

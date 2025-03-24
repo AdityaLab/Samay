@@ -25,4 +25,7 @@ htmlcov
 .mypy_cache
 .pyre/
 .pytype/
-/data
+data/
+*.png
+.vscode/
+

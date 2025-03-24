@@ -116,7 +116,7 @@ class PackedStdScaler(PackedScaler):
             "sum",
         )
         var = safe_div(var, (tobs - self.correction))
-        scale = torch.sqrt(var + self.minimum_scale)
+        scale = torch.sqrt(var + self.minimum_scale).clone()
         loc[sample_id == 0] = 0
         scale[sample_id == 0] = 1
         return loc, scale
