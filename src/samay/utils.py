@@ -6,6 +6,8 @@ import json
 import matplotlib.pyplot as plt
 from .models.moment.momentfm.utils.data import load_from_tsfile
 import yaml
+from datasets import load_from_disk 
+from matplotlib import pyplot as plt
 
 def get_least_used_gpu():
     """Get the least used GPU device."""
@@ -99,9 +101,24 @@ def load_args(file_path):
     Load arguments from a file.
     """
     with open(file_path, "r") as file:
-        return json.load(file)
-    
-def visualize(context_len:int, task_name="forecasting", trues=None, preds=None, history=None, masks=None, **kwargs):
+        return json.load(file)                                                            
+
+def arrow_to_csv(arrow_dir):
+    data = load_from_disk(arrow_dir)
+    df = data.to_pandas()
+    start_date = df['start'].iloc[0]
+    df = df.drop(columns=['start'])
+    df_expanded = df.explode('target', ignore_index=True)
+    df_expanded.infer_objects()
+    max_length = max(group['target'].size for _, group in df_expanded.groupby('item_id'))
+    pivot_df = pd.DataFrame({item: group['target'].tolist() + [0] * (max_length - len(group['target'])) for item, group in df_expanded.groupby('item_id')})
+    pivot_df['timestamp'] = pd.date_range(start=start_date, periods=len(pivot_df), freq='D')
+    csv_file = arrow_dir + "/data.csv"
+    pivot_df.to_csv(csv_file, index=False)
+    print(f"Conversion complete for {arrow_dir}.")
+
+
+def visualize(task_name="forecasting", trues=None, preds=None, history=None, masks=None, **kwargs):
     """
     Visualize the data.
     If task_name is "forecasting", trues, preds, and history should be provided, which channel_idx and time_idx are optional.
@@ -129,6 +146,7 @@ def visualize(context_len:int, task_name="forecasting", trues=None, preds=None, 
 
         # Set figure size proportional to the number of forecasts
         plt.figure(figsize=(0.2 * len(history), 4))
+
 
         # Plotting the first time series from history
         plt.plot(range(len(history)), history, label=f'History ({len(history)} timesteps)', c='darkblue')
@@ -187,15 +205,27 @@ def prep_finetune_config(file_path: str=None, config: dict=None):
               "tf32": config["tf32"],
               "mod_torch": {k:v for k,v in config["trainer"].items() if k != "_target_" and type(v) not in [dict, list]}}
 
+  
 if __name__ == "__main__":
-    ts_path = "/nethome/sli999/TSFMProject/src/tsfmproject/models/moment/data/ECG5000_TRAIN.ts"
-    csv_path = "/nethome/sli999/TSFMProject/src/tsfmproject/models/moment/data/ECG5000_TRAIN.csv"
-    # ts_to_csv(ts_path, csv_path)
+    # ts_path = "/nethome/sli999/TSFMProject/src/tsfmproject/models/moment/data/ECG5000_TRAIN.ts"
+    # csv_path = "/nethome/sli999/TSFMProject/src/tsfmproject/models/moment/data/ECG5000_TRAIN.csv"
+    # # ts_to_csv(ts_path, csv_path)
+    # # print("Conversion complete.")
+    # data, labels = get_multivariate_data(pd.read_csv(csv_path))
+    # ts_data, ts_labels = load_from_tsfile(ts_path)
+    # ts_labels = np.array(ts_labels, dtype=int)
+    # print(data - ts_data)
+    # print(labels - ts_labels)
+    arrow_dir = "/nethome/sli999/TSFMProject/data/monash/wind_farms_minutely/train"
+    # arrow_to_csv(arrow_dir)
     # print("Conversion complete.")
-    data, labels = get_multivariate_data(pd.read_csv(csv_path))
-    ts_data, ts_labels = load_from_tsfile(ts_path)
-    ts_labels = np.array(ts_labels, dtype=int)
-    print(data - ts_data)
-    print(labels - ts_labels)
+    csv_file = arrow_dir + "/data.csv"
+    df = pd.read_csv(csv_file)
+    print(df.head())
+    
  
 
+
+
+
+    

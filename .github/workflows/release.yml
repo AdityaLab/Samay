@@ -1,0 +1,42 @@
+name: Build and Release Wheel
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          # Install a specific version of uv.
+          version: "0.6.1"
+          enable-cache: true
+
+      - name: "Set up Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: "pyproject.toml"
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Build wheel
+        run: uv build --wheel
+
+      - name: Upload wheel to release
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: dist/*.whl
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ github.ref }}
+          name: Release ${{ github.ref }}
+          body: |
+            This is an automated release of the wheel.

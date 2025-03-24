@@ -8,7 +8,7 @@ Current repository contains the following models:
 2. [MOMENT](https://arxiv.org/abs/2402.03885)
 3. [TimesFM](https://arxiv.org/html/2310.10688v2)
 4. [Chronos](https://arxiv.org/abs/2403.07815)
-5. [MOIRAI](https://arxiv.org/abs/2402.02592)
+5. [TinytTimeMixers](https://arxiv.org/abs/2401.03955)
 
 More models will be added soon...
 
@@ -16,18 +16,26 @@ More models will be added soon...
 
 You can add the package to your project by running the following command:
 
-To use LPTM run the following command:
-
-```bash
-pip install git+https://github.com/AdityaLab/Samay.git@LPTM
-```
-
-To use all the other models run:
 ```bash
 pip install git+https://github.com/AdityaLab/Samay.git
 ```
 
+**Note:** If the installation fails because rust is missing run:
 
+For MacOS:
+
+```bash
+brew install rustup
+rustup-init
+source ~/.cargo/env
+```
+
+For Linux:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+```
 
 ### Development workflow
 
@@ -42,42 +50,44 @@ git clone https://github.com/AdityaLab/Samay.git
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ## Install dependencies
-uv sync
+uv sync --reinstall
 ```
 
+## Usage Examples
 
-
-## Usage Example
+Check out example notebooks at `examples/` for more detailed examples. We also have google colab notebooks at `examples/colab/`.
 
 ### LPTM
 
-_Note:_ Use the LPTM branch for best results `pip install git+https://github.com/AdityaLab/Samay.git@LPTM`.
-
-#### Loading  Model
+#### Loading Model
 
 ```python
 from samay.model import LPTMModel
-from samay.dataset import LPTMDataset
 
-repo = "lptm"
 config = {
-    "context_len": 512,
-    "horizon_len": 192,
-    "backend": "gpu",
-    "per_core_batch_size": 32,
-    "domain": "electricity",
+    "task_name": "forecasting",
+    "forecast_horizon": 192,
+    "freeze_encoder": True,  # Freeze the patch embedding layer
+    "freeze_embedder": True,  # Freeze the transformer encoder
+    "freeze_head": False,  # The linear forecasting head must be trained
 }
-
-lptm = LPTMModel(config=config, repo=repo)
+model = LPTMModel(config)
 ```
 
 #### Loading Dataset
 
 ```python
-train_dataset = LPTMDataset(name="electricity", datetime_col='date', path='data/ETTh1.csv', 
-                              mode='train', context_len=config["context_len"], horizon_len=128)
-val_dataset = LPTMDataset(name="electricity", datetime_col='date', path='data/ETTh1.csv',
-                                mode='test', context_len=config["context_len"], horizon_len=config["horizon_len"])
+from samay.dataset import LPTMDataset
+
+train_dataset = LPTMDataset(
+    name="ett",
+    datetime_col="date",
+    path="./data/data/ETTh1.csv",
+    mode="train",
+    horizon=192,
+)
+
+finetuned_model = model.finetune(train_dataset)
 ```
 
 #### Zero-Forecasting
@@ -88,9 +98,7 @@ avg_loss, trues, preds, histories = lptm.evaluate(val_dataset)
 
 ### TimesFM
 
-Install the package: `pip install git+https://github.com/AdityaLab/Samay.git`.
-
-#### Loading  Model
+#### Loading Model
 
 ```python
 from samay.model import TimesfmModel
@@ -173,7 +181,7 @@ eval_results, trues, preds, histories = moirai_model.evaluate(test_dataset, metr
 
 ### Support
 
-Tested on Python 3.12, 3.13 on Linux (CPU + GPU) and MacOS (CPU). Supports NVIDIA GPUs.
+Tested on Python 3.11-3.13 on Linux (CPU + GPU) and MacOS (CPU). Supports NVIDIA GPUs.
 Support for Windows and Apple Silicon GPUs is planned.
 
 ## Citation
@@ -193,4 +201,4 @@ url={https://openreview.net/forum?id=vMMzjCr5Zj}
 
 ## Contact
 
-If you have any feedback or questions, you can contact us via email: hkamarthi3@gatech.edu.
+If you have any feedback or questions, you can contact us via email: <hkamarthi3@gatech.edu>, <badityap@cc.gatech.edu>.

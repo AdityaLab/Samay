@@ -15,17 +15,15 @@
 # print(
 #     "TimesFM v1.2.0. See https://github.com/google-research/timesfm/blob/master/README.md for updated APIs."
 # )
-from samay.models.timesfm.timesfm.timesfm_base import (
-    TimesFmBase,
-    TimesFmCheckpoint,
-    TimesFmHparams,
-    freq_map,
-)
-
+from src.samay.models.timesfm.timesfm.timesfm_base import (TimesFmCheckpoint, 
+                                              TimesFmHparams, 
+                                              TimesFmBase, 
+                                              freq_map, 
+                                              )
 # try:
 #   print("Loaded Jax TimesFM.")
 #   from timesfm.src.timesfm.timesfm_jax import TimesFmJax as TimesFm
 #   from timesfm.src.timesfm import data_loader
 # except Exception as _:
 # print("Loaded PyTorch TimesFM.")
-from samay.models.timesfm.timesfm.timesfm_torch import TimesFmTorch as TimesFm
+from src.samay.models.timesfm.timesfm.timesfm_torch import TimesFmTorch as TimesFm
