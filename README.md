@@ -8,7 +8,8 @@ Current repository contains the following models:
 2. [MOMENT](https://arxiv.org/abs/2402.03885)
 3. [TimesFM](https://arxiv.org/html/2310.10688v2)
 4. [Chronos](https://arxiv.org/abs/2403.07815)
-5. [TinytTimeMixers](https://arxiv.org/abs/2401.03955)
+5. [MOIRAI](https://arxiv.org/abs/2402.02592)
+6. [TinytTimeMixers](https://arxiv.org/abs/2401.03955)
 
 More models will be added soon...
 
