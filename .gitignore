@@ -26,3 +26,5 @@ htmlcov
 .pyre/
 .pytype/
 data/
+*.png
+.vscode/
