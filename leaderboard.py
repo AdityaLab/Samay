@@ -8,8 +8,8 @@ import pandas as pd
 # if src_path not in sys.path:
 #     sys.path.insert(0, src_path)
 
-from src.samay.model import TimesfmModel, MomentModel, ChronosModel, ChronosBoltModel, TinyTimeMixerModel
-from src.samay.dataset import TimesfmDataset, MomentDataset, ChronosDataset, ChronosBoltDataset, TinyTimeMixerDataset
+from src.samay.model import TimesfmModel, MomentModel, ChronosModel, ChronosBoltModel, TinyTimeMixerModel, MoiraiTSModel
+from src.samay.dataset import TimesfmDataset, MomentDataset, ChronosDataset, ChronosBoltDataset, TinyTimeMixerDataset, MoiraiDataset
 from src.samay.utils import load_args
 from src.samay.metric import *
 
@@ -29,7 +29,7 @@ SALES_NAMES = {
     "restaurant": ['D'],
 }
 
-MODEL_NAMES = ["timesfm", "moment", "chronos", "chronosbolt", "ttm"]
+MODEL_NAMES = ["timesfm", "moment", "chronos", "chronosbolt", "ttm", "moirai"]
 MODEL_CONTEXT_LEN = {
     "timesfm": 32,
     "moment": 512,
@@ -69,14 +69,15 @@ def calc_pred_and_context_len(freq):
     
 
 if __name__ == "__main__":
-    model_name = MODEL_NAMES[1]
+    model_name = MODEL_NAMES[-1]
+
     # create csv file for leaderboard if not already created
     csv_path = f"leaderboard/{model_name}.csv"
-
     if not os.path.exists(csv_path):
         df = pd.DataFrame(columns=["dataset", "mse", "mae", "mase", "mape", "rmse", "nrmse", "smape", "msis", "nd", "mwsq", "crps"])
         df.to_csv(csv_path, index=False)
 
+    # Load model config
     if model_name == "timesfm":
         arg_path = "config/timesfm.json"
         args = load_args(arg_path)
@@ -89,11 +90,16 @@ if __name__ == "__main__":
     elif model_name == "ttm":
         arg_path = "config/tinytimemixer.json"
         args = load_args(arg_path)
+    elif model_name == "moirai":
+        arg_path = "config/moirai.json"
+        args = load_args(arg_path)
 
+    # Set the datasets to evaluate
     NAMES = ECON_NAMES | SALES_NAMES
 
     for dataset_name, freqs in NAMES.items():
         for freq in freqs:
+            # Adjust the context and prediction length based on the frequency
             # pred_len, context_len = calc_pred_and_context_len(freq)
             pred_len, context_len = 96, 512
             if model_name == "timesfm":
@@ -104,11 +110,15 @@ if __name__ == "__main__":
             elif model_name == "ttm":
                 args["config"]["horizon_len"] = pred_len
                 args["config"]["context_len"] = context_len
+            
+            # Set the dataset path
             if len(freqs) == 1:
                 dataset_path = f"data/gifteval/{dataset_name}/data.csv"
             else:
                 dataset_path = f"data/gifteval/{dataset_name}/{freq}/data.csv"
             print(f"Creating leaderboard for dataset: {dataset_name}, context_len: {context_len}, horizon_len: {pred_len}")
+            
+            # Initialize the model and dataset
             if model_name == "timesfm":
                 model = TimesfmModel(**args)
                 dataset = TimesfmDataset(datetime_col='timestamp', path=dataset_path, mode='test', context_len=args["config"]["context_len"], horizon_len=args["config"]["horizon_len"], boundaries=(-1, -1, -1), batchsize=64)
@@ -141,6 +151,10 @@ if __name__ == "__main__":
                 model = TinyTimeMixerModel(**args)
                 dataset = TinyTimeMixerDataset(datetime_col='timestamp', path=dataset_path, mode='test', context_len=context_len, horizon_len=pred_len)
                 metrics = model.evaluate(dataset)
+            
+            elif model_name == "moirai":
+                # model = 
+                pass
 
             df = pd.read_csv(csv_path)
             if dataset_name in df["dataset"].values:
