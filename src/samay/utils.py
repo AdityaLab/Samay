@@ -118,7 +118,7 @@ def arrow_to_csv(arrow_dir):
     print(f"Conversion complete for {arrow_dir}.")
 
 
-def visualize(task_name="forecasting", trues=None, preds=None, history=None, masks=None, **kwargs):
+def visualize(task_name="forecasting", trues=None, preds=None, history=None, masks=None, context_len=512, **kwargs):
     """
     Visualize the data.
     If task_name is "forecasting", trues, preds, and history should be provided, which channel_idx and time_idx are optional.
