@@ -521,7 +521,7 @@ class ChronosBoltDataset(BaseDataset):
     def preprocess(self, start_date=None, end_date=None, freq=None, operation='sum', **kwargs):
         """
         Preprocess the dataset by clipping based on start_date and end_date,
-        and resampling the data based on frequency change.
+        and resampling the data based on frequency change."""
 
 
 class MomentDataset(BaseDataset):

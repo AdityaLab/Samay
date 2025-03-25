@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 import yaml
 import math
+import json
 
 from .models.chronosforecasting.chronos.chronos_bolt import ChronosBoltPipeline, ChronosBoltConfig
 from .models.TinyTimeMixer.models.tinytimemixer.modeling_tinytimemixer import TinyTimeMixerForPrediction
@@ -1142,8 +1143,9 @@ class MoiraiTSModel(Basemodel):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         if model_type == "moirai": # standard moirai
-            if self.repo is None:
-                self.repo = f"Salesforce/moirai-1.1-R-{model_size}"
+            if repo is None:
+                repo = f"Salesforce/moirai-1.1-R-{model_size}"
+            self.repo = repo
             self.model = MoiraiForecast(
                 module=MoiraiModule.from_pretrained(self.repo),
                 prediction_length=self.horizon_len,
@@ -1155,8 +1157,9 @@ class MoiraiTSModel(Basemodel):
                 past_feat_dynamic_real_dim=self.past_feat_dynamic_real_dim,
             )
         elif model_type == "moirai-moe": # moirai with Mixture of Experts
-            if self.repo is None:
-                self.repo = f"Salesforce/moirai-moe-1.0-R-{model_size}"
+            if repo is None:
+                repo = f"Salesforce/moirai-moe-1.0-R-{model_size}"
+            self.repo = repo
             self.model = MoiraiMoEForecast(
                 module=MoiraiMoEModule.from_pretrained(self.repo),
                 prediction_length=self.horizon_len,
@@ -1168,7 +1171,6 @@ class MoiraiTSModel(Basemodel):
                 past_feat_dynamic_real_dim=self.past_feat_dynamic_real_dim,
             )
         self.model.to(self.device)
-        print(f"In MoiraiTSModel init: type: {type(self.model)}, patch_sizes: {self.model.module.patch_sizes}")
 
     def preprocess_inputs(self, inputs:dict):
         """Preprocess the inputs to the model - specifically adds the following fields:
@@ -1220,7 +1222,7 @@ class MoiraiTSModel(Basemodel):
         return preds.squeeze(-1)
     
     def evaluate(self, dataset:MoiraiDataset, metrics:list[str]=["MSE"],
-                 output_transforms:transforms.Compose=None,num_sample_flag:bool=False,zero_shot:bool=True,**kwargs):
+                 output_transforms:transforms.Compose=None,num_sample_flag:bool=False,zero_shot:bool=True,leaderboard:bool=False,**kwargs):
         """For a given test dataset, we evaluate the model using the given metrics.
 
         Args:
@@ -1229,6 +1231,7 @@ class MoiraiTSModel(Basemodel):
             output_transforms (transforms.Compose, optional): A set of transforms to be applied on the model output. Defaults to None.
             num_sample_flage (bool, optional): If True, the model will use number of samples to sample from the distribution for forecasting. Defaults to False.
             zero_shot (bool, optional): If True, the standard model will be used, else the finetuned model will be used. Defaults to True.
+            leaderboard (bool, optional): If True, only the metrics will be returned. Defaults to False.
 
         Raises:
             ValueError: Any metric other than "MSE" or "MASE is not supported.
@@ -1389,12 +1392,8 @@ class MoiraiTSModel(Basemodel):
             for input, label, forecast in zip(input_it, label_it, forecast_it):
                 true_values = label["target"].squeeze() if isinstance(label["target"], np.ndarray) else np.array(label["target"])
                 past_values = input["target"].squeeze() if isinstance(input["target"], np.ndarray) else np.array(input["target"])
-                if isinstance(forecast, SampleForecast):
-                    pred_values = np.median(forecast.samples, axis=0) # if using SampleForecast() class
-                elif isinstance(forecast, np.ndarray):
-                    pred_values = np.median(forecast, axis=0)
+                pred_values = np.median(forecast, axis=0) # Median of the forecasted values 
                 length = len(past_values)
-                # print(f"Checking: true: {true_values[:3]}, pred: {pred_values[:3]}")
 
                 eval = []
                 for metric in metrics:
@@ -1432,7 +1431,24 @@ class MoiraiTSModel(Basemodel):
         trues = [np.array(trues[key]) for key in trues.keys()]
         preds = [np.array(preds[key]) for key in preds.keys()]
 
-        return eval_results, trues, preds, histories
+
+        mse = np.mean(np.array([MSE(t, p) for t, p in zip(trues, preds)]), axis=0)
+        mae = np.mean(np.array([MAE(t, p) for t, p in zip(trues, preds)]), axis=0)
+        mase = np.mean(np.array([MASE(t, p) for t, p in zip(trues, preds)]), axis=0)
+        mape = np.mean(np.array([MAPE(t, p) for t, p in zip(trues, preds)]), axis=0)
+        rmse = np.mean(np.array([RMSE(t, p) for t, p in zip(trues, preds)]), axis=0)
+        nrmse = np.mean(np.array([NRMSE(t, p) for t, p in zip(trues, preds)]), axis=0)
+        smape = np.mean(np.array([SMAPE(t, p) for t, p in zip(trues, preds)]), axis=0)
+        msis = np.mean(np.array([MSIS(t, p) for t, p in zip(trues, preds)]), axis=0)
+        nd = np.mean(np.array([ND(t, p) for t,p in zip(trues, preds)]), axis=0)
+
+        leaderboard_metrics = {"mse": mse, "mae": mae, "mase": mase, "mape": mape, "rmse": rmse,
+                       "nrmse": nrmse, "smape": smape, "msis": msis, "nd": nd}
+
+        if leaderboard:
+            return leaderboard_metrics
+        else:
+            return leaderboard_metrics, trues, preds, histories
 
     def finetune(self, dataset, **kwargs):
         """Finetune the model on the given dataset.
