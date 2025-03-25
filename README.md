@@ -8,7 +8,8 @@ Current repository contains the following models:
 2. [MOMENT](https://arxiv.org/abs/2402.03885)
 3. [TimesFM](https://arxiv.org/html/2310.10688v2)
 4. [Chronos](https://arxiv.org/abs/2403.07815)
-5. [TinytTimeMixers](https://arxiv.org/abs/2401.03955)
+5. [MOIRAI](https://arxiv.org/abs/2402.02592)
+6. [TinytTimeMixers](https://arxiv.org/abs/2401.03955)
 
 More models will be added soon...
 
@@ -137,8 +138,6 @@ avg_loss, trues, preds, histories = tfm.evaluate(val_dataset)
 
 ### MOIRAI
 
-Install the package: `pip install git+https://github.com/AdityaLab/Samay.git`.
-
 #### Loading  Model
 
 ```python
@@ -160,16 +159,11 @@ moirai_model = MoiraiTSModel(repo=repo, config=config)
 #### Loading Dataset
 
 ```python
-data_config = {"name" : "ett",
-                "path" : "../src/samay/models/moment/data/ETTh1.csv",
-                "date_col" : "date",
-                "freq": "h"
-            }
 
-train_dataset = MoiraiDataset(name=data_config['name'], mode="train", path=data_config['path'], datetime_col=data_config['date_col'], freq=data_config['freq'],
+train_dataset = MoiraiDataset(name="ett", mode="train", path="data/ETTh1.csv", datetime_col="date", freq="h",
                             context_len=config['context_len'], horizon_len=config['horizon_len'])
 
-test_dataset = MoiraiDataset(name=data_config['name'], mode="test", path=data_config['path'], datetime_col=data_config['date_col'], freq=data_config['freq'],
+test_dataset = MoiraiDataset(name="ett", mode="test", path="data/ETTh1.csv", datetime_col="date", freq="h",
                             context_len=config['context_len'], horizon_len=config['horizon_len'])
 ```
 
