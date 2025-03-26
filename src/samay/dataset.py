@@ -1175,6 +1175,7 @@ class MoiraiDataset(BaseDataset):
         """
         data = []
         num_windows = 1 if (self.dataset.shape[0] - self.boundaries[1]) < self.horizon_len else (self.dataset.shape[0] - self.boundaries[1]) // self.horizon_len
+
         for i in range(self.dataset.shape[1]):
             for j in range(num_windows):
                 start_idx = self.boundaries[1] + j * self.horizon_len
