@@ -21,9 +21,9 @@ import numpy as np
 import torch
 from huggingface_hub import snapshot_download
 
-from samay.models.timesfm.timesfm import pytorch_patched_decoder as ppd
-from samay.models.timesfm.timesfm import timesfm_base
-from samay.utils import get_least_used_gpu
+from src.samay.models.timesfm.timesfm import pytorch_patched_decoder as ppd
+from src.samay.models.timesfm.timesfm import timesfm_base
+from src.samay.utils import get_least_used_gpu
 
 _TOL = 1e-6
 
@@ -41,6 +41,7 @@ class TimesFmTorch(timesfm_base.TimesFmBase):
             horizon_len=self.output_patch_len,
             head_dim=self.model_dims // self.num_heads,
             quantiles=self.quantiles,
+            use_positional_embedding=self.use_pos_emb,
         )
         self._model = None
         self.num_cores = 1
@@ -53,26 +54,28 @@ class TimesFmTorch(timesfm_base.TimesFmBase):
         else:
             self._device = torch.device("cpu")
         print(f"Using device: {self._device}")
+        self._median_index = -1
 
     def load_from_checkpoint(
         self,
         checkpoint: timesfm_base.TimesFmCheckpoint,
     ) -> None:
         """Loads a checkpoint and compiles the decoder."""
-        checkpoint_path = checkpoint.path
-        repo_id = checkpoint.huggingface_repo_id
-        if checkpoint_path is None:
-            checkpoint_path = path.join(snapshot_download(repo_id), "torch_model.ckpt")
         self._model = ppd.PatchedTimeSeriesDecoder(self._model_config)
-        loaded_checkpoint = torch.load(checkpoint_path, weights_only=True)
-        logging.info("Loading checkpoint from %s", checkpoint_path)
-        self._model.load_state_dict(loaded_checkpoint)
+        if checkpoint:
+            checkpoint_path = checkpoint.path
+            repo_id = checkpoint.huggingface_repo_id
+            if not checkpoint_path:
+                checkpoint_path = path.join(snapshot_download(repo_id), "torch_model.ckpt")
+            loaded_checkpoint = torch.load(checkpoint_path, weights_only=True)
+            logging.info("Loading checkpoint from %s", checkpoint_path)
+            self._model.load_state_dict(loaded_checkpoint)
         logging.info("Sending checkpoint to device %s", f"{self._device}")
         self._model.to(self._device)
         self._model.eval()
         # TODO: add compilation.
 
-    def forecast(
+    def _forecast(
         self,
         inputs: Sequence[Any],
         freq: Sequence[int] | None = None,
@@ -115,7 +118,7 @@ class TimesFmTorch(timesfm_base.TimesFmBase):
             fcontext_len = self.context_len
         else:
             fcontext_len = forecast_context_len
-        if len(inputs.shape) > 2:
+        if len(inputs[0].shape) > 1:
             inputs = np.squeeze(inputs)
         inputs = [np.array(ts)[-fcontext_len:] for ts in inputs]
         inp_min = np.min([np.min(ts) for ts in inputs])
@@ -127,7 +130,7 @@ class TimesFmTorch(timesfm_base.TimesFmBase):
             inputs = new_inputs
 
         if freq is None:
-            logging.info("No frequency provided via `freq`. Default to high (0).")
+            # logging.info("No frequency provided via `freq`. Default to high (0).")
             freq = [0] * len(inputs)
 
         input_ts, input_padding, inp_freq, pmap_pad = self._preprocess(inputs, freq)

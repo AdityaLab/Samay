@@ -1,0 +1,10 @@
+dataset,mse,mae,mase,mape,rmse,nrmse,smape,msis,nd,mwsq,crps
+m4_yearly,,,,,,,,,,,
+m4_quarterly,,,,,,,,,,,
+car_parts_with_missing,,,,,,,,,,,
+m4_monthly,,,,,,,,,,,
+m4_weekly,,,,,,,,,,,
+m4_daily,,,,,,,,,,,
+m4_hourly,,,,,,,,,,,
+hierarchical_sales,,,,,,,,,,,
+restaurant,,,,,,,,,,,

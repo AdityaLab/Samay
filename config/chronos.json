@@ -1,8 +1,3 @@
 {
-    "repo": "amazon/chronos-t5-small",
-    "config": {
-        "context_len": 128,
-        "horizon_len": 64,
-        "num_layers": 20
-    }
+    "repo": "amazon/chronos-t5-small"
 }
