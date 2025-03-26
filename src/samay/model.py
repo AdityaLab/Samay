@@ -1380,10 +1380,13 @@ class MoiraiTSModel(Basemodel):
         input_it = iter(dataset.dataset.input)
         label_it = iter(dataset.dataset.label)
         forecast_it = iter(forecast)
+        # Quantile levels obtained from cli/conf/eval/default.yaml of MOIRAI repository
+        quantile_levels = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 
         trues = {}
         preds = {}
         histories = {}
+        quantile_preds = {}
         eval_windows = []
 
         with torch.no_grad(): # No need to compute gradients
@@ -1392,7 +1395,8 @@ class MoiraiTSModel(Basemodel):
             for input, label, forecast in zip(input_it, label_it, forecast_it):
                 true_values = label["target"].squeeze() if isinstance(label["target"], np.ndarray) else np.array(label["target"])
                 past_values = input["target"].squeeze() if isinstance(input["target"], np.ndarray) else np.array(input["target"])
-                pred_values = np.median(forecast, axis=0) # Median of the forecasted values 
+                quantiles = np.percentile(forecast[:,:min(self.horizon_len, true_values.shape[0])], [q*100 for q in quantile_levels], axis=0)
+                pred_values = np.median(forecast, axis=0)[:min(self.horizon_len, true_values.shape[0])] # Median of the forecasted values
                 length = len(past_values)
 
                 eval = []
@@ -1417,9 +1421,11 @@ class MoiraiTSModel(Basemodel):
                     histories[length] = []
                     trues[length] = []
                     preds[length] = []
+                    quantile_preds[length] = []
                 histories[length].append(past_values)
                 trues[length].append(true_values)
                 preds[length].append(pred_values)
+                quantile_preds[length].append(quantiles)
 
         eval_windows = np.mean(np.array(eval_windows), axis=0)
         eval_results = {}
@@ -1430,7 +1436,8 @@ class MoiraiTSModel(Basemodel):
         histories = [np.array(histories[key]) for key in histories.keys()]
         trues = [np.array(trues[key]) for key in trues.keys()]
         preds = [np.array(preds[key]) for key in preds.keys()]
-
+        quantile_preds = [np.array(quantile_preds[key]) for key in quantile_preds.keys()]
+        quantile_preds = [np.transpose(q, (1, 0, 2)) for q in quantile_preds]
 
         mse = np.mean(np.array([MSE(t, p) for t, p in zip(trues, preds)]), axis=0)
         mae = np.mean(np.array([MAE(t, p) for t, p in zip(trues, preds)]), axis=0)
@@ -1442,8 +1449,11 @@ class MoiraiTSModel(Basemodel):
         msis = np.mean(np.array([MSIS(t, p) for t, p in zip(trues, preds)]), axis=0)
         nd = np.mean(np.array([ND(t, p) for t,p in zip(trues, preds)]), axis=0)
 
+        mwsq = np.mean(np.array([MWSQ(t, p, q) for t,p,q in zip(trues, preds,quantile_preds)]), axis=0)
+        crps = np.mean(np.array([CRPS(t, p, q) for t,p,q in zip(trues, preds,quantile_preds)]), axis=0)
+
         leaderboard_metrics = {"mse": mse, "mae": mae, "mase": mase, "mape": mape, "rmse": rmse,
-                       "nrmse": nrmse, "smape": smape, "msis": msis, "nd": nd}
+                       "nrmse": nrmse, "smape": smape, "msis": msis, "nd": nd, "mwsq": mwsq, "crps": crps}
 
         if leaderboard:
             return leaderboard_metrics
