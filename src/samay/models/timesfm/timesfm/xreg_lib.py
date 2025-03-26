@@ -17,8 +17,7 @@ import itertools
 import math
 from typing import Any, Iterable, Literal, Mapping, Sequence
 
-import jax
-import jax.numpy as jnp
+
 import numpy as np
 from sklearn import preprocessing
 
@@ -37,19 +36,6 @@ def _repeat(elements: Iterable[Any], counts: Iterable[int]) -> np.ndarray:
         list(itertools.chain.from_iterable(map(itertools.repeat, elements, counts)))
     )
 
-
-def _to_padded_jax_array(x: np.ndarray) -> jax.Array:
-    if x.ndim == 1:
-        (i,) = x.shape
-        di = 2 ** math.ceil(math.log2(i)) - i
-        return jnp.pad(x, ((0, di),), mode="constant", constant_values=0.0)
-    elif x.ndim == 2:
-        i, j = x.shape
-        di = 2 ** math.ceil(math.log2(i)) - i
-        dj = 2 ** math.ceil(math.log2(j)) - j
-        return jnp.pad(x, ((0, di), (0, dj)), mode="constant", constant_values=0.0)
-    else:
-        raise ValueError(f"Unsupported array shape: {x.shape}")
 
 
 class BatchedInContextXRegBase:
@@ -403,117 +389,3 @@ class BatchedInContextXRegBase:
         raise NotImplementedError("Fit is not implemented.")
 
 
-class BatchedInContextXRegLinear(BatchedInContextXRegBase):
-    """Linear in-context regression model."""
-
-    def fit(
-        self,
-        ridge: float = 0.0,
-        one_hot_encoder_drop: str | None = "first",
-        use_intercept: bool = True,
-        force_on_cpu: bool = False,
-        max_rows_per_col: int = 0,
-        max_rows_per_col_sample_seed: int = 42,
-        debug_info: bool = False,
-        assert_covariates: bool = False,
-        assert_covariate_shapes: bool = False,
-    ) -> (
-        list[np.ndarray]
-        | tuple[list[np.ndarray], list[np.ndarray], jax.Array, jax.Array, jax.Array]
-    ):
-        """Fits a linear model for in-context regression.
-
-        Args:
-          ridge: A non-negative value for specifying the ridge regression penalty.
-            If 0 is provided, fallback to ordinary least squares. Note this penalty
-            is added to the normalized covariate matrix.
-          one_hot_encoder_drop: Which drop strategy to use for the one hot encoder.
-          use_intercept: Whether to prepare an intercept (all 1) column in the
-            matrices.
-          force_on_cpu: Whether to force execution on cpu for accelerator machines.
-          max_rows_per_col: How many rows to subsample per column. 0 for no
-            subsampling. This is for speeding up model fitting.
-          max_rows_per_col_sample_seed: The seed for the subsampling if needed by
-            `max_rows_per_col`.
-          debug_info: Whether to return debug info.
-          assert_covariates: Whether to assert the validity of the covariate inputs.
-          assert_covariate_shapes: Whether to assert the shapes of the covariate
-            inputs when `assert_covariates` is True.
-
-        Returns:
-          If `debug_info` is False:
-            The linear fits on the horizon.
-          If `debug_info` is True:
-            A tuple of:
-            - the linear fits on the horizon,
-            - the linear fits on the context,
-            - the flattened target vector,
-            - the covariate matrix for the context, and
-            - the covariate matrix for the horizon.
-        """
-        flat_targets, x_train_raw, x_test = self.create_covariate_matrix(
-            one_hot_encoder_drop=one_hot_encoder_drop,
-            use_intercept=use_intercept,
-            assert_covariates=assert_covariates,
-            assert_covariate_shapes=assert_covariate_shapes,
-        )
-
-        x_train = x_train_raw.copy()
-        if max_rows_per_col:
-            nrows, ncols = x_train.shape
-            if nrows > (w := ncols * max_rows_per_col):
-                subsample = jax.random.choice(
-                    jax.random.PRNGKey(max_rows_per_col_sample_seed),
-                    nrows,
-                    (w,),
-                    replace=False,
-                )
-                x_train = x_train[subsample]
-                flat_targets = flat_targets[subsample]
-
-        device = jax.devices("cpu")[0] if force_on_cpu else None
-        # Runs jitted version of the solvers which are quicker at the cost of
-        # running jitting during the first time calling. Re-jitting happens whenever
-        # new (padded) shapes are encountered.
-        # Ocassionally it helps with the speed and the accuracy if we force single
-        # thread execution on cpu for accelerator machines:
-        # 1. Avoid moving data to accelarator memory.
-        # 2. Avoid precision loss if any.
-        with jax.default_device(device):
-            x_train_raw = _to_padded_jax_array(x_train_raw)
-            x_train = _to_padded_jax_array(x_train)
-            flat_targets = _to_padded_jax_array(flat_targets)
-            x_test = _to_padded_jax_array(x_test)
-            beta_hat = (
-                jnp.linalg.pinv(
-                    x_train.T @ x_train + ridge * jnp.eye(x_train.shape[1]),
-                    hermitian=True,
-                )
-                @ x_train.T
-                @ flat_targets
-            )
-            y_hat = x_test @ beta_hat
-            y_hat_context = x_train_raw @ beta_hat if debug_info else None
-
-        outputs = []
-        outputs_context = []
-
-        # Reconstruct the ragged 2-dim batched forecasts from flattened linear fits.
-        train_index, test_index = 0, 0
-        for train_index_delta, test_index_delta in zip(self.train_lens, self.test_lens):
-            outputs.append(
-                np.array(y_hat[test_index : (test_index + test_index_delta)])
-            )
-            if debug_info:
-                outputs_context.append(
-                    np.array(
-                        y_hat_context[train_index : (train_index + train_index_delta)]
-                    )
-                )
-            train_index += train_index_delta
-            test_index += test_index_delta
-
-        if debug_info:
-            return outputs, outputs_context, flat_targets, x_train, x_test
-        else:
-            return outputs
