@@ -79,7 +79,12 @@ class Basemodel:
 
 
 class TimesfmModel(Basemodel):
-    def __init__(self, config=None, repo=None, hparams=None, ckpt=None, **kwargs):
+    def __init__(self, config=None, repo=None, ckpt=None, **kwargs):
+        """
+        Args:
+            config: dict, model configuration
+            repo: str, Huggingface model repository id
+        """
         super().__init__(config=config, repo=repo)
         hparams = tfm.TimesFmHparams(**self.config)
         if repo:
@@ -94,7 +99,8 @@ class TimesfmModel(Basemodel):
     def finetune(self, dataset, freeze_transformer=True, **kwargs):
         """
         Args:
-            dataloader: torch.utils.data.DataLoader, input data
+            dataset: dataset for finetuning, call get_data_loader() to get the dataloader
+            freeze_transformer: bool, whether to freeze the transformer layers
         Returns:
             FinetuneModel: ppd.PatchedDecoderFinetuneModel, finetuned model
         """
@@ -142,6 +148,11 @@ class TimesfmModel(Basemodel):
         return self.model.forecast(input)
     
     def plot(self, dataset, **kwargs):
+        """
+        Plot the forecast results.
+        Args:
+            dataset: dataset for plotting, call get_data_loader() to get the dataloader
+        """
         dataloader = dataset.get_data_loader()
         trues, preds, histories, losses = [], [], [], []
         with torch.no_grad():
@@ -173,6 +184,13 @@ class TimesfmModel(Basemodel):
 
 
     def evaluate(self, dataset, **kwargs):
+        """
+        Evaluate the model.
+        Args:
+            dataset: dataset for evaluation, call get_data_loader() to get the dataloader
+        Returns:
+            Dict[str, float]: evaluation metrics, including mse, mae, mase, mape, rmse, nrmse, smape, msis, nd, mwsq, crps
+        """
         dataloader = dataset.get_data_loader()
         trues, preds, histories, quantiles, losses = [], [], [], [], []
 
@@ -231,6 +249,11 @@ class TimesfmModel(Basemodel):
 
 class ChronosModel(Basemodel):
     def __init__(self, config=None, repo=None):
+        """
+        Args:
+            config: dict, model configuration
+            repo: str, Huggingface model repository id
+        """
         super().__init__(config=config, repo=repo)
         if repo:
             print("Loading Chronos model from Huggingface repository")
@@ -243,6 +266,10 @@ class ChronosModel(Basemodel):
             self.pipeline = ChronosPipeline(config=ChronosConfig(**config))
 
     def finetune(self, dataset, **kwargs):
+        """
+        Args:
+            dataset: dataset for finetuning, call get_data_loader() to get the dataloader
+        """
         # Todo: finetune model
         finetune_model = self.pipeline.model.model
         dataloader = dataset.get_data_loader()
@@ -276,6 +303,13 @@ class ChronosModel(Basemodel):
                 
 
     def plot(self, dataset, horizon_len, quantile_levels, **kwargs):
+        """
+        Plot the forecast results.
+        Args:
+            dataset: dataset for plotting, call get_data_loader() to get the dataloader
+            horizon_len: int, forecast horizon length
+            quantile_levels: list, list of quantile levels
+        """
         # Todo: forecast
         dataloader = dataset.get_data_loader()
         trues, preds, histories = [], [], []
@@ -304,6 +338,15 @@ class ChronosModel(Basemodel):
 
 
     def evaluate(self, dataset, horizon_len, quantile_levels, **kwargs):
+        """
+        Evaluate the model.
+        Args:
+            dataset: dataset for evaluation, call get_data_loader() to get the dataloader
+            horizon_len: int, forecast horizon length
+            quantile_levels: list, list of quantile levels
+        Returns:
+            Dict[str, float]: evaluation metrics, including mse, mae, mase, mape, rmse, nrmse, smape, msis, nd, mwsq, crps
+        """
         dataloader = dataset.get_data_loader()
         trues, preds, histories, quantile_forecasts = [], [], [], []
         for i, data in enumerate(dataloader):
@@ -360,6 +403,11 @@ class ChronosModel(Basemodel):
 
 class ChronosBoltModel(Basemodel):
     def __init__(self, config=None, repo=None):
+        """
+        Args:
+            config: dict, model configuration
+            repo: str, Huggingface model repository id
+        """
         super().__init__(config=config, repo=repo)
         if repo:
             print("Loading Chronos model from Huggingface repository")
@@ -373,6 +421,10 @@ class ChronosBoltModel(Basemodel):
 
 
     def finetune(self, dataset, **kwargs):
+        """
+        Args:
+            dataset: dataset for finetuning, call get_data_loader() to get the dataloader
+        """
         # Todo: finetune model
         finetune_model = self.pipeline.model
         dataloader = dataset.get_data_loader()
@@ -404,6 +456,13 @@ class ChronosBoltModel(Basemodel):
                 
 
     def plot(self, dataset, horizon_len, quantile_levels, **kwargs):
+        """
+        Plot the forecast results.
+        Args:
+            dataset: dataset for plotting, call get_data_loader() to get the dataloader
+            horizon_len: int, forecast horizon length
+            quantile_levels: list, list of quantile levels
+        """
         dataloader = dataset.get_data_loader()
         trues, preds, histories = [], [], []
         for i, data in enumerate(dataloader):
@@ -430,6 +489,15 @@ class ChronosBoltModel(Basemodel):
 
 
     def evaluate(self, dataset, horizon_len, quantile_levels, **kwargs):
+        """
+        Evaluate the model.
+        Args:
+            dataset: dataset for evaluation, call get_data_loader() to get the dataloader
+            horizon_len: int, forecast horizon length
+            quantile_levels: list, list of quantile levels
+        Returns:
+            Dict[str, float]: evaluation metrics, including mse, mae, mase, mape, rmse, nrmse, smape, msis, nd, mwsq, crps
+        """
         dataloader = dataset.get_data_loader()
         trues, preds, histories, quantile_forecasts = [], [], [], []
         for i, data in enumerate(dataloader):
@@ -764,6 +832,11 @@ class LPTMModel(Basemodel):
 
 class MomentModel(Basemodel):
     def __init__(self, config=None, repo=None):
+        """
+        Args:
+            config: dict, model configuration
+            repo: str, Huggingface model repository id
+        """
         super().__init__(config=config, repo=repo)
         if not repo:
             # raise ValueError("Moment model requires a repository")
@@ -779,6 +852,13 @@ class MomentModel(Basemodel):
         self.model.init()
 
     def finetune(self, dataset, task_name="forecasting", **kwargs):
+        """
+        Args:
+            dataset: dataset for finetuning, call get_data_loader() to get the dataloader
+            task_name: str, task name, forecasting, imputation, detection, classification
+        Returns:
+            MOMENT model
+        """
         # arguments
         max_lr = 1e-4 if 'lr' not in kwargs else kwargs['lr']
         max_epoch = 5 if 'epoch' not in kwargs else kwargs['epoch']
@@ -873,6 +953,12 @@ class MomentModel(Basemodel):
         return self.model
     
     def plot(self, dataset, task_name="forecasting"):
+        """
+        Plot the forecast results.
+        Args:
+            dataset: dataset for plotting, call get_data_loader() to get the dataloader
+            task_name: str, task name, forecasting, imputation, detection, classification
+        """
         dataloader = dataset.get_data_loader()
         criterion = torch.nn.MSELoss()
         self.model.to(self.device)
@@ -985,6 +1071,14 @@ class MomentModel(Basemodel):
         #     return accuracy, embeddings, labels
 
     def evaluate(self, dataset, task_name="forecasting"):
+        """
+        Evaluate the model.
+        Args:
+            dataset: dataset for evaluation, call get_data_loader() to get the dataloader
+            task_name: str, task name, forecasting, imputation, detection, classification
+        Returns:
+            Dict[str, float]: evaluation metrics, including mse, mae, mase, mape, rmse, nrmse, smape, msis, nd, mwsq, crps
+        """
         dataloader = dataset.get_data_loader()
         self.model.to(self.device)
         self.model.eval()
@@ -1062,6 +1156,11 @@ class MomentModel(Basemodel):
 
 class TinyTimeMixerModel(Basemodel):
     def __init__(self, config=None, repo=None):
+        """
+        Args:
+            config: dict, model configuration
+            repo: str, Huggingface model repository id
+        """
         super().__init__(config=config, repo=repo)
         if repo:
             context_len = config["context_len"]
@@ -1078,6 +1177,10 @@ class TinyTimeMixerModel(Basemodel):
             raise ValueError("TinyTimeMixer model requires a repository")
 
     def finetune(self, dataset, **kwargs):
+        """
+        Args:
+            dataset: dataset for finetuning, call get_data_loader() to get the dataloader
+        """
         dataloader = dataset.get_data_loader()
         self.model.train()
         optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-4)
@@ -1098,6 +1201,11 @@ class TinyTimeMixerModel(Basemodel):
         self.model.eval()
 
     def plot(self, dataset, **kwargs):
+        """
+        Plot the forecast results.
+        Args:
+            dataset: dataset for plotting, call get_data_loader() to get the dataloader
+        """
         dataloader = dataset.get_data_loader()
         trues, preds, histories = [], [], []
         self.model.eval()
@@ -1119,6 +1227,13 @@ class TinyTimeMixerModel(Basemodel):
         visualize(task_name="forecasting", trues=trues, preds=preds, history=histories, **kwargs)
 
     def evaluate(self, dataset, **kwargs):
+        """
+        Evaluate the model.
+        Args:
+            dataset: dataset for evaluation, call get_data_loader() to get the dataloader
+        Returns:    
+            Dict[str, float]: evaluation metrics, including mse, mae, mase, mape, rmse, nrmse, smape, msis, nd
+        """
         dataloader = dataset.get_data_loader()
         trues, preds, histories = [], [], []
         self.model.eval()
