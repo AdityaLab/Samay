@@ -8,10 +8,10 @@ import pandas as pd
 # if src_path not in sys.path:
 #     sys.path.insert(0, src_path)
 
-from src.samay.model import TimesfmModel, MomentModel, ChronosModel, ChronosBoltModel, TinyTimeMixerModel
-from src.samay.dataset import TimesfmDataset, MomentDataset, ChronosDataset, ChronosBoltDataset, TinyTimeMixerDataset
-from src.samay.utils import load_args
-from src.samay.metric import *
+from samay.model import TimesfmModel, MomentModel, ChronosModel, ChronosBoltModel, TinyTimeMixerModel
+from samay.dataset import TimesfmDataset, MomentDataset, ChronosDataset, ChronosBoltDataset, TinyTimeMixerDataset
+from samay.utils import load_args
+from samay.metric import *
 
 
 ECON_NAMES = {

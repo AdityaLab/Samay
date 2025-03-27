@@ -1,4 +1,4 @@
-from src.samay.utils import arrow_to_csv
+from samay.utils import arrow_to_csv
 import os
 import pandas as pd
 

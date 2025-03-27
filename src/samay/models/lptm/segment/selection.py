@@ -34,7 +34,10 @@ def select_highest_suffix(scores: npt.NDArray[np.float32]):
     # Make all values of the diagonal and below -inf
     mask = np.tri(scores.shape[1], dtype=bool)
     mask = einops.repeat(mask, "n m -> b n m", b=scores.shape[0])
-    scores_cp[mask] = -np.inf
+    if scores_cp.dtype == np.int64:
+        pass
+    else:
+        scores_cp[mask] = -np.inf
     first_idx = np.arange(scores.shape[1] - 1)
     first_idx = einops.repeat(
         first_idx, "n -> b n", b=scores.shape[0]
@@ -115,7 +118,7 @@ def prune_segments_all(
     return segments, out_scores
 
 
-def select_segments(scores: npt.NDArray[np.float32], num_segments: int):
+def select_segments(scores: npt.NDArray[np.float32], num_segments: int, **kwargs):
     """Select the highest scoring segments
 
     Args:
@@ -126,5 +129,13 @@ def select_segments(scores: npt.NDArray[np.float32], num_segments: int):
         npt.NDArray[np.int32]: selected segments start and end indices [batch, num_segments, 2]
         npt.NDArray[np.float32]: selected segments scores [batch, num_segments]
     """
-    idxs, scores = select_highest_suffix(scores)
-    return prune_segments_all(idxs, scores, num_segments)
+    # If scores is pytorch tensor, convert it to numpy array
+    if hasattr(scores, "detach"):
+        scores_ = scores.cpu().detach().numpy()
+    else:
+        scores_ = scores
+    # If scores_ is [batch, seq_len] convert it to [batch, seq_len, seq_len] (batch = 1)
+    if scores_.ndim == 2:
+        scores_ = einops.repeat(scores_, "b n -> b n m", m=scores_.shape[1])
+    idxs, scores_ = select_highest_suffix(scores_)
+    return prune_segments_all(idxs, scores_, num_segments)
