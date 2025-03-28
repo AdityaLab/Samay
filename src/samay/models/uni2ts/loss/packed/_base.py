@@ -21,7 +21,7 @@ from einops import rearrange, reduce
 from jaxtyping import Bool, Float, Int
 from torch.distributions import Distribution
 
-from uni2ts.common.torch_util import safe_div
+from samay.models.uni2ts.common.torch_util import safe_div
 
 
 class PackedLoss(abc.ABC):

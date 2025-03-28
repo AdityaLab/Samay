@@ -35,8 +35,8 @@ from gluonts.transform.split import TFTInstanceSplitter
 from jaxtyping import Bool, Float, Int
 from torch.distributions import Distribution
 
-from uni2ts.common.torch_util import safe_div
-from uni2ts.loss.packed import PackedNLLLoss as _PackedNLLLoss
+from samay.models.uni2ts.common.torch_util import safe_div
+from samay.models.uni2ts.loss.packed import PackedNLLLoss as _PackedNLLLoss
 
 from .module import MoiraiModule
 
@@ -82,9 +82,9 @@ class MoiraiForecast(L.LightningModule):
         patch_size: int | str = "auto",
         num_samples: int = 100,
     ):
-        assert (module is not None) or (
-            module_kwargs is not None
-        ), "if module is not provided, module_kwargs is required"
+        assert (module is not None) or (module_kwargs is not None), (
+            "if module is not provided, module_kwargs is required"
+        )
         super().__init__()
         self.save_hyperparameters(ignore=["module"])
         self.module = MoiraiModule(**module_kwargs) if module is None else module
@@ -483,7 +483,9 @@ class MoiraiForecast(L.LightningModule):
         # Pad the past_observed_target tensor to ensure its length is a multiple of patch_size
         # and then reduce it by taking the maximum value over the patch dimension.
         past_seq_id = reduce(
-            self._patched_seq_pad(patch_size, past_observed_target, -2, left=True),  # Pad the input tensor
+            self._patched_seq_pad(
+                patch_size, past_observed_target, -2, left=True
+            ),  # Pad the input tensor
             "... (seq patch) dim -> ... seq",  # Combine the seq and patch dimensions into a single one
             "max",  # Reduction operation to take the maximum value
             patch=patch_size,  # Size of the patches
@@ -491,8 +493,7 @@ class MoiraiForecast(L.LightningModule):
 
         # Bound the id below by 0
         past_seq_id = torch.clamp(
-            past_seq_id.cummax(dim=-1).values.cumsum(dim=-1) - 1,
-            min=0
+            past_seq_id.cummax(dim=-1).values.cumsum(dim=-1) - 1, min=0
         )
 
         batch_shape = " ".join(map(str, past_observed_target.shape[:-2]))

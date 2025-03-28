@@ -21,7 +21,7 @@ from hydra.utils import call, instantiate
 from omegaconf import DictConfig
 from torch.utils.tensorboard import SummaryWriter
 
-from uni2ts.eval_util.evaluation import evaluate_model
+from samay.models.uni2ts.eval_util.evaluation import evaluate_model
 
 
 @hydra.main(version_base="1.3", config_path="conf/eval", config_name="default")
@@ -57,7 +57,7 @@ def main(cfg: DictConfig):
             break
         except torch.cuda.OutOfMemoryError:
             print(
-                f"OutOfMemoryError at batch_size {batch_size}, reducing to {batch_size//2}"
+                f"OutOfMemoryError at batch_size {batch_size}, reducing to {batch_size // 2}"
             )
             batch_size //= 2
             if batch_size < cfg.min_batch_size:

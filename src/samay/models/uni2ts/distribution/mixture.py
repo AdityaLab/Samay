@@ -20,7 +20,7 @@ import torch
 from jaxtyping import PyTree
 from torch.distributions import Categorical, Distribution, constraints
 
-from uni2ts.common.torch_util import unsqueeze_trailing_dims
+from samay.models.uni2ts.common.torch_util import unsqueeze_trailing_dims
 
 from ._base import DistributionOutput
 
