@@ -24,7 +24,7 @@ from einops import rearrange
 from gluonts.time_feature import norm_freq_str
 from jaxtyping import Num
 
-from uni2ts.common.typing import UnivarTimeSeries
+from samay.models.uni2ts.common.typing import UnivarTimeSeries
 
 from ._base import Transformation
 from ._mixin import MapFuncMixin

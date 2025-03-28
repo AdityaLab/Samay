@@ -7,7 +7,7 @@ import pandas as pd
 from gluonts.dataset import DatasetWriter
 from gluonts.dataset.common import CategoricalFeatureInfo, MetaData, TrainDatasets
 
-from uni2ts.common.env import env
+from samay.models.uni2ts.common.env import env
 
 
 def _load_etth(dataset_name: str, prediction_length: Optional[int] = None):

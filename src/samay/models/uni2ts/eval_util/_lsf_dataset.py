@@ -3,7 +3,7 @@ import os
 import numpy as np
 import pandas as pd
 
-from uni2ts.common.env import env
+from samay.models.uni2ts.common.env import env
 
 
 class LSFDataset:

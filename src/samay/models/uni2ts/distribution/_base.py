@@ -24,8 +24,8 @@ from torch import nn
 from torch.distributions import AffineTransform, Distribution, TransformedDistribution
 from torch.utils._pytree import tree_flatten, tree_map, tree_unflatten
 
-from uni2ts.common.core import abstract_class_property
-from uni2ts.module.ts_embed import MultiOutSizeLinear
+from samay.models.uni2ts.common.core import abstract_class_property
+from samay.models.uni2ts.module.ts_embed import MultiOutSizeLinear
 
 
 # TODO: Replace with tree_map when multiple trees supported
