@@ -112,7 +112,7 @@ if __name__ == "__main__":
 
     filesizes.sort(key=lambda x: x[2])
 
-    for fname, freq, fs in filesizes[9``:]:
+    for fname, freq, fs in filesizes:
         print(f"Evaluating {fname} ({freq})")
         # Adjust the context and prediction length based on the frequency
         # pred_len, context_len = calc_pred_and_context_len(freq)
