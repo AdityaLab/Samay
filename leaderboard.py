@@ -10,24 +10,30 @@ import time
 
 from src.samay.model import TimesfmModel, MomentModel, ChronosModel, ChronosBoltModel, TinyTimeMixerModel, MoiraiTSModel
 from src.samay.dataset import TimesfmDataset, MomentDataset, ChronosDataset, ChronosBoltDataset, TinyTimeMixerDataset, MoiraiDataset
-from src.samay.utils import load_args
+from src.samay.utils import load_args, get_gifteval_datasets
 from src.samay.metric import *
 
 
-ECON_NAMES = {
-    "m4_yearly": ["Y"],
-    "m4_quarterly": ["Q"],
-    "m4_monthly": ["M"],
-    "m4_weekly": ["W"],
-    "m4_daily": ["D"],
-    "m4_hourly": ["H"],
-}
+# ECON_NAMES = {
+#     "m4_yearly": ["Y"],
+#     "m4_quarterly": ["Q"],
+#     "m4_monthly": ["M"],
+#     "m4_weekly": ["W"],
+#     "m4_daily": ["D"],
+#     "m4_hourly": ["H"],
+# }
 
-SALES_NAMES = {
-    "car_parts_with_missing": ['M'],
-    "hierarchical_sales": ['D', 'W'],
-    "restaurant": ['D'],
-}
+# SALES_NAMES = {
+#     "car_parts_with_missing": ['M'],
+#     "hierarchical_sales": ['D', 'W'],
+#     "restaurant": ['D'],
+# }
+
+start = time.time()
+NAMES, filesizes = get_gifteval_datasets("data/gifteval")
+end = time.time()
+
+print(f"Time taken to load datasets: {end-start:.2f} seconds")
 
 MODEL_NAMES = ["timesfm", "moment", "chronos", "chronosbolt", "ttm", "moirai"]
 MODEL_CONTEXT_LEN = {
@@ -75,7 +81,7 @@ if __name__ == "__main__":
     csv_path = f"leaderboard/{model_name}.csv"
     if not os.path.exists(csv_path):
         print(f"Creating leaderboard csv file: {csv_path}")
-        df = pd.DataFrame(columns=["dataset", "size_in_MB", "eval_time_in_seconds", "mse", "mae", "mase", "mape", "rmse", "nrmse", "smape", "msis", "nd", "mwsq", "crps"])
+        df = pd.DataFrame(columns=["dataset", "size_in_MB", "eval_time", "mse", "mae", "mase", "mape", "rmse", "nrmse", "smape", "msis", "nd", "mwsq", "crps"])
         df.to_csv(csv_path, index=False)
 
     # Load model config
@@ -94,23 +100,6 @@ if __name__ == "__main__":
     elif model_name == "moirai":
         arg_path = "config/moirai.json"
         args = load_args(arg_path)
-
-    # Set the datasets to evaluate
-    NAMES = ECON_NAMES | SALES_NAMES
-
-    # Sort the datasets based on the dataset size
-    filesizes = []
-    for name, freqs in NAMES.items():
-        for freq in freqs:
-            if len(freqs) == 1:
-                path = f"data/gifteval/{name}/data.csv"
-            elif len(freqs) == 2:
-                path = f"data/gifteval/{name}/{freq}/data.csv"
-            
-            size = os.path.getsize(path) / 1e6
-            filesizes.append((name, freq, size))
-
-    filesizes.sort(key=lambda x: x[2])
 
     for fname, freq, fs in filesizes:
         print(f"Evaluating {fname} ({freq})")
@@ -182,15 +171,20 @@ if __name__ == "__main__":
         
         print("Evaluation done!")
 
+        eval_time = end - start
+        unit = "s"
+        if eval_time > 1000: # convert to minutes
+            eval_time = eval_time / 60
+            unit = "m"
+
+
         df = pd.read_csv(csv_path)
         if fname in df["dataset"].values:
             df.loc[df["dataset"] == fname, "size_in_MB"] = round(fs,2)
-            df.loc[df["dataset"] == fname, "eval_time_in_seconds"] = round(end-start,2)
+            df.loc[df["dataset"] == fname, "eval_time"] = str(round(eval_time,2)) + unit
             df.loc[df["dataset"] == fname, list(metrics.keys())] = list(metrics.values())
         else:
-            new_row = pd.DataFrame([{**{"dataset": fname, "size_in_MB":round(fs,2), "eval_time_in_seconds":round(end-start,2)}, **metrics}])
+            new_row = pd.DataFrame([{**{"dataset": fname, "size_in_MB":round(fs,2), "eval_time":str(round(eval_time,2)) + unit}, **metrics}])
             df = pd.concat([df, new_row], ignore_index=True)
 
-        df.to_csv(csv_path, index=False)
-
-            
+        df.to_csv(csv_path, index=False)            
