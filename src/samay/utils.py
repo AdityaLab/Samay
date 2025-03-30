@@ -1,5 +1,5 @@
 import subprocess
-
+import os
 import numpy as np
 import pandas as pd
 import json
@@ -8,6 +8,7 @@ from .models.moment.momentfm.utils.data import load_from_tsfile
 import yaml
 from datasets import load_from_disk 
 from matplotlib import pyplot as plt
+from collections import defaultdict
 
 def get_least_used_gpu():
     """Get the least used GPU device."""
@@ -205,6 +206,42 @@ def prep_finetune_config(file_path: str=None, config: dict=None):
               "tf32": config["tf32"],
               "mod_torch": {k:v for k,v in config["trainer"].items() if k != "_target_" and type(v) not in [dict, list]}}
 
+def get_gifteval_datasets(path:str):
+    # Get the list of hierarchical and direct datasets in the given path
+    data = [x for x in os.listdir(path) if x.startswith(".")==False]
+    hier, dire = [], []
+    for x in data:
+        if os.path.isdir(os.path.join(path, x)):
+            if os.path.exists(os.path.join(path, x, "data.csv")):
+                dire.append(x)
+            else:
+                hier.append((x, [p for p in os.listdir(os.path.join(path, x)) if os.path.isdir(os.path.join(path, x, p)) and p.startswith(".")==False]))
+    
+    # Get file sizes for each dataset
+    fil1 = []
+    for d in dire:
+        d_path = os.path.join(path, d, "data.csv")
+        size = os.path.getsize(d_path)
+        df = pd.read_csv(d_path)
+        freq = pd.infer_freq(df["timestamp"])
+        fil1.append((d, freq, size/1e6))
+    
+    fil2 = []
+    for data,freq in hier:
+        for f in freq:
+            d_path = os.path.join(path, data, f, "data.csv")
+            size = os.path.getsize(d_path)
+            fil2.append((data, f, size/1e6))
+    fil = fil1 + fil2
+    fil.sort(key=lambda x: x[2])
+    # Create a dictionary to hold the dataset names and their frequencies
+    dataset_dict = defaultdict(list)
+    for name, freq, size in fil:
+        dataset_dict[name].append(freq)
+    # Convert the defaultdict to a regular dict
+    dataset_dict = dict(dataset_dict)
+
+    return dataset_dict, fil
   
 if __name__ == "__main__":
     # ts_path = "/nethome/sli999/TSFMProject/src/tsfmproject/models/moment/data/ECG5000_TRAIN.ts"
