@@ -173,10 +173,6 @@ if __name__ == "__main__":
             args = load_args(arg_path)
 
         for fname, freq, fs in filesizes:
-            if fname != "solar":
-                continue
-            elif freq != "W":
-                continue
             print(f"Evaluating {fname} ({freq})")
             # Adjust the context and prediction length based on the frequency
 
