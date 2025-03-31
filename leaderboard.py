@@ -178,8 +178,6 @@ if __name__ == "__main__":
 
             # pred_len, context_len = calc_pred_and_context_len(freq)
             pred_len, context_len = 96, 512
-            if msh:
-                pred_len, context_len = MONASH_SETTINGS[dataset_name], 512
             if model_name == "timesfm":
                 args["config"]["horizon_len"] = pred_len
                 args["config"]["context_len"] = context_len
@@ -198,15 +196,6 @@ if __name__ == "__main__":
             else:
                 dataset_path = f"data/gifteval/{fname}/{freq}/data.csv"
             
-            # Initialize the model and dataset
-            if msh:
-                dataset_path = f"data/monash/{dataset_name}/test/data.csv"
-            else:
-                if len(freqs) == 1:
-                    dataset_path = f"data/gifteval/{dataset_name}/data.csv"
-                else:
-                    dataset_path = f"data/gifteval/{dataset_name}/{freq}/data.csv"
-            print(f"Creating leaderboard for dataset: {dataset_name}, context_len: {context_len}, horizon_len: {pred_len}")
             if model_name == "timesfm":
                 model = TimesfmModel(**args)
                 dataset = TimesfmDataset(datetime_col='timestamp', path=dataset_path, mode='test', context_len=args["config"]["context_len"], horizon_len=args["config"]["horizon_len"], boundaries=(-1, -1, -1), batchsize=64)
