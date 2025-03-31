@@ -17,7 +17,7 @@ import torch
 from jaxtyping import Bool, Float, Int
 from torch.nn import functional as F
 
-from uni2ts.common.torch_util import safe_div
+from samay.models.uni2ts.common.torch_util import safe_div
 
 from ._base import PackedPointLoss
 

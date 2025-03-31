@@ -24,21 +24,21 @@ from jaxtyping import Bool, Float, Int
 from torch import nn
 from torch.distributions import Distribution
 
-from uni2ts.loss.packed import (
+from samay.models.uni2ts.loss.packed import (
     PackedDistributionLoss,
     PackedLoss,
     PackedNLLLoss,
     PackedPointLoss,
 )
-from uni2ts.module.norm import RMSNorm
-from uni2ts.module.position import (
+from samay.models.uni2ts.module.norm import RMSNorm
+from samay.models.uni2ts.module.position import (
     BinaryAttentionBias,
     LearnedEmbedding,
     LearnedProjection,
 )
-from uni2ts.module.ts_embed import MultiInSizeLinear, MultiOutSizeLinear
-from uni2ts.optim import SchedulerType, get_scheduler
-from uni2ts.transform import (
+from samay.models.uni2ts.module.ts_embed import MultiInSizeLinear, MultiOutSizeLinear
+from samay.models.uni2ts.optim import SchedulerType, get_scheduler
+from samay.models.uni2ts.transform import (
     AddObservedMask,
     AddTimeIndex,
     AddVariateIndex,
@@ -99,12 +99,12 @@ class MoiraiPretrain(L.LightningModule):
         weight_decay: float = 1e-2,
         log_on_step: bool = False,
     ):
-        assert (module is not None) or (
-            module_kwargs is not None
-        ), "if module is not provided, module_kwargs is required"
-        assert (
-            num_warmup_steps <= num_training_steps
-        ), f"num_warmup_steps ({num_warmup_steps}) should be <= num_training_steps ({num_training_steps})."
+        assert (module is not None) or (module_kwargs is not None), (
+            "if module is not provided, module_kwargs is required"
+        )
+        assert num_warmup_steps <= num_training_steps, (
+            f"num_warmup_steps ({num_warmup_steps}) should be <= num_training_steps ({num_training_steps})."
+        )
         super().__init__()
         self.save_hyperparameters(ignore=["module"])
         self.module = MoiraiModule(**module_kwargs) if module is None else module
@@ -310,12 +310,12 @@ class MoiraiPretrain(L.LightningModule):
         param_dict = {pn: p for pn, p in self.named_parameters() if p.requires_grad}
         inter_params = decay & no_decay
         union_params = decay | no_decay
-        assert (
-            len(inter_params) == 0
-        ), f"parameters {str(inter_params)} made it into both decay/no_decay sets!"
-        assert (
-            len(param_dict.keys() - union_params) == 0
-        ), f"parameters {str(param_dict.keys() - union_params)} were not separated into either decay/no_decay set!"
+        assert len(inter_params) == 0, (
+            f"parameters {str(inter_params)} made it into both decay/no_decay sets!"
+        )
+        assert len(param_dict.keys() - union_params) == 0, (
+            f"parameters {str(param_dict.keys() - union_params)} were not separated into either decay/no_decay set!"
+        )
 
         optim_groups = [
             {

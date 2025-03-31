@@ -1,18 +1,20 @@
 import re
-import pandas as pd
-import torch
-from torch.utils.data import Dataset
-from uni2ts.distribution import MixtureOutput
-from typing import Callable, List, Dict, Any, Union, Type, Optional
-from pandas._libs.tslibs.period import Period
+from typing import Any, Callable, Dict, List, Optional, Type
 
 # For custom transforms
 import numpy as np
+import pandas as pd
+import torch
+from pandas._libs.tslibs.period import Period
+from torch.utils.data import Dataset
+
+from samay.models.uni2ts.distribution import MixtureOutput
+
 # for finetune class
-import lightning as L
+
 
 # ------------------- HELPER FUNCTIONS -------------------
-def filter_dict(d:dict, keys:List[str], ignore_missing:bool=False):
+def filter_dict(d: dict, keys: List[str], ignore_missing: bool = False):
     """Filters the dictionary d to only include the keys in the list keys.
 
     Args:
@@ -34,41 +36,59 @@ def filter_dict(d:dict, keys:List[str], ignore_missing:bool=False):
 
     return result
 
-def handle_distr_output(distr:dict):
+
+def handle_distr_output(distr: dict):
     """Converts the distr_output dictionary to a DistributionOutput object."""
     if "_target_" in distr:
-        return str(distr["_target_"].split(".")[-1]) + "(" + ",".join([]) +")"
+        return str(distr["_target_"].split(".")[-1]) + "(" + ",".join([]) + ")"
     return None
+
 
 def convert_module_kwargs(module_kwargs):
     """Convert module_kwargs to ingestible dictionary format by instantiating necessary objects and removing _target_ fields."""
-    
+
     # Extract necessary fields
     module_args = {k: v for k, v in module_kwargs.items() if k != "_target_"}
-    
+
     # Convert patch_sizes string to tuple if needed
-    if isinstance(module_args.get("patch_sizes"), str) and module_args["patch_sizes"].startswith("${as_tuple:"):
-        module_args["patch_sizes"] = tuple(map(int, re.findall(r"\d+",module_args["patch_sizes"])))# Extract numbers
-    
+    if isinstance(module_args.get("patch_sizes"), str) and module_args[
+        "patch_sizes"
+    ].startswith("${as_tuple:"):
+        module_args["patch_sizes"] = tuple(
+            map(int, re.findall(r"\d+", module_args["patch_sizes"]))
+        )  # Extract numbers
+
     # Handle distr_output instantiation
     if "distr_output" in module_args and isinstance(module_args["distr_output"], dict):
         distr_config = module_args["distr_output"]
-        
-        if "_target_" in distr_config and distr_config["_target_"] == "uni2ts.distribution.MixtureOutput":
+
+        if (
+            "_target_" in distr_config
+            and distr_config["_target_"] == "uni2ts.distribution.MixtureOutput"
+        ):
             # Instantiate component distributions
             components = []
             for comp in distr_config.get("components", []):
                 if "_target_" in comp:
-                    comp_class = globals().get(comp["_target_"].split(".")[-1])  # Get class by name
+                    comp_class = globals().get(
+                        comp["_target_"].split(".")[-1]
+                    )  # Get class by name
                     if comp_class:
                         components.append(comp_class())  # Instantiate class
-            
+
             # Instantiate MixtureOutput with components
             module_args["distr_output"] = MixtureOutput(components=components)
-    
+
     return module_args
 
-def custom_train_instance_split(ts:np.ndarray,allow_empty_interval:bool=False, axis: int=-1, min_past: int=0, min_future: int=0):
+
+def custom_train_instance_split(
+    ts: np.ndarray,
+    allow_empty_interval: bool = False,
+    axis: int = -1,
+    min_past: int = 0,
+    min_future: int = 0,
+):
     """Get the interval to consider for a given mode based on the prediction length (>= min_future) and the start of past values.
     Always selects the last time point for splitting i.e. the forecast point for the time series.
     (Based on PredictionSampler() from Gluonts)
@@ -85,25 +105,25 @@ def custom_train_instance_split(ts:np.ndarray,allow_empty_interval:bool=False, a
     """
     s, f = min_past, ts.shape[axis] - min_future
     assert allow_empty_interval or s <= f
-    return np.array([f]) if s <= f else np.array([], dtype=int) 
+    return np.array([f]) if s <= f else np.array([], dtype=int)
 
 
 # ------------------- CUSTOM TORCH DATASET -------------------
 class MoiraiTorch(Dataset):
-    def __init__(self,data:list[dict]):
+    def __init__(self, data: list[dict]):
         """Wraps the data in a torch Dataset object.
 
         Args:
             data (list[dict]): The input data you want to wrap in a torch Dataset object.
         """
-        super().__init__() # Call parent class constructor
+        super().__init__()  # Call parent class constructor
         self.data = data
 
         # Test data usually is split into label and input parts which come as a tuple
         if isinstance(self.data, list) and isinstance(self.data[0], tuple):
             self.input = [d[0] for d in self.data]
             self.label = [d[1] for d in self.data]
-    
+
     def __len__(self):
         """Returns the length of the data.
 
@@ -126,53 +146,68 @@ class MoiraiTorch(Dataset):
         """
         if isinstance(self.data, list):
             row = self.data[idx]
-            
+
             # In case of test data the sample is a tuple of (input, label)
             if isinstance(row, tuple):
                 mod_row = []
                 for i in range(len(row)):
                     mod_row.append({})
-                    for k,v in row[i].items():
-                        if k == "start" or k=="forecast_start":
+                    for k, v in row[i].items():
+                        if k == "start" or k == "forecast_start":
                             v1 = v
                             if isinstance(v1, pd.Timestamp):
-                                v1 = v1.timestamp() # converts to float (Unix timestamp)
+                                v1 = (
+                                    v1.timestamp()
+                                )  # converts to float (Unix timestamp)
                             elif isinstance(v1, Period):
                                 v1 = v1.to_timestamp().timestamp()
-                            mod_row[i][k] = v if isinstance(v, torch.Tensor) else torch.tensor(v1, dtype=torch.float32)
+                            mod_row[i][k] = (
+                                v
+                                if isinstance(v, torch.Tensor)
+                                else torch.tensor(v1, dtype=torch.float32)
+                            )
                         else:
                             mod_row[i][k] = v
                 return tuple(mod_row)
-            
+
             # Train or val data
             else:
                 mod_row = {}
-                for k,v in row.items():
-                    if k == "start" or k=="forecast_start":
+                for k, v in row.items():
+                    if k == "start" or k == "forecast_start":
                         v1 = v
                         if isinstance(v1, pd.Timestamp):
-                            v1 = v1.timestamp() # converts to float (Unix timestamp)
+                            v1 = v1.timestamp()  # converts to float (Unix timestamp)
                         elif isinstance(v1, Period):
                             v1 = v1.to_timestamp().timestamp()
-                        mod_row[k] = v if isinstance(v, torch.Tensor) else torch.tensor(v1, dtype=torch.float32)
+                        mod_row[k] = (
+                            v
+                            if isinstance(v, torch.Tensor)
+                            else torch.tensor(v1, dtype=torch.float32)
+                        )
                     else:
                         mod_row[k] = v
                 return mod_row
-        
+
         # In case of dictionary data
         elif isinstance(self.data, dict):
             row, mod_row = {k: v[idx] for k, v in self.data.items()}, {}
-            for k,v in row.items():
-                if k == "start" or k=="forecast_start":
+            for k, v in row.items():
+                if k == "start" or k == "forecast_start":
                     v1 = v
                     if isinstance(v1, pd.Timestamp):
-                        v1 = v1.timestamp() # converts to float (Unix timestamp)
+                        v1 = v1.timestamp()  # converts to float (Unix timestamp)
                     elif isinstance(v1, Period):
                         v1 = v1.to_timestamp().timestamp()
-                    mod_row[k] = v if isinstance(v, torch.Tensor) else torch.tensor(v1, dtype=torch.float32)
+                    mod_row[k] = (
+                        v
+                        if isinstance(v, torch.Tensor)
+                        else torch.tensor(v1, dtype=torch.float32)
+                    )
                 else:
                     mod_row[k] = v
             return mod_row
+
 
 # ------------------- CUSTOM TRANSFORMS -------------------
 class CausalMeanNaNFix:
@@ -194,7 +229,9 @@ class CausalMeanNaNFix:
     def __call__(self, values: np.ndarray) -> np.ndarray:
         """Apply causal mean imputation."""
         if len(values) == 1 or np.isnan(values).all():
-            return np.full_like(values, self.imputation_value)  # Replace all NaNs with default value
+            return np.full_like(
+                values, self.imputation_value
+            )  # Replace all NaNs with default value
 
         mask = np.isnan(values)  # Identify missing values
 
@@ -202,7 +239,9 @@ class CausalMeanNaNFix:
         values = self.forward_fill(values)
 
         # Step 2: Compute cumulative mean for non-NaN values
-        cumsum = np.cumsum(np.concatenate(([0.0], values[:-1])))  # Shifted cumulative sum
+        cumsum = np.cumsum(
+            np.concatenate(([0.0], values[:-1]))
+        )  # Shifted cumulative sum
         indices = np.arange(1, len(values) + 1)  # Indices for division
         causal_mean = cumsum / indices  # Compute causal mean
 
@@ -221,6 +260,7 @@ class CausalMeanNaNFix:
 
         return values
 
+
 class AsNumpy:
     """
     Converts the value of a field into a NumPy array.
@@ -234,7 +274,9 @@ class AsNumpy:
         NumPy dtype to use.
     """
 
-    def __init__(self, field: str, expected_ndim: int, dtype: Type = np.float32) -> None:
+    def __init__(
+        self, field: str, expected_ndim: int, dtype: Type = np.float32
+    ) -> None:
         self.field = field
         self.expected_ndim = expected_ndim
         self.dtype = dtype
@@ -266,6 +308,7 @@ class AsNumpy:
 
         data[self.field] = value
         return data
+
 
 class ArrExpandDims:
     """
@@ -301,6 +344,7 @@ class ArrExpandDims:
         if self.axis is not None:
             data[self.field] = np.expand_dims(data[self.field], axis=self.axis)
         return data
+
 
 class AddObservedValues:
     """
@@ -340,8 +384,12 @@ class AddObservedValues:
         # Apply imputation if a method is provided (whether function or callable class)
         if self.imputation_method is not None and nan_entries.any():
             # If the imputation method is a class, instantiate it
-            if isinstance(self.imputation_method, type) and issubclass(self.imputation_method, object):
-                imputation_instance = self.imputation_method()  # Instantiate if it's a class
+            if isinstance(self.imputation_method, type) and issubclass(
+                self.imputation_method, object
+            ):
+                imputation_instance = (
+                    self.imputation_method()
+                )  # Instantiate if it's a class
                 value = imputation_instance(value.copy())  # Call the instance
             else:
                 # If it's a function, call it directly

@@ -1,8 +1,11 @@
 import math
 import warnings
+from typing import Optional
 
 import torch
 import torch.nn as nn
+
+from samay.models.lptm.segment.scoring import ScoringModuleBase
 
 from .masktrain import Masking
 
@@ -179,6 +182,7 @@ class PatchEmbedding(nn.Module):
         add_positional_embedding: bool = False,
         value_embedding_bias: bool = False,
         orth_gain: float = 1.41,
+        scoring_module: Optional[ScoringModuleBase] = None,
     ):
         super(PatchEmbedding, self).__init__()
         self.patch_len = patch_len
@@ -186,6 +190,9 @@ class PatchEmbedding(nn.Module):
         self.stride = stride
         self.d_model = d_model
         self.add_positional_embedding = add_positional_embedding
+        # Check if scoring module is provided and if not, raise an error
+        assert scoring_module is not None, "Scoring module is not provided"
+        self.scoring_module = scoring_module
 
         self.value_embedding = nn.Linear(patch_len, d_model, bias=value_embedding_bias)
         self.mask_embedding = nn.Parameter(torch.zeros(d_model))
@@ -203,11 +210,15 @@ class PatchEmbedding(nn.Module):
         # Residual dropout
         self.dropout = nn.Dropout(patch_dropout)
 
-    def forward(self, x: torch.Tensor, mask: torch.Tensor = None) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, mask: torch.Tensor = None, **kwargs
+    ) -> torch.Tensor:
         mask = Masking.convert_seq_to_patch_view(
-            mask, patch_len=self.patch_len
+            mask, mask, patch_len=self.patch_len
         ).unsqueeze(-1)
         # mask : [batch_size x n_patches x 1]
+
+        scores = self.scoring_module.forward(x.view(x.shape[0], x.shape[1], -1), mask)
         n_channels = x.shape[1]
         mask = (
             mask.repeat_interleave(self.d_model, dim=-1)
@@ -221,7 +232,7 @@ class PatchEmbedding(nn.Module):
         if self.add_positional_embedding:
             x = x + self.position_embedding(x)
 
-        return self.dropout(x)
+        return self.dropout(x), scores
 
 
 class Patching(nn.Module):

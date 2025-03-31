@@ -5,7 +5,7 @@ import gluonts
 from gluonts.dataset.common import _FileDataset
 from gluonts.dataset.split import TestData, split
 
-from uni2ts.data.builder.lotsa_v1.gluonts import get_dataset
+from samay.models.uni2ts.data.builder.lotsa_v1.gluonts import get_dataset
 
 from ._hf_dataset import HFDataset
 from ._lsf_dataset import LSFDataset

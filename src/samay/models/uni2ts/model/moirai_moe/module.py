@@ -26,6 +26,11 @@ from torch.utils._pytree import tree_map
 
 from samay.models.uni2ts.common.torch_util import packed_causal_attention_mask
 from samay.models.uni2ts.distribution import DistributionOutput
+from samay.models.uni2ts.distribution.log_normal import LogNormalOutput
+from samay.models.uni2ts.distribution.mixture import MixtureOutput
+from samay.models.uni2ts.distribution.negative_binomial import NegativeBinomialOutput
+from samay.models.uni2ts.distribution.normal import NormalFixedScaleOutput
+from samay.models.uni2ts.distribution.student_t import StudentTOutput
 from samay.models.uni2ts.module.norm import RMSNorm
 from samay.models.uni2ts.module.packed_scaler import PackedNOPScaler, PackedStdScaler
 from samay.models.uni2ts.module.position import (
@@ -35,11 +40,6 @@ from samay.models.uni2ts.module.position import (
 )
 from samay.models.uni2ts.module.transformer import TransformerEncoder
 from samay.models.uni2ts.module.ts_embed import FeatLinear, MultiInSizeLinear
-from uni2ts.distribution.mixture import MixtureOutput
-from uni2ts.distribution.normal import NormalFixedScaleOutput
-from uni2ts.distribution.student_t import StudentTOutput
-from uni2ts.distribution.log_normal import LogNormalOutput
-from uni2ts.distribution.negative_binomial import NegativeBinomialOutput
 
 
 def encode_distr_output(
@@ -145,7 +145,9 @@ class MoiraiMoEModule(
         normal_fixed_scale = NormalFixedScaleOutput()
         negative_binomial = NegativeBinomialOutput()
         log_normal = LogNormalOutput()
-        self.distr_output = MixtureOutput(components=[student_t, normal_fixed_scale, negative_binomial, log_normal])
+        self.distr_output = MixtureOutput(
+            components=[student_t, normal_fixed_scale, negative_binomial, log_normal]
+        )
         # args_dim component of self.param_proj has the dimension of parameters
         # of each component of the mixture distribution
         self.param_proj = self.distr_output.get_param_proj(d_model, patch_sizes)
@@ -190,11 +192,17 @@ class MoiraiMoEModule(
         )
         scaled_target = (target - loc) / scale
 
-        in_reprs = self.in_proj(scaled_target, patch_size) # Project from observations to representations
-        in_reprs = F.silu(in_reprs) # Apply activation function
-        in_reprs = self.feat_proj(in_reprs, patch_size) # Project from representations to features
-        res_reprs = self.res_proj(scaled_target, patch_size) # Project from observations to representations
-        reprs = in_reprs + res_reprs # Add features to representations
+        in_reprs = self.in_proj(
+            scaled_target, patch_size
+        )  # Project from observations to representations
+        in_reprs = F.silu(in_reprs)  # Apply activation function
+        in_reprs = self.feat_proj(
+            in_reprs, patch_size
+        )  # Project from representations to features
+        res_reprs = self.res_proj(
+            scaled_target, patch_size
+        )  # Project from observations to representations
+        reprs = in_reprs + res_reprs  # Add features to representations
 
         reprs = self.encoder(
             reprs,
