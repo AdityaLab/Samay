@@ -35,7 +35,7 @@ end = time.time()
 
 print(f"Time taken to load datasets: {end-start:.2f} seconds")
 
-MODEL_NAMES = ["timesfm", "moment", "chronos", "chronosbolt", "ttm", "moirai"]
+MODEL_NAMES = ["moirai", "chronos", "chronosbolt", "timesfm", "moment", "ttm"]
 MODEL_CONTEXT_LEN = {
     "timesfm": 32,
     "moment": 512,
@@ -75,7 +75,7 @@ def calc_pred_and_context_len(freq):
     
 
 if __name__ == "__main__":
-    model_name = MODEL_NAMES[-1]
+    model_name = MODEL_NAMES[1]
 
     # create csv file for leaderboard if not already created
     csv_path = f"leaderboard/{model_name}.csv"
@@ -128,7 +128,11 @@ if __name__ == "__main__":
         if model_name == "timesfm":
             model = TimesfmModel(**args)
             dataset = TimesfmDataset(datetime_col='timestamp', path=dataset_path, mode='test', context_len=args["config"]["context_len"], horizon_len=args["config"]["horizon_len"], boundaries=(-1, -1, -1), batchsize=64)
+            start = time.time()
             metrics = model.evaluate(dataset)
+            end = time.time()
+            print(f"Size of dataset: {fs:.2f} MB")
+            print(f"Time taken for evaluation of {fname}: {end-start:.2f} seconds")
 
         elif model_name == "moment":
             model = MomentModel(**args)
@@ -136,7 +140,11 @@ if __name__ == "__main__":
             train_dataset = MomentDataset(datetime_col='timestamp', path=dataset_path, mode='train', horizon_len=args["config"]["forecast_horizon"], normalize=False)
             dataset = MomentDataset(datetime_col='timestamp', path=dataset_path, mode='test', horizon_len=args["config"]["forecast_horizon"], normalize=False)
             finetuned_model = model.finetune(train_dataset, task_name="forecasting")
+            start = time.time()
             metrics = model.evaluate(dataset, task_name="forecasting")
+            end = time.time()
+            print(f"Size of dataset: {fs:.2f} MB")
+            print(f"Time taken for evaluation of {fname}: {end-start:.2f} seconds")
             print(metrics)
 
         elif model_name == "chronos":
@@ -145,18 +153,30 @@ if __name__ == "__main__":
             dataset_config["context_length"] = context_len
             dataset_config["prediction_length"] = pred_len
             dataset = ChronosDataset(datetime_col='timestamp', path=dataset_path, mode='test', config=dataset_config, batch_size=4)
+            start = time.time()
             metrics = model.evaluate(dataset, horizon_len=dataset_config["prediction_length"], quantile_levels=[0.1, 0.5, 0.9])
+            end = time.time()
+            print(f"Size of dataset: {fs:.2f} MB")
+            print(f"Time taken for evaluation of {fname}: {end-start:.2f} seconds")
 
         elif model_name == "chronosbolt":
             repo = "amazon/chronos-bolt-small"
             model = ChronosBoltModel(repo=repo)
             dataset = ChronosBoltDataset(datetime_col='timestamp', path=dataset_path, mode='test', batch_size=8, context_len=context_len, horizon_len=pred_len)
+            start = time.time()
             metrics = model.evaluate(dataset, horizon_len=pred_len, quantile_levels=[0.1, 0.5, 0.9])
+            end = time.time()
+            print(f"Size of dataset: {fs:.2f} MB")
+            print(f"Time taken for evaluation of {fname}: {end-start:.2f} seconds")
 
         elif model_name == "ttm":
             model = TinyTimeMixerModel(**args)
             dataset = TinyTimeMixerDataset(datetime_col='timestamp', path=dataset_path, mode='test', context_len=context_len, horizon_len=pred_len)
+            start = time.time()
             metrics = model.evaluate(dataset)
+            end = time.time()
+            print(f"Size of dataset: {fs:.2f} MB")
+            print(f"Time taken for evaluation of {fname}: {end-start:.2f} seconds")
         
         elif model_name == "moirai":
             model = MoiraiTSModel(**args)
