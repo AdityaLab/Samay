@@ -170,6 +170,7 @@ class TimesfmDataset(BaseDataset):
             self.boundaries = [0, 0, len(self.data) - 1]
         else:
             self.boundaries = boundaries
+        self.horizon_len = min(self.horizon_len, int(0.3*len(self.data)+1))
         self.ts_cols = [col for col in self.data.columns if col != self.datetime_col]
         tfdtl = TimeSeriesdata(
             data_path=self.data_path,
@@ -300,6 +301,12 @@ class ChronosDataset(BaseDataset):
             self.boundaries[1] = int(len(self.df) * 0.7)
         if self.boundaries[2] == 0:
             self.boundaries[2] = int(len(self.df) - 1)
+
+        if self.boundaries == [-1, -1, -1]:
+            # use all data for training
+            self.boundaries = [0, 0, len(self.df) - 1]
+
+        self.horizon_len = min(self.horizon_len, int(0.3*len(self.df)+1))
 
         self.n_channels = self.df.shape[1] - 1
         self.num_chunks = (self.n_channels + self.max_col_num - 1) // self.max_col_num
@@ -445,6 +452,12 @@ class ChronosBoltDataset(BaseDataset):
         if self.boundaries[2] == 0:
             self.boundaries[2] = int(len(self.df) - 1)
 
+        if self.boundaries == [-1, -1, -1]:
+            # use all data for training
+            self.boundaries = [0, 0, len(self.df) - 1]
+
+        self.horizon_len = min(self.horizon_len, int(0.3*len(self.df)+1))
+
         self.n_channels = self.df.shape[1] - 1
         self.num_chunks = (self.n_channels + self.max_col_num - 1) // self.max_col_num
         
@@ -565,6 +578,12 @@ class MomentDataset(BaseDataset):
             self.boundaries[1] = int(len(self.df) * 0.7)
         if self.boundaries[2] == 0:
             self.boundaries[2] = int(len(self.df) - 1)
+
+        if self.boundaries == [-1, -1, -1]:
+            # use all data for training
+            self.boundaries = [0, 0, len(self.df) - 1]
+
+        self.forecast_horizon = min(self.forecast_horizon, int(0.3*len(self.df)+1))
 
         if self.task_name == 'detection':
             self.n_channels = 1
@@ -747,6 +766,12 @@ class TinyTimeMixerDataset(BaseDataset):
             self.boundaries[1] = int(len(self.df) * 0.7)
         if self.boundaries[2] == 0:
             self.boundaries[2] = int(len(self.df) - 1)
+
+        if self.boundaries == [-1, -1, -1]:
+            # use all data for training
+            self.boundaries = [0, 0, len(self.df) - 1]
+            
+        self.horizon_len = min(self.horizon_len, int(0.3*len(self.df)+1))
 
         self.n_channels = self.df.shape[1] - 1
         self.num_chunks = (self.n_channels + self.max_col_num - 1) // self.max_col_num

@@ -4,14 +4,14 @@ import numpy as np
 import pandas as pd
 import time
 
-# src_path = os.path.abspath(os.path.join("src"))
-# if src_path not in sys.path:
-#     sys.path.insert(0, src_path)
+src_path = os.path.abspath(os.path.join("src"))
+if src_path not in sys.path:
+    sys.path.insert(0, src_path)
 
-from src.samay.model import TimesfmModel, MomentModel, ChronosModel, ChronosBoltModel, TinyTimeMixerModel, MoiraiTSModel
-from src.samay.dataset import TimesfmDataset, MomentDataset, ChronosDataset, ChronosBoltDataset, TinyTimeMixerDataset, MoiraiDataset
-from src.samay.utils import load_args, get_gifteval_datasets
-from src.samay.metric import *
+from samay.model import TimesfmModel, MomentModel, ChronosModel, ChronosBoltModel, TinyTimeMixerModel, MoiraiTSModel
+from samay.dataset import TimesfmDataset, MomentDataset, ChronosDataset, ChronosBoltDataset, TinyTimeMixerDataset, MoiraiDataset
+from samay.utils import load_args, get_gifteval_datasets
+from samay.metric import *
 
 
 # ECON_NAMES = {
@@ -146,7 +146,7 @@ def calc_pred_and_context_len(freq):
 
 if __name__ == "__main__":
     
-    for model_name in MODEL_NAMES[4:]:
+    for model_name in MODEL_NAMES[3:]:
         print(f"Evaluating model: {model_name}")
         # create csv file for leaderboard if not already created
         csv_path = f"leaderboard/{model_name}.csv"
@@ -173,6 +173,10 @@ if __name__ == "__main__":
             args = load_args(arg_path)
 
         for fname, freq, fs in filesizes:
+            if fname != "solar":
+                continue
+            elif freq != "W":
+                continue
             print(f"Evaluating {fname} ({freq})")
             # Adjust the context and prediction length based on the frequency
 
@@ -201,6 +205,7 @@ if __name__ == "__main__":
                 dataset = TimesfmDataset(datetime_col='timestamp', path=dataset_path, mode='test', context_len=args["config"]["context_len"], horizon_len=args["config"]["horizon_len"], boundaries=(-1, -1, -1), batchsize=64)
                 start = time.time()
                 metrics = model.evaluate(dataset)
+                print("Metrics: ", metrics)
                 end = time.time()
                 print(f"Size of dataset: {fs:.2f} MB")
                 print(f"Time taken for evaluation of {fname}: {end-start:.2f} seconds")
