@@ -138,8 +138,6 @@ avg_loss, trues, preds, histories = tfm.evaluate(val_dataset)
 
 ### MOIRAI
 
-Install the package: `pip install git+https://github.com/AdityaLab/Samay.git`.
-
 #### Loading  Model
 
 ```python
@@ -161,16 +159,11 @@ moirai_model = MoiraiTSModel(repo=repo, config=config)
 #### Loading Dataset
 
 ```python
-data_config = {"name" : "ett",
-                "path" : "../src/samay/models/moment/data/ETTh1.csv",
-                "date_col" : "date",
-                "freq": "h"
-            }
 
-train_dataset = MoiraiDataset(name=data_config['name'], mode="train", path=data_config['path'], datetime_col=data_config['date_col'], freq=data_config['freq'],
+train_dataset = MoiraiDataset(name="ett", mode="train", path="data/ETTh1.csv", datetime_col="date", freq="h",
                             context_len=config['context_len'], horizon_len=config['horizon_len'])
 
-test_dataset = MoiraiDataset(name=data_config['name'], mode="test", path=data_config['path'], datetime_col=data_config['date_col'], freq=data_config['freq'],
+test_dataset = MoiraiDataset(name="ett", mode="test", path="data/ETTh1.csv", datetime_col="date", freq="h",
                             context_len=config['context_len'], horizon_len=config['horizon_len'])
 ```
 

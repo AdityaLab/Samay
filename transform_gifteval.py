@@ -42,6 +42,9 @@ class MultivariateToUnivariate(Transformation):
 if __name__ == "__main__":
     gift_eval_path = Path("data/gifteval")
     dataset_names = []
+
+    # For each dataset in the gift_eval directory
+    # we see which ones are hierachical
     for dataset_dir in gift_eval_path.iterdir():
         if dataset_dir.name.startswith("."):
             continue
@@ -53,6 +56,8 @@ if __name__ == "__main__":
             else:
                 dataset_names.append(dataset_dir.name)
 
+    # Convert every dataset file to a csv file and store in same directory
+    # under the name data.csvclear
     for dataset_name in dataset_names:
         storage_path = gift_eval_path / dataset_name
         print(f"Processing {storage_path}")

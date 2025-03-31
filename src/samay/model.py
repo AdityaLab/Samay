@@ -1,4 +1,5 @@
 import math
+import json
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -1389,9 +1390,11 @@ class MoiraiTSModel(Basemodel):
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        if model_type == "moirai":  # standard moirai
-            if self.repo is None:
-                self.repo = f"Salesforce/moirai-1.1-R-{model_size}"
+        if model_type == "moirai": # standard moirai
+            if repo is None:
+                repo = f"Salesforce/moirai-1.1-R-{model_size}"
+            self.repo = repo
+
             self.model = MoiraiForecast(
                 module=MoiraiModule.from_pretrained(self.repo),
                 prediction_length=self.horizon_len,
@@ -1402,9 +1405,12 @@ class MoiraiTSModel(Basemodel):
                 feat_dynamic_real_dim=self.feat_dynamic_real_dim,
                 past_feat_dynamic_real_dim=self.past_feat_dynamic_real_dim,
             )
-        elif model_type == "moirai-moe":  # moirai with Mixture of Experts
-            if self.repo is None:
-                self.repo = f"Salesforce/moirai-moe-1.0-R-{model_size}"
+
+        elif model_type == "moirai-moe": # moirai with Mixture of Experts
+            if repo is None:
+                repo = f"Salesforce/moirai-moe-1.0-R-{model_size}"
+            self.repo = repo
+
             self.model = MoiraiMoEForecast(
                 module=MoiraiMoEModule.from_pretrained(self.repo),
                 prediction_length=self.horizon_len,
@@ -1416,6 +1422,7 @@ class MoiraiTSModel(Basemodel):
                 past_feat_dynamic_real_dim=self.past_feat_dynamic_real_dim,
             )
         self.model.to(self.device)
+
         print(
             f"In MoiraiTSModel init: type: {type(self.model)}, patch_sizes: {self.model.module.patch_sizes}"
         )
@@ -1494,6 +1501,7 @@ class MoiraiTSModel(Basemodel):
             output_transforms (transforms.Compose, optional): A set of transforms to be applied on the model output. Defaults to None.
             num_sample_flage (bool, optional): If True, the model will use number of samples to sample from the distribution for forecasting. Defaults to False.
             zero_shot (bool, optional): If True, the standard model will be used, else the finetuned model will be used. Defaults to True.
+            leaderboard (bool, optional): If True, only the metrics will be returned. Defaults to False.
 
         Raises:
             ValueError: Any metric other than "MSE" or "MASE is not supported.
@@ -1682,33 +1690,24 @@ class MoiraiTSModel(Basemodel):
         input_it = iter(dataset.dataset.input)
         label_it = iter(dataset.dataset.label)
         forecast_it = iter(forecast)
+        # Quantile levels obtained from cli/conf/eval/default.yaml of MOIRAI repository
+        quantile_levels = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 
         trues = {}
         preds = {}
         histories = {}
+        quantile_preds = {}
         eval_windows = []
 
         with torch.no_grad():  # No need to compute gradients
             # Iterate over each window
             for input, label, forecast in zip(input_it, label_it, forecast_it):
-                true_values = (
-                    label["target"].squeeze()
-                    if isinstance(label["target"], np.ndarray)
-                    else np.array(label["target"])
-                )
-                past_values = (
-                    input["target"].squeeze()
-                    if isinstance(input["target"], np.ndarray)
-                    else np.array(input["target"])
-                )
-                if isinstance(forecast, SampleForecast):
-                    pred_values = np.median(
-                        forecast.samples, axis=0
-                    )  # if using SampleForecast() class
-                elif isinstance(forecast, np.ndarray):
-                    pred_values = np.median(forecast, axis=0)
+                true_values = label["target"].squeeze() if isinstance(label["target"], np.ndarray) else np.array(label["target"])
+                past_values = input["target"].squeeze() if isinstance(input["target"], np.ndarray) else np.array(input["target"])
+                quantiles = np.percentile(forecast[:,:min(self.horizon_len, true_values.shape[0])], [q*100 for q in quantile_levels], axis=0)
+                pred_values = np.median(forecast, axis=0)[:min(self.horizon_len, true_values.shape[0])] # Median of the forecasted values
+
                 length = len(past_values)
-                # print(f"Checking: true: {true_values[:3]}, pred: {pred_values[:3]}")
 
                 eval = []
                 for metric in metrics:
@@ -1734,9 +1733,11 @@ class MoiraiTSModel(Basemodel):
                     histories[length] = []
                     trues[length] = []
                     preds[length] = []
+                    quantile_preds[length] = []
                 histories[length].append(past_values)
                 trues[length].append(true_values)
                 preds[length].append(pred_values)
+                quantile_preds[length].append(quantiles)
 
         eval_windows = np.mean(np.array(eval_windows), axis=0)
         eval_results = {}
@@ -1747,8 +1748,29 @@ class MoiraiTSModel(Basemodel):
         histories = [np.array(histories[key]) for key in histories.keys()]
         trues = [np.array(trues[key]) for key in trues.keys()]
         preds = [np.array(preds[key]) for key in preds.keys()]
+        quantile_preds = [np.array(quantile_preds[key]) for key in quantile_preds.keys()]
+        quantile_preds = [np.transpose(q, (1, 0, 2)) for q in quantile_preds]
 
-        return eval_results, trues, preds, histories
+        mse = np.mean(np.array([MSE(t, p) for t, p in zip(trues, preds)]), axis=0)
+        mae = np.mean(np.array([MAE(t, p) for t, p in zip(trues, preds)]), axis=0)
+        mase = np.mean(np.array([MASE(t, p) for t, p in zip(trues, preds)]), axis=0)
+        mape = np.mean(np.array([MAPE(t, p) for t, p in zip(trues, preds)]), axis=0)
+        rmse = np.mean(np.array([RMSE(t, p) for t, p in zip(trues, preds)]), axis=0)
+        nrmse = np.mean(np.array([NRMSE(t, p) for t, p in zip(trues, preds)]), axis=0)
+        smape = np.mean(np.array([SMAPE(t, p) for t, p in zip(trues, preds)]), axis=0)
+        msis = np.mean(np.array([MSIS(t, p) for t, p in zip(trues, preds)]), axis=0)
+        nd = np.mean(np.array([ND(t, p) for t,p in zip(trues, preds)]), axis=0)
+
+        mwsq = np.mean(np.array([MWSQ(t, p, q) for t,p,q in zip(trues, preds,quantile_preds)]), axis=0)
+        crps = np.mean(np.array([CRPS(t, p, q) for t,p,q in zip(trues, preds,quantile_preds)]), axis=0)
+
+        leaderboard_metrics = {"mse": mse, "mae": mae, "mase": mase, "mape": mape, "rmse": rmse,
+                       "nrmse": nrmse, "smape": smape, "msis": msis, "nd": nd, "mwsq": mwsq, "crps": crps}
+
+        if leaderboard:
+            return leaderboard_metrics
+        else:
+            return leaderboard_metrics, trues, preds, histories
 
     def finetune(self, dataset, **kwargs):
         """Finetune the model on the given dataset.
