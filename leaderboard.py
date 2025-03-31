@@ -4,14 +4,14 @@ import numpy as np
 import pandas as pd
 import time
 
-# src_path = os.path.abspath(os.path.join("src"))
-# if src_path not in sys.path:
-#     sys.path.insert(0, src_path)
+src_path = os.path.abspath(os.path.join("src"))
+if src_path not in sys.path:
+    sys.path.insert(0, src_path)
 
-from src.samay.model import TimesfmModel, MomentModel, ChronosModel, ChronosBoltModel, TinyTimeMixerModel, MoiraiTSModel
-from src.samay.dataset import TimesfmDataset, MomentDataset, ChronosDataset, ChronosBoltDataset, TinyTimeMixerDataset, MoiraiDataset
-from src.samay.utils import load_args, get_gifteval_datasets
-from src.samay.metric import *
+from samay.model import TimesfmModel, MomentModel, ChronosModel, ChronosBoltModel, TinyTimeMixerModel, MoiraiTSModel
+from samay.dataset import TimesfmDataset, MomentDataset, ChronosDataset, ChronosBoltDataset, TinyTimeMixerDataset, MoiraiDataset
+from samay.utils import load_args, get_gifteval_datasets
+from samay.metric import *
 
 
 # ECON_NAMES = {
@@ -146,7 +146,7 @@ def calc_pred_and_context_len(freq):
 
 if __name__ == "__main__":
     
-    for model_name in MODEL_NAMES[4:]:
+    for model_name in MODEL_NAMES[3:]:
         print(f"Evaluating model: {model_name}")
         # create csv file for leaderboard if not already created
         csv_path = f"leaderboard/{model_name}.csv"
@@ -173,6 +173,10 @@ if __name__ == "__main__":
             args = load_args(arg_path)
 
         for fname, freq, fs in filesizes:
+            if fname != "solar":
+                continue
+            elif freq != "W":
+                continue
             print(f"Evaluating {fname} ({freq})")
             # Adjust the context and prediction length based on the frequency
 
@@ -201,6 +205,7 @@ if __name__ == "__main__":
                 dataset = TimesfmDataset(datetime_col='timestamp', path=dataset_path, mode='test', context_len=args["config"]["context_len"], horizon_len=args["config"]["horizon_len"], boundaries=(-1, -1, -1), batchsize=64)
                 start = time.time()
                 metrics = model.evaluate(dataset)
+                print("Metrics: ", metrics)
                 end = time.time()
                 print(f"Size of dataset: {fs:.2f} MB")
                 print(f"Time taken for evaluation of {fname}: {end-start:.2f} seconds")
@@ -209,7 +214,7 @@ if __name__ == "__main__":
                 model = MomentModel(**args)
                 args["config"]["task_name"] = "forecasting"
                 train_dataset = MomentDataset(datetime_col='timestamp', path=dataset_path, mode='train', horizon_len=args["config"]["forecast_horizon"], normalize=False)
-                dataset = MomentDataset(datetime_col='timestamp', path=dataset_path, mode='test', horizon_len=args["config"]["forecast_horizon"], normalize=False)
+                dataset = MomentDataset(datetime_col='timestamp', path=dataset_path, mode='test', horizon_len=args["config"]["forecast_horizon"], normalize=False, boundaries=[-1, -1, -1])
                 finetuned_model = model.finetune(train_dataset, task_name="forecasting")
                 start = time.time()
                 metrics = model.evaluate(dataset, task_name="forecasting")
@@ -223,7 +228,7 @@ if __name__ == "__main__":
                 dataset_config = load_args("config/chronos_dataset.json")
                 dataset_config["context_length"] = context_len
                 dataset_config["prediction_length"] = pred_len
-                dataset = ChronosDataset(datetime_col='timestamp', path=dataset_path, mode='test', config=dataset_config, batch_size=4)
+                dataset = ChronosDataset(datetime_col='timestamp', path=dataset_path, mode='test', config=dataset_config, batch_size=4, boundaries=[-1, -1, -1])
                 start = time.time()
                 metrics = model.evaluate(dataset, horizon_len=dataset_config["prediction_length"], quantile_levels=[0.1, 0.5, 0.9])
                 end = time.time()
@@ -233,7 +238,7 @@ if __name__ == "__main__":
             elif model_name == "chronosbolt":
                 repo = "amazon/chronos-bolt-small"
                 model = ChronosBoltModel(repo=repo)
-                dataset = ChronosBoltDataset(datetime_col='timestamp', path=dataset_path, mode='test', batch_size=8, context_len=context_len, horizon_len=pred_len)
+                dataset = ChronosBoltDataset(datetime_col='timestamp', path=dataset_path, mode='test', batch_size=8, context_len=context_len, horizon_len=pred_len, boundaries=[-1, -1, -1])
                 start = time.time()
                 metrics = model.evaluate(dataset, horizon_len=pred_len, quantile_levels=[0.1, 0.5, 0.9])
                 end = time.time()
@@ -242,7 +247,7 @@ if __name__ == "__main__":
 
             elif model_name == "ttm":
                 model = TinyTimeMixerModel(**args)
-                dataset = TinyTimeMixerDataset(datetime_col='timestamp', path=dataset_path, mode='test', context_len=context_len, horizon_len=pred_len)
+                dataset = TinyTimeMixerDataset(datetime_col='timestamp', path=dataset_path, mode='test', context_len=context_len, horizon_len=pred_len, boundaries=[-1, -1, -1])
                 start = time.time()
                 metrics = model.evaluate(dataset)
                 end = time.time()
