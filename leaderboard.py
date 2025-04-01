@@ -146,7 +146,7 @@ def calc_pred_and_context_len(freq):
 
 if __name__ == "__main__":
     
-    for model_name in MODEL_NAMES[3:]:
+    for model_name in ["ttm"]:
         print(f"Evaluating model: {model_name}")
         # create csv file for leaderboard if not already created
         csv_path = f"leaderboard/{model_name}.csv"
@@ -279,12 +279,13 @@ if __name__ == "__main__":
 
 
             df = pd.read_csv(csv_path)
-            if fname in df["dataset"].values:
-                df.loc[df["dataset"] == fname, "size_in_MB"] = round(fs,2)
-                df.loc[df["dataset"] == fname, "eval_time"] = str(round(eval_time,2)) + unit
-                df.loc[df["dataset"] == fname, list(metrics.keys())] = list(metrics.values())
+            row_name = fname + ' (' + freq + ')'
+            if row_name in df["dataset"].values:
+                df.loc[df["dataset"] == row_name, "size_in_MB"] = round(fs,2)
+                df.loc[df["dataset"] == row_name, "eval_time"] = str(round(eval_time,2)) + unit
+                df.loc[df["dataset"] == row_name, list(metrics.keys())] = list(metrics.values())
             else:
-                new_row = pd.DataFrame([{**{"dataset": fname, "size_in_MB":round(fs,2), "eval_time":str(round(eval_time,2)) + unit}, **metrics}])
+                new_row = pd.DataFrame([{**{"dataset": row_name, "size_in_MB":round(fs,2), "eval_time":str(round(eval_time,2)) + unit}, **metrics}])
                 df = pd.concat([df, new_row], ignore_index=True)
 
             df.to_csv(csv_path, index=False)            
