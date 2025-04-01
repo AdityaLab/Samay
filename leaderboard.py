@@ -146,7 +146,7 @@ def calc_pred_and_context_len(freq):
 
 if __name__ == "__main__":
     
-    for model_name in MODEL_NAMES[3:]:
+    for model_name in ["ttm"]:
         print(f"Evaluating model: {model_name}")
         # create csv file for leaderboard if not already created
         csv_path = f"leaderboard/{model_name}.csv"
@@ -197,8 +197,10 @@ if __name__ == "__main__":
                 dataset_path = f"data/gifteval/{fname}/{freq}/data.csv"
             
             if model_name == "timesfm":
-                model = TimesfmModel(**args)
+                
                 dataset = TimesfmDataset(datetime_col='timestamp', path=dataset_path, mode='test', context_len=args["config"]["context_len"], horizon_len=args["config"]["horizon_len"], boundaries=(-1, -1, -1), batchsize=64)
+                args["config"]["horizon_len"] = dataset.horizon_len
+                model = TimesfmModel(**args)
                 start = time.time()
                 metrics = model.evaluate(dataset)
                 print("Metrics: ", metrics)
@@ -207,10 +209,12 @@ if __name__ == "__main__":
                 print(f"Time taken for evaluation of {fname}: {end-start:.2f} seconds")
 
             elif model_name == "moment":
-                model = MomentModel(**args)
+                
                 args["config"]["task_name"] = "forecasting"
                 train_dataset = MomentDataset(datetime_col='timestamp', path=dataset_path, mode='train', horizon_len=args["config"]["forecast_horizon"], normalize=False)
                 dataset = MomentDataset(datetime_col='timestamp', path=dataset_path, mode='test', horizon_len=args["config"]["forecast_horizon"], normalize=False, boundaries=[-1, -1, -1])
+                args["config"]["forecast_horizon"] = dataset.forecast_horizon
+                model = MomentModel(**args)
                 finetuned_model = model.finetune(train_dataset, task_name="forecasting")
                 start = time.time()
                 metrics = model.evaluate(dataset, task_name="forecasting")
@@ -220,11 +224,13 @@ if __name__ == "__main__":
                 print(metrics)
 
             elif model_name == "chronos":
-                model = ChronosModel(**args)
+                
                 dataset_config = load_args("config/chronos_dataset.json")
                 dataset_config["context_length"] = context_len
                 dataset_config["prediction_length"] = pred_len
                 dataset = ChronosDataset(datetime_col='timestamp', path=dataset_path, mode='test', config=dataset_config, batch_size=4, boundaries=[-1, -1, -1])
+                args["config"]["context_length"] = dataset.horizon_len
+                model = ChronosModel(**args)
                 start = time.time()
                 metrics = model.evaluate(dataset, horizon_len=dataset_config["prediction_length"], quantile_levels=[0.1, 0.5, 0.9])
                 end = time.time()
@@ -242,8 +248,10 @@ if __name__ == "__main__":
                 print(f"Time taken for evaluation of {fname}: {end-start:.2f} seconds")
 
             elif model_name == "ttm":
-                model = TinyTimeMixerModel(**args)
+                
                 dataset = TinyTimeMixerDataset(datetime_col='timestamp', path=dataset_path, mode='test', context_len=context_len, horizon_len=pred_len, boundaries=[-1, -1, -1])
+                args["config"]["horizon_len"] = dataset.horizon_len
+                model = TinyTimeMixerModel(**args)
                 start = time.time()
                 metrics = model.evaluate(dataset)
                 end = time.time()
@@ -271,12 +279,13 @@ if __name__ == "__main__":
 
 
             df = pd.read_csv(csv_path)
-            if fname in df["dataset"].values:
-                df.loc[df["dataset"] == fname, "size_in_MB"] = round(fs,2)
-                df.loc[df["dataset"] == fname, "eval_time"] = str(round(eval_time,2)) + unit
-                df.loc[df["dataset"] == fname, list(metrics.keys())] = list(metrics.values())
+            row_name = fname + ' (' + freq + ')'
+            if row_name in df["dataset"].values:
+                df.loc[df["dataset"] == row_name, "size_in_MB"] = round(fs,2)
+                df.loc[df["dataset"] == row_name, "eval_time"] = str(round(eval_time,2)) + unit
+                df.loc[df["dataset"] == row_name, list(metrics.keys())] = list(metrics.values())
             else:
-                new_row = pd.DataFrame([{**{"dataset": fname, "size_in_MB":round(fs,2), "eval_time":str(round(eval_time,2)) + unit}, **metrics}])
+                new_row = pd.DataFrame([{**{"dataset": row_name, "size_in_MB":round(fs,2), "eval_time":str(round(eval_time,2)) + unit}, **metrics}])
                 df = pd.concat([df, new_row], ignore_index=True)
 
             df.to_csv(csv_path, index=False)            

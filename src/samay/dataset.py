@@ -600,7 +600,7 @@ class MomentDataset(BaseDataset):
             self.df.interpolate(inplace=True, method='cubic')
 
         if self.task_name == 'forecasting' or self.task_name == 'imputation':
-            self.scaler.fit(self.df[slice(0, self.boundaries[0])].values)
+            self.scaler.fit(self.df[slice(0, int(len(self.df) * 0.5))].values)
             self.df = self.scaler.transform(self.df.values)
         elif self.task_name == 'detection':
             self.labels = self.df.iloc[:, -1].values
@@ -770,7 +770,7 @@ class TinyTimeMixerDataset(BaseDataset):
         if self.boundaries == [-1, -1, -1]:
             # use all data for training
             self.boundaries = [0, 0, len(self.df) - 1]
-            
+
         self.horizon_len = min(self.horizon_len, int(0.3*len(self.df)+1))
 
         self.n_channels = self.df.shape[1] - 1
