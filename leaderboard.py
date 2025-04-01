@@ -29,10 +29,13 @@ from samay.metric import *
 #     "restaurant": ['D'],
 # }
 
+print("Loading datasets...")
 start = time.time()
-NAMES, filesizes = get_gifteval_datasets("data/gifteval")
+df = pd.read_csv("data/gifteval/gifteval_datasets.csv")
+filesizes = [(x[0], x[1], x[2]) for x in df.values]
+df1 = df.groupby("datasets").agg({"freq":list}).reset_index()
+NAMES = dict(zip(df1["datasets"], df1["freq"]))
 end = time.time()
-
 print(f"Time taken to load datasets: {end-start:.2f} seconds")
 
 MODEL_NAMES = ["moirai", "chronos", "chronosbolt", "timesfm", "moment", "ttm"]
@@ -145,8 +148,8 @@ def calc_pred_and_context_len(freq):
     
 
 if __name__ == "__main__":
-    
-    for model_name in ["ttm"]:
+    mod_times = {}
+    for model_name in MODEL_NAMES[:3]:
         print(f"Evaluating model: {model_name}")
         # create csv file for leaderboard if not already created
         csv_path = f"leaderboard/{model_name}.csv"
@@ -172,6 +175,7 @@ if __name__ == "__main__":
             arg_path = "config/moirai.json"
             args = load_args(arg_path)
 
+        mod_start = time.time()
         for fname, freq, fs in filesizes:
             print(f"Evaluating {fname} ({freq})")
             # Adjust the context and prediction length based on the frequency
@@ -288,4 +292,10 @@ if __name__ == "__main__":
                 new_row = pd.DataFrame([{**{"dataset": row_name, "size_in_MB":round(fs,2), "eval_time":str(round(eval_time,2)) + unit}, **metrics}])
                 df = pd.concat([df, new_row], ignore_index=True)
 
-            df.to_csv(csv_path, index=False)            
+            df.to_csv(csv_path, index=False)
+        mod_end = time.time()
+        print(f"Time taken for model {model_name}: {mod_end-mod_start:.2f} seconds")
+        mod_times[model_name] = round(mod_end - mod_start,2)
+    
+    print("All models evaluated!")
+    print("Model evaluation times: ", mod_times)

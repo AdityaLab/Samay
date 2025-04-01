@@ -1423,10 +1423,6 @@ class MoiraiTSModel(Basemodel):
             )
         self.model.to(self.device)
 
-        print(
-            f"In MoiraiTSModel init: type: {type(self.model)}, patch_sizes: {self.model.module.patch_sizes}"
-        )
-
     def preprocess_inputs(self, inputs: dict):
         """Preprocess the inputs to the model - specifically adds the following fields:
         +--------------------+--------------------------------------+-----------------------+----------------------------------+
@@ -1491,6 +1487,7 @@ class MoiraiTSModel(Basemodel):
         output_transforms: transforms.Compose = None,
         num_sample_flag: bool = False,
         zero_shot: bool = True,
+        leaderboard: bool = False,
         **kwargs,
     ):
         """For a given test dataset, we evaluate the model using the given metrics.
