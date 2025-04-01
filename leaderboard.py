@@ -197,8 +197,10 @@ if __name__ == "__main__":
                 dataset_path = f"data/gifteval/{fname}/{freq}/data.csv"
             
             if model_name == "timesfm":
-                model = TimesfmModel(**args)
+                
                 dataset = TimesfmDataset(datetime_col='timestamp', path=dataset_path, mode='test', context_len=args["config"]["context_len"], horizon_len=args["config"]["horizon_len"], boundaries=(-1, -1, -1), batchsize=64)
+                args["config"]["horizon_len"] = dataset.horizon_len
+                model = TimesfmModel(**args)
                 start = time.time()
                 metrics = model.evaluate(dataset)
                 print("Metrics: ", metrics)
@@ -207,10 +209,12 @@ if __name__ == "__main__":
                 print(f"Time taken for evaluation of {fname}: {end-start:.2f} seconds")
 
             elif model_name == "moment":
-                model = MomentModel(**args)
+                
                 args["config"]["task_name"] = "forecasting"
                 train_dataset = MomentDataset(datetime_col='timestamp', path=dataset_path, mode='train', horizon_len=args["config"]["forecast_horizon"], normalize=False)
                 dataset = MomentDataset(datetime_col='timestamp', path=dataset_path, mode='test', horizon_len=args["config"]["forecast_horizon"], normalize=False, boundaries=[-1, -1, -1])
+                args["config"]["forecast_horizon"] = dataset.forecast_horizon
+                model = MomentModel(**args)
                 finetuned_model = model.finetune(train_dataset, task_name="forecasting")
                 start = time.time()
                 metrics = model.evaluate(dataset, task_name="forecasting")
@@ -220,11 +224,13 @@ if __name__ == "__main__":
                 print(metrics)
 
             elif model_name == "chronos":
-                model = ChronosModel(**args)
+                
                 dataset_config = load_args("config/chronos_dataset.json")
                 dataset_config["context_length"] = context_len
                 dataset_config["prediction_length"] = pred_len
                 dataset = ChronosDataset(datetime_col='timestamp', path=dataset_path, mode='test', config=dataset_config, batch_size=4, boundaries=[-1, -1, -1])
+                args["config"]["context_length"] = dataset.horizon_len
+                model = ChronosModel(**args)
                 start = time.time()
                 metrics = model.evaluate(dataset, horizon_len=dataset_config["prediction_length"], quantile_levels=[0.1, 0.5, 0.9])
                 end = time.time()
@@ -242,8 +248,10 @@ if __name__ == "__main__":
                 print(f"Time taken for evaluation of {fname}: {end-start:.2f} seconds")
 
             elif model_name == "ttm":
-                model = TinyTimeMixerModel(**args)
+                
                 dataset = TinyTimeMixerDataset(datetime_col='timestamp', path=dataset_path, mode='test', context_len=context_len, horizon_len=pred_len, boundaries=[-1, -1, -1])
+                args["config"]["horizon_len"] = dataset.horizon_len
+                model = TinyTimeMixerModel(**args)
                 start = time.time()
                 metrics = model.evaluate(dataset)
                 end = time.time()
