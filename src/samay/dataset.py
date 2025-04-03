@@ -268,12 +268,8 @@ class ChronosDataset(BaseDataset):
         else:
             self.config = ChronosConfig(**config)
         assert type(self.config) == ChronosConfig, "Config must be an instance of ChronosConfig"
-        assert self.config.model_type in ("seq2seq", "causal"), "Model type must be either 'seq2seq' or 'causal'"
+        assert self.config.model_type in ("seq2seq", "causal"), "Model type must be either 'seq2seq' or 'causal'"         
 
-        if tokenizer_class == "MeanScaleUniformBins":
-            self.tokenizer = MeanScaleUniformBins(**self.config.tokenizer_kwargs, config=self.config)
-        else:
-            raise ValueError(f"Tokenizer class {tokenizer_class} not supported")
         self.context_len = self.config.context_length
         self.horizon_len = self.config.prediction_length
         self.drop_prob = drop_prob if self.config.model_type == "seq2seq" else 0.0
@@ -360,6 +356,8 @@ class ChronosDataset(BaseDataset):
             seq_end = pred_end - self.horizon_len
             seq_start = seq_end - self.context_len
 
+        self.config.prediction_length = self.horizon_len
+        self.tokenizer = MeanScaleUniformBins(**self.config.tokenizer_kwargs, config=self.config)
         # input_seq = self.data[seq_start:seq_end, :].T
         input_seq = data_chunk[seq_start:seq_end, :].T
         input_ids, attention_mask, scale = self.tokenizer.context_input_transform(torch.tensor(input_seq))
