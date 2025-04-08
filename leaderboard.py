@@ -3,13 +3,14 @@ import sys
 import numpy as np
 import pandas as pd
 import time
+import torch
 
 src_path = os.path.abspath(os.path.join("src"))
 if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
-from samay.model import TimesfmModel, MomentModel, ChronosModel, ChronosBoltModel, TinyTimeMixerModel, MoiraiTSModel
-from samay.dataset import TimesfmDataset, MomentDataset, ChronosDataset, ChronosBoltDataset, TinyTimeMixerDataset, MoiraiDataset
+from samay.model import TimesfmModel, MomentModel, ChronosModel, ChronosBoltModel, TinyTimeMixerModel, MoiraiTSModel, LPTMModel
+from samay.dataset import TimesfmDataset, MomentDataset, ChronosDataset, ChronosBoltDataset, TinyTimeMixerDataset, MoiraiDataset, LPTMDataset
 from samay.utils import load_args, get_gifteval_datasets
 from samay.metric import *
 
@@ -35,7 +36,7 @@ end = time.time()
 
 print(f"Time taken to load datasets: {end-start:.2f} seconds")
 
-MODEL_NAMES = ["moirai", "chronos", "chronosbolt", "timesfm", "moment", "ttm"]
+MODEL_NAMES = ["moirai", "chronos", "chronosbolt", "timesfm", "moment", "ttm", "lptm"]
 MONASH_NAMES = {
     # "weather": "1D",
     "tourism_yearly": ["1YE"],
@@ -171,6 +172,9 @@ if __name__ == "__main__":
         elif model_name == "moirai":
             arg_path = "config/moirai.json"
             args = load_args(arg_path)
+        elif model_name == "lptm":
+            arg_path = "config/lptm.json"
+            args = load_args(arg_path)
 
         for fname, freq, fs in filesizes:
             print(f"Evaluating {fname} ({freq})")
@@ -255,6 +259,7 @@ if __name__ == "__main__":
                 start = time.time()
                 metrics = model.evaluate(dataset)
                 end = time.time()
+                print("Metrics: ", metrics)
                 print(f"Size of dataset: {fs:.2f} MB")
                 print(f"Time taken for evaluation of {fname}: {end-start:.2f} seconds")
             
@@ -265,6 +270,18 @@ if __name__ == "__main__":
 
                 start = time.time()
                 metrics = model.evaluate(dataset,leaderboard=True)
+                end = time.time()
+                print(f"Size of dataset: {fs:.2f} MB")
+                print(f"Time taken for evaluation of {fname}: {end-start:.2f} seconds")
+
+            elif model_name == "lptm":
+                args["config"]["task_name"] = "forecasting2"
+                dataset = LPTMDataset(name=fname, datetime_col='timestamp', task_name="forecasting2",
+                                        path=dataset_path, mode='test', seq_len=context_len, horizon=pred_len)
+                args["config"]["forecast_horizon"] = dataset.forecast_horizon
+                model = LPTMModel(**args)
+                start = time.time()
+                metrics = model.evaluate(dataset, task_name="forecasting2")
                 end = time.time()
                 print(f"Size of dataset: {fs:.2f} MB")
                 print(f"Time taken for evaluation of {fname}: {end-start:.2f} seconds")

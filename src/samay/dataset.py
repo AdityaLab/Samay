@@ -347,7 +347,7 @@ class ChronosDataset(BaseDataset):
     def __getitem__(self, index):
         chunk_index = index // self.one_chunk_num
         data_chunk = self.data[:, chunk_index * self.max_col_num: (chunk_index + 1) * self.max_col_num] if (chunk_index + 1) * self.max_col_num < self.n_channels else self.data[:, chunk_index * self.max_col_num:]
-        seq_start = self.stride * index
+        seq_start = self.stride * (index % self.one_chunk_num)
         seq_end = seq_start + self.context_len
         input_mask = np.ones(self.context_len)
         # if the sequence is padded, mask of padded part is 0
@@ -497,7 +497,7 @@ class ChronosBoltDataset(BaseDataset):
     def __getitem__(self, index):
         chunk_index = index // self.one_chunk_num
         data_chunk = self.data[:, chunk_index * self.max_col_num: (chunk_index + 1) * self.max_col_num] if (chunk_index + 1) * self.max_col_num < self.n_channels else self.data[:, chunk_index * self.max_col_num:]
-        seq_start = self.stride * index
+        seq_start = self.stride * (index % self.one_chunk_num)
         seq_end = seq_start + self.context_len
 
         pred_end = seq_end + self.horizon_len
@@ -656,7 +656,7 @@ class MomentDataset(BaseDataset):
     def __getitem__(self, index):
         chunk_index = index // self.one_chunk_num
         data_chunk = self.data[:, chunk_index * self.max_col_num: (chunk_index + 1) * self.max_col_num] if (chunk_index + 1) * self.max_col_num < self.n_channels else self.data[:, chunk_index * self.max_col_num:]
-        seq_start = self.stride * index
+        seq_start = self.stride * (index % self.one_chunk_num)
         seq_end = seq_start + self.seq_len
         input_mask = np.ones(self.seq_len)
         # if the sequence is padded, mask of padded part is 0
@@ -812,7 +812,7 @@ class TinyTimeMixerDataset(BaseDataset):
     def __getitem__(self, index):
         chunk_index = index // self.one_chunk_num
         data_chunk = self.data[:, chunk_index * self.max_col_num: (chunk_index + 1) * self.max_col_num] if (chunk_index + 1) * self.max_col_num < self.n_channels else self.data[:, chunk_index * self.max_col_num:]
-        seq_start = self.stride * index
+        seq_start = self.stride * (index % self.one_chunk_num)
         seq_end = seq_start + self.context_len
 
         pred_end = seq_end + self.horizon_len
@@ -856,7 +856,7 @@ class LPTMDataset(BaseDataset):
         name=None,
         datetime_col=None,
         path=None,
-        batchsize=8,
+        batchsize=16,
         mode="train",
         boundaries=[0, 0, 0],
         horizon=0,
@@ -881,12 +881,11 @@ class LPTMDataset(BaseDataset):
         self.forecast_horizon = horizon
         self.boundaries = boundaries
 
-        self._read_data()
-        self.required_len = self.seq_len + self.forecast_horizon
+        self.max_col_num = 64
         self.pad = False
-        self.pad_len = 0
-        if self.length_timeseries < self.required_len:
-            self.pad = True
+        self._read_data()
+
+        self.one_chunk_num = (self.length_timeseries - self.seq_len - self.forecast_horizon) // self.stride + 1
 
     def _read_data(self):
         self.scaler = StandardScaler()
@@ -898,6 +897,12 @@ class LPTMDataset(BaseDataset):
             self.boundaries[1] = int(len(self.df) * 0.8)
         if self.boundaries[2] == 0:
             self.boundaries[2] = int(len(self.df) - 1)
+
+        if self.boundaries == [-1, -1, -1]:
+            # use all data for training
+            self.boundaries = [0, 0, len(self.df) - 1]
+
+        self.forecast_horizon = min(self.forecast_horizon, int(0.3 * len(self.df) + 1))
 
         if self.task_name == "detection":
             self.n_channels = 1
@@ -972,18 +977,33 @@ class LPTMDataset(BaseDataset):
                 )
 
         self.length_timeseries = self.data.shape[0]
+        self.required_len = self.seq_len + self.forecast_horizon
+        self.pad_len = 0
+        if self.length_timeseries < self.required_len:
+            self.pad = True
+        if self.pad:
+            self.pad_sequence()
+        self.num_chunks = (
+            self.n_channels + self.max_col_num - 1
+        ) // self.max_col_num
 
     def pad_sequence(self):
         self.pad_len = self.required_len - self.length_timeseries
         # Pad data with zeros from the left
         self.data = np.pad(self.data, ((self.pad_len, 0), (0, 0)))
+        # If num of channels isn't multiple of max_col_num, pad with zeros
+        if self.n_channels % self.max_col_num != 0:
+            self.data = np.pad(
+                self.data, ((0, 0), (0, self.max_col_num - self.n_channels % self.max_col_num))
+            )
         self.length_timeseries = self.data.shape[0]
 
     def __getitem__(self, index):
-        if self.pad:
-            self.pad_sequence()
 
-        seq_start = self.stride * index
+        chunk_index = index // self.one_chunk_num
+        data_chunk = self.data[:, chunk_index * self.max_col_num: (chunk_index + 1) * self.max_col_num] if (chunk_index + 1) * self.max_col_num < self.n_channels else self.data[:, chunk_index * self.max_col_num:]
+
+        seq_start = self.stride * (index % self.one_chunk_num)
         seq_end = seq_start + self.seq_len
         input_mask = np.ones(self.seq_len)
         # if the sequence is padded, mask of padded part is 0
@@ -996,18 +1016,22 @@ class LPTMDataset(BaseDataset):
             seq_end = pred_end - self.forecast_horizon
             seq_start = seq_end - self.seq_len
 
-        input_seq = self.data[seq_start:seq_end, :].T
+        # input_seq = self.data[seq_start:seq_end, :].T
+        input_seq = data_chunk[seq_start:seq_end, :].T
         if self.task_name == "forecasting":
-            forecast_seq = self.data[seq_end:pred_end, :].T
+            # forecast_seq = self.data[seq_end:pred_end, :].T
+            forecast_seq = data_chunk[seq_end:pred_end, :].T
             return input_seq, input_mask, forecast_seq
         elif self.task_name == "imputation":
             return input_seq, input_mask
         elif self.task_name == "forecasting2":
-            input_seq = self.data[pred_end - self.seq_len : pred_end, :].T
+            # input_seq = self.data[pred_end - self.seq_len : pred_end, :].T
+            input_seq = data_chunk[seq_end - self.seq_len : seq_end, :].T
             input_mask[seq_end:pred_end] = 0
             input_mask[self.pad_len :] = 1
             # input_mask[: self.pad_len] = 0
-            forecast_seq = self.data[seq_end:pred_end, :].T
+            # forecast_seq = self.data[seq_end:pred_end, :].T
+            forecast_seq = data_chunk[seq_end:pred_end, :].T
             return input_seq, input_mask, forecast_seq
         elif self.task_name == "detection":
             labels = (
@@ -1026,10 +1050,12 @@ class LPTMDataset(BaseDataset):
         if self.task_name == "classification":
             return self.num_series
         if self.length_timeseries < self.seq_len + self.forecast_horizon:
-            return 1
-        return (
-            self.length_timeseries - self.seq_len - self.forecast_horizon
-        ) // self.stride + 1
+            # return 1
+            return 1 * self.num_chunks
+        # return (
+        #     self.length_timeseries - self.seq_len - self.forecast_horizon
+        # ) // self.stride + 1
+        return self.num_chunks * self.one_chunk_num
 
     def get_data_loader(self):
         if self.mode == "train":

@@ -794,7 +794,29 @@ class LPTMModel(Basemodel):
             preds = np.concatenate(preds, axis=0)
             histories = np.concatenate(histories, axis=0)
 
-            return average_loss, trues, preds, histories
+            mse = MSE(trues, preds)
+            mae = MAE(trues, preds)
+            mase = MASE(trues, preds)
+            mape = MAPE(trues, preds)
+            rmse = RMSE(trues, preds)
+            nrmse = NRMSE(trues, preds)
+            smape = SMAPE(trues, preds)
+            msis = MSIS(trues, preds)
+            nd = ND(trues, preds)
+
+            return {
+                "mse": mse,
+                "mae": mae,
+                "mase": mase,
+                "mape": mape,
+                "rmse": rmse,
+                "nrmse": nrmse,
+                "smape": smape,
+                "msis": msis,
+                "nd": nd,
+            }
+
+            # return average_loss, trues, preds, histories
 
         elif task_name == "imputation":
             trues, preds, masks = [], [], []
@@ -1257,7 +1279,7 @@ class TinyTimeMixerModel(Basemodel):
             self.model = TinyTimeMixerForPrediction.from_pretrained(
                 repo, revision=revision, prediction_filter_length=horizon_len
             )
-            self.model = self.model.to(self.device)
+            # self.model = self.model.to(self.device)
         else:
             raise ValueError("TinyTimeMixer model requires a repository")
 
@@ -1267,6 +1289,7 @@ class TinyTimeMixerModel(Basemodel):
             dataset: dataset for finetuning, call get_data_loader() to get the dataloader
         """
         dataloader = dataset.get_data_loader()
+        self.model.to(self.device)
         self.model.train()
         optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-4)
         for epoch in range(5):
@@ -1293,6 +1316,7 @@ class TinyTimeMixerModel(Basemodel):
         """
         dataloader = dataset.get_data_loader()
         trues, preds, histories = [], [], []
+        self.model.to(self.device)
         self.model.eval()
         with torch.no_grad():
             for i, data in enumerate(dataloader):
@@ -1327,6 +1351,7 @@ class TinyTimeMixerModel(Basemodel):
         """
         dataloader = dataset.get_data_loader()
         trues, preds, histories = [], [], []
+        self.model.to(self.device)
         self.model.eval()
         with torch.no_grad():
             for i, data in enumerate(dataloader):
@@ -1343,6 +1368,7 @@ class TinyTimeMixerModel(Basemodel):
             preds = np.concatenate(preds, axis=0)
             histories = np.concatenate(histories, axis=0)
 
+        print(trues.shape, preds.shape, histories.shape)
         mse = MSE(trues, preds)
         mae = MAE(trues, preds)
         mase = MASE(trues, preds)
