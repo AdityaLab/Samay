@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import time
 import torch
+import gc
 
 src_path = os.path.abspath(os.path.join("src"))
 if src_path not in sys.path:
@@ -11,7 +12,7 @@ if src_path not in sys.path:
 
 from samay.model import TimesfmModel, MomentModel, ChronosModel, ChronosBoltModel, TinyTimeMixerModel, MoiraiTSModel, LPTMModel
 from samay.dataset import TimesfmDataset, MomentDataset, ChronosDataset, ChronosBoltDataset, TinyTimeMixerDataset, MoiraiDataset, LPTMDataset
-from samay.utils import load_args, get_gifteval_datasets
+from samay.utils import load_args, get_gifteval_datasets, get_monash_datasets
 from samay.metric import *
 
 
@@ -30,46 +31,42 @@ from samay.metric import *
 #     "restaurant": ['D'],
 # }
 
-start = time.time()
-NAMES, filesizes = get_gifteval_datasets("data/gifteval")
-end = time.time()
-
-print(f"Time taken to load datasets: {end-start:.2f} seconds")
+SERIES = "monash"
 
 MODEL_NAMES = ["moirai", "chronos", "chronosbolt", "timesfm", "moment", "ttm", "lptm"]
 MONASH_NAMES = {
     # "weather": "1D",
-    "tourism_yearly": ["1YE"],
-    "tourism_quarterly": ["1Q"],
-    "tourism_monthly": ["1M"],
-    "cif_2016": ["1M"],
+    "tourism_yearly": "1YE",
+    "tourism_quarterly": "1Q",
+    "tourism_monthly": "1M",
+    "cif_2016": "1M",
     # "london_smart_meters": ["30min"],
-    "australian_electricity_demand": ["30min"],
+    "australian_electricity_demand": "30min",
     # "wind_farms_minutely": ["1min"],
-    "bitcoin": ["1D"],
-    "pedestrian_counts": ["1h"],
-    "vehicle_trips": ["1D"],
-    "kdd_cup_2018": ["1H"],
-    "nn5_daily": ["1D"],
-    "nn5_weekly": ["1W"],
+    "bitcoin": "1D",
+    "pedestrian_counts": "1h",
+    "vehicle_trips": "1D",
+    "kdd_cup_2018": "1H",
+    "nn5_daily": "1D",
+    "nn5_weekly": "1W",
     # "kaggle_web_traffic": ["1D"],
     # "kaggle_web_traffic_weekly": ["1W"],
-    "solar_10_minutes": ["10min"],
-    "solar_weekly": ["1W"],
-    "car_parts": ["1M"],
-    "fred_md": ["1M"],
-    "traffic_hourly": ["1h"],
-    "traffic_weekly": ["1W"],
-    "hospital": ["1M"],
-    "covid_deaths": ["1D"],
-    "sunspot": ["1D"],
-    "saugeenday": ["1D"],
-    "us_births": ["1D"],
-    "solar_4_seconds": ["4s"],
-    "wind_4_seconds": ["4s"],
-    "rideshare": ["1h"],
-    "oikolab_weather": ["1h"],
-    "temperature_rain": ["1D"]
+    "solar_10_minutes": "10min",
+    "solar_weekly": "1W",
+    "car_parts": "1M",
+    "fred_md": "1M",
+    "traffic_hourly": "1h",
+    "traffic_weekly": "1W",
+    "hospital": "1M",
+    "covid_deaths": "1D",
+    "sunspot": "1D",
+    "saugeenday": "1D",
+    "us_births": "1D",
+    "solar_4_seconds": "4s",
+    "wind_4_seconds": "4s",
+    "rideshare": "1h",
+    "oikolab_weather": "1h",
+    "temperature_rain": "1D"
 }
 
 MONASH_SETTINGS = {
@@ -113,6 +110,19 @@ MODEL_CONTEXT_LEN = {
     "chronos": 512
 }
 
+start = time.time()
+if SERIES == "gifteval":
+    # Load the datasets from the Gifteval dataset
+    NAMES = get_gifteval_datasets("data/gifteval")
+elif SERIES == "monash":
+    # Load the datasets from the Monash dataset
+    NAMES = get_monash_datasets("data/monash", MONASH_NAMES, MONASH_SETTINGS)
+
+end = time.time()
+print(NAMES)
+
+print(f"Time taken to load datasets: {end-start:.2f} seconds")
+
 
 def calc_pred_and_context_len(freq):
     # split feq into base and multiplier
@@ -147,10 +157,12 @@ def calc_pred_and_context_len(freq):
 
 if __name__ == "__main__":
     
-    for model_name in ["ttm"]:
+    for model_name in ["moment"]:
         print(f"Evaluating model: {model_name}")
         # create csv file for leaderboard if not already created
         csv_path = f"leaderboard/{model_name}.csv"
+        if SERIES == "monash":
+            csv_path = f"leaderboard/monash_{model_name}.csv"
         if not os.path.exists(csv_path):
             print(f"Creating leaderboard csv file: {csv_path}")
             df = pd.DataFrame(columns=["dataset", "size_in_MB", "eval_time", "mse", "mae", "mase", "mape", "rmse", "nrmse", "smape", "msis", "nd", "mwsq", "crps"])
@@ -176,12 +188,23 @@ if __name__ == "__main__":
             arg_path = "config/lptm.json"
             args = load_args(arg_path)
 
-        for fname, freq, fs in filesizes:
+        for fpath, attrs in NAMES.items():
+            if SERIES == "monash":
+                freq = attrs[0]
+                horizon = attrs[1]
+                fs = attrs[2]
+            elif SERIES == "gifteval":
+                freq = attrs[0]
+                fs = attrs[1]
+            fname = fpath.split("/")[2]
             print(f"Evaluating {fname} ({freq})")
             # Adjust the context and prediction length based on the frequency
 
             # pred_len, context_len = calc_pred_and_context_len(freq)
             pred_len, context_len = 96, 512
+            if SERIES == "monash":
+                pred_len = horizon
+
             if model_name == "timesfm":
                 args["config"]["horizon_len"] = pred_len
                 args["config"]["context_len"] = context_len
@@ -194,12 +217,8 @@ if __name__ == "__main__":
                 args["config"]["horizon_len"] = pred_len
                 args["config"]["context_len"] = context_len
             
-            # Set the dataset path
-            if len(NAMES.get(fname)) == 1:
-                dataset_path = f"data/gifteval/{fname}/data.csv"
-            else:
-                dataset_path = f"data/gifteval/{fname}/{freq}/data.csv"
-            
+            dataset_path = fpath
+
             if model_name == "timesfm":
                 
                 dataset = TimesfmDataset(datetime_col='timestamp', path=dataset_path, mode='test', context_len=args["config"]["context_len"], horizon_len=args["config"]["horizon_len"], boundaries=(-1, -1, -1), batchsize=64)
@@ -211,6 +230,10 @@ if __name__ == "__main__":
                 end = time.time()
                 print(f"Size of dataset: {fs:.2f} MB")
                 print(f"Time taken for evaluation of {fname}: {end-start:.2f} seconds")
+
+                del model
+                torch.cuda.empty_cache()
+                gc.collect()
 
             elif model_name == "moment":
                 
@@ -227,6 +250,13 @@ if __name__ == "__main__":
                 print(f"Time taken for evaluation of {fname}: {end-start:.2f} seconds")
                 print(metrics)
 
+                del model
+                del finetuned_model
+                del dataset
+                del train_dataset
+                torch.cuda.empty_cache()
+                gc.collect()
+
             elif model_name == "chronos":
                 
                 dataset_config = load_args("config/chronos_dataset.json")
@@ -241,6 +271,11 @@ if __name__ == "__main__":
                 print(f"Size of dataset: {fs:.2f} MB")
                 print(f"Time taken for evaluation of {fname}: {end-start:.2f} seconds")
 
+                del model
+                del dataset
+                torch.cuda.empty_cache()
+                gc.collect()
+
             elif model_name == "chronosbolt":
                 repo = "amazon/chronos-bolt-small"
                 model = ChronosBoltModel(repo=repo)
@@ -250,6 +285,11 @@ if __name__ == "__main__":
                 end = time.time()
                 print(f"Size of dataset: {fs:.2f} MB")
                 print(f"Time taken for evaluation of {fname}: {end-start:.2f} seconds")
+
+                del model
+                del dataset
+                torch.cuda.empty_cache()
+                gc.collect()
 
             elif model_name == "ttm":
                 
@@ -262,6 +302,11 @@ if __name__ == "__main__":
                 print("Metrics: ", metrics)
                 print(f"Size of dataset: {fs:.2f} MB")
                 print(f"Time taken for evaluation of {fname}: {end-start:.2f} seconds")
+
+                del model
+                del dataset
+                torch.cuda.empty_cache()
+                gc.collect()
             
             elif model_name == "moirai":
                 model = MoiraiTSModel(**args)
@@ -274,6 +319,11 @@ if __name__ == "__main__":
                 print(f"Size of dataset: {fs:.2f} MB")
                 print(f"Time taken for evaluation of {fname}: {end-start:.2f} seconds")
 
+                del model
+                del dataset
+                torch.cuda.empty_cache()
+                gc.collect()
+
             elif model_name == "lptm":
                 args["config"]["task_name"] = "forecasting2"
                 dataset = LPTMDataset(name=fname, datetime_col='timestamp', task_name="forecasting2",
@@ -285,6 +335,11 @@ if __name__ == "__main__":
                 end = time.time()
                 print(f"Size of dataset: {fs:.2f} MB")
                 print(f"Time taken for evaluation of {fname}: {end-start:.2f} seconds")
+
+                del model
+                del dataset
+                torch.cuda.empty_cache()
+                gc.collect()
             
             print("Evaluation done!")
 
