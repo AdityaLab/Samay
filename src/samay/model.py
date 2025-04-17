@@ -46,6 +46,10 @@ from .models.timesfm.timesfm import pytorch_patched_decoder as ppd
 from .models.TinyTimeMixer.models.tinytimemixer.modeling_tinytimemixer import (
     TinyTimeMixerForPrediction,
 )
+
+from .models.Time_MoE.time_moe.models.modeling_time_moe import TimeMoeForPrediction
+from .models.Time_MoE.time_moe.models.configuration_time_moe import TimeMoeConfig
+
 from .utils import get_least_used_gpu, visualize
 
 
@@ -794,7 +798,29 @@ class LPTMModel(Basemodel):
             preds = np.concatenate(preds, axis=0)
             histories = np.concatenate(histories, axis=0)
 
-            return average_loss, trues, preds, histories
+            mse = MSE(trues, preds)
+            mae = MAE(trues, preds)
+            mase = MASE(trues, preds)
+            mape = MAPE(trues, preds)
+            rmse = RMSE(trues, preds)
+            nrmse = NRMSE(trues, preds)
+            smape = SMAPE(trues, preds)
+            msis = MSIS(trues, preds)
+            nd = ND(trues, preds)
+
+            return {
+                "mse": mse,
+                "mae": mae,
+                "mase": mase,
+                "mape": mape,
+                "rmse": rmse,
+                "nrmse": nrmse,
+                "smape": smape,
+                "msis": msis,
+                "nd": nd,
+            }
+
+            # return average_loss, trues, preds, histories
 
         elif task_name == "imputation":
             trues, preds, masks = [], [], []
@@ -1257,7 +1283,7 @@ class TinyTimeMixerModel(Basemodel):
             self.model = TinyTimeMixerForPrediction.from_pretrained(
                 repo, revision=revision, prediction_filter_length=horizon_len
             )
-            self.model = self.model.to(self.device)
+            # self.model = self.model.to(self.device)
         else:
             raise ValueError("TinyTimeMixer model requires a repository")
 
@@ -1267,6 +1293,7 @@ class TinyTimeMixerModel(Basemodel):
             dataset: dataset for finetuning, call get_data_loader() to get the dataloader
         """
         dataloader = dataset.get_data_loader()
+        self.model.to(self.device)
         self.model.train()
         optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-4)
         for epoch in range(5):
@@ -1293,6 +1320,7 @@ class TinyTimeMixerModel(Basemodel):
         """
         dataloader = dataset.get_data_loader()
         trues, preds, histories = [], [], []
+        self.model.to(self.device)
         self.model.eval()
         with torch.no_grad():
             for i, data in enumerate(dataloader):
@@ -1327,6 +1355,7 @@ class TinyTimeMixerModel(Basemodel):
         """
         dataloader = dataset.get_data_loader()
         trues, preds, histories = [], [], []
+        self.model.to(self.device)
         self.model.eval()
         with torch.no_grad():
             for i, data in enumerate(dataloader):
@@ -1343,6 +1372,7 @@ class TinyTimeMixerModel(Basemodel):
             preds = np.concatenate(preds, axis=0)
             histories = np.concatenate(histories, axis=0)
 
+        print(trues.shape, preds.shape, histories.shape)
         mse = MSE(trues, preds)
         mae = MAE(trues, preds)
         mase = MASE(trues, preds)
@@ -2013,6 +2043,134 @@ class MoiraiTSModel(Basemodel):
 
         self.finetuned_model = FinetunedModel
         print("Fineuned model updated")
+
+
+class TimeMoEModel(Basemodel):
+    def __init__(self, config=None, repo=None, **kwargs):
+        super().__init__(config=config, repo=repo)
+        if repo:
+            self.model = TimeMoeForPrediction.from_pretrained(repo)
+        else:
+            t_config = TimeMoeConfig(**self.config)
+            self.model = TimeMoeForPrediction(t_config)
+
+    def finetune(self, dataset, **kwargs):
+        """
+        Finetune the model on the given dataset.
+        Args:
+            dataset: dataset for finetuning
+        """
+        # Implement finetuning logic here
+        dataloader = dataset.get_data_loader()
+        self.model.to(self.device)
+        self.model.train()
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-4)
+        for epoch in range(5):
+            total_loss = 0
+            for i, data in enumerate(dataloader):
+                context, forecast_seq, loss_mask = data
+                context = context.float().to(self.device)
+                forecast_seq = forecast_seq.float().to(self.device)
+                loss_mask = loss_mask.float().to(self.device)
+                optimizer.zero_grad()
+                output = self.model(input_ids=context, labels=forecast_seq, loss_masks=loss_mask)
+                loss = output.loss
+                loss.backward()
+                optimizer.step()
+                total_loss += loss.item()
+            avg_loss = total_loss / len(dataloader)
+            print(f"Epoch {epoch}, Loss: {avg_loss:.4f}")
+
+        self.model.eval()
+
+
+    def plot(self, dataset, **kwargs):
+        """
+        Plot the results of the model on the given dataset.
+        Args:
+            dataset: dataset for plotting
+        """
+        # Implement plotting logic here
+        dataloader = dataset.get_data_loader()
+        self.model.to(self.device)
+        self.model.eval()
+        trues, preds, histories = [], [], []
+        with torch.no_grad():
+            for data in dataloader:
+                context, forecast_seq = data
+                context = context.float().to(self.device)
+                forecast_seq = forecast_seq.float().to(self.device)
+                output = self.model.generate(inputs=context, max_new_tokens=forecast_seq.shape[1])
+                pred = output[:, -forecast_seq.shape[1]:]
+                pred = pred.cpu().numpy()
+                true = forecast_seq.cpu().numpy()
+                history = context.cpu().numpy()
+                trues.append(true)
+                preds.append(pred)
+                histories.append(history)
+        trues = np.concatenate(trues, axis=0).reshape(-1, dataset.n_channels, dataset.horizon_len)
+        preds = np.concatenate(preds, axis=0).reshape(-1, dataset.n_channels, dataset.horizon_len)
+        histories = np.concatenate(histories, axis=0).reshape(-1, dataset.n_channels, dataset.context_len)
+        
+        visualize(
+            task_name="forecasting",
+            trues=trues,
+            preds=preds,
+            history=histories,
+        )
+        
+    def evaluate(self, dataset, **kwargs):
+        """
+        Evaluate the model on the given dataset.
+        Args:
+            dataset: dataset for evaluation
+        """
+        # Implement evaluation logic here
+        dataloader = dataset.get_data_loader()
+        self.model.to(self.device)
+        self.model.eval()
+        trues, preds, histories = [], [], []
+
+        with torch.no_grad():
+            for data in dataloader:
+                context, forecast_seq = data
+                context = context.float().to(self.device)
+                forecast_seq = forecast_seq.float().to(self.device)
+                output = self.model.generate(inputs=context, max_new_tokens=forecast_seq.shape[1])
+                pred = output[:, -forecast_seq.shape[1]:]
+                pred = pred.cpu().numpy()
+                true = forecast_seq.cpu().numpy()
+                history = context.cpu().numpy()
+                trues.append(true)
+                preds.append(pred)
+                histories.append(history)
+        trues = np.concatenate(trues, axis=0).reshape(-1, dataset.n_channels, dataset.horizon_len)
+        preds = np.concatenate(preds, axis=0).reshape(-1, dataset.n_channels, dataset.horizon_len)
+        histories = np.concatenate(histories, axis=0).reshape(-1, dataset.n_channels, dataset.context_len)
+
+        # Calculate metrics
+        mse = MSE(trues, preds)
+        mae = MAE(trues, preds)
+        mase = MASE(trues, preds)
+        mape = MAPE(trues, preds)
+        rmse = RMSE(trues, preds)
+        nrmse = NRMSE(trues, preds)
+        smape = SMAPE(trues, preds)
+        msis = MSIS(trues, preds)
+        nd = ND(trues, preds)
+
+        return {
+            "mse": mse,
+            "mae": mae,
+            "mase": mase,
+            "mape": mape,
+            "rmse": rmse,
+            "nrmse": nrmse,
+            "smape": smape,
+            "msis": msis,
+            "nd": nd,
+        }
+        
 
 
 if __name__ == "__main__":
