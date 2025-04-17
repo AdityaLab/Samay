@@ -1593,3 +1593,141 @@ class Moirai_old_Dataset(BaseDataset):
             return DataLoader(self.dataset, batch_size=self.batchsize, shuffle=False)
         else:
             return DataLoader(self.dataset, batch_size=self.batchsize, shuffle=False)
+
+
+class TimeMoEDataset(BaseDataset):
+    """
+    Dataset class for TimeMoE model
+    Data Format:
+    Dict with keys:
+    input_ts: np.ndarray, historical time series data
+    actual_ts: np.ndarray, actual time series data
+    """
+
+    def __init__(
+        self,
+        name=None,
+        datetime_col=None,
+        path=None,
+        batch_size=16,
+        mode="train",
+        boundaries=[0, 0, 0],
+        task_name="evaluation",
+        stride=10,
+        context_len=512,
+        horizon_len=96,
+        **kwargs,
+    ):
+        super().__init__(
+            name=name,
+            datetime_col=datetime_col,
+            path=path,
+            batchsize=batch_size,
+            mode=mode,
+        )
+        self.context_len = context_len
+        self.horizon_len = horizon_len
+        self.task_name = task_name
+
+        self.stride = stride
+        self.boundaries = boundaries
+
+        self.pad = False
+        self._read_data()
+
+        
+    def _read_data(self):
+        self.df = pd.read_csv(self.data_path)
+
+        if self.boundaries[0] == 0:
+            self.boundaries[0] = int(len(self.df) * 0.5)
+        if self.boundaries[1] == 0:
+            self.boundaries[1] = int(len(self.df) * 0.7)
+        if self.boundaries[2] == 0:
+            self.boundaries[2] = int(len(self.df) - 1)
+
+        if self.boundaries == [-1, -1, -1]:
+            # use all data for training
+            self.boundaries = [0, 0, len(self.df) - 1]
+
+        self.horizon_len = min(self.horizon_len, int(0.3*len(self.df)+1))
+
+        self.n_channels = self.df.shape[1] - 1
+        
+        if self.datetime_col:
+            self.df.drop(columns=[self.datetime_col], inplace=True)
+
+        self.df = np.array(self.df)
+
+        if self.mode == "train":
+            self.data = self.df[slice(0, self.boundaries[0]), :]
+
+        elif self.mode == "test":
+            self.data = self.df[slice(self.boundaries[1], self.boundaries[2]), :]
+
+        scaler = StandardScaler()
+        scaler = scaler.fit(self.df[slice(0, self.boundaries[0]), :])
+        self.data = scaler.transform(self.data)
+
+        self.length_timeseries = self.data.shape[0]
+        self.required_len = self.context_len + self.horizon_len
+        self.pad_len = 0
+        if self.length_timeseries < self.required_len:
+            self.pad = True
+        self.pad_sequence()
+
+    def pad_sequence(self):
+        self.pad_len = self.required_len - self.length_timeseries
+        # Pad data with zeros from the left
+        if self.pad:
+            self.data = np.pad(
+                self.data, ((self.pad_len, 0), (0, 0))
+            )
+        self.length_timeseries = self.data.shape[0]
+        self.num_windows = 1 + (self.length_timeseries - self.context_len - self.horizon_len) // self.stride
+
+
+    def __getitem__(self, index):
+        channel_idx = index // self.num_windows
+        seq_start = self.stride * (index % self.num_windows)
+        seq_end = seq_start + self.context_len
+
+        if self.task_name == "evaluation":
+            pred_end = seq_end + self.horizon_len
+
+            if pred_end > self.length_timeseries:
+                pred_end = self.length_timeseries
+                seq_end = pred_end - self.horizon_len
+                seq_start = seq_end - self.context_len
+
+            # input_seq = self.data[seq_start:seq_end, :].T
+            input_seq = self.data[seq_start:seq_end, channel_idx]
+            forecast_seq = self.data[seq_end:pred_end, channel_idx]
+            return input_seq, forecast_seq
+        
+        elif self.task_name == "finetune":
+            pred_end = seq_end + 1
+            if pred_end > self.length_timeseries:
+                pred_end = self.length_timeseries
+                seq_end = pred_end - 1
+                seq_start = seq_end - self.context_len
+            
+            input_seq = self.data[seq_start:seq_end, channel_idx]  # shape: (context_len, )
+            forecast_seq = self.data[seq_end:pred_end, channel_idx]
+            loss_mask = np.ones(input_seq.shape[0])
+            return input_seq, forecast_seq, loss_mask
+
+        
+
+    def __len__(self):
+        if self.length_timeseries < self.context_len + self.horizon_len:
+            return 1 * self.n_channels
+        return self.n_channels * self.num_windows
+    
+
+    def get_data_loader(self):
+        if self.mode == 'train':
+            return DataLoader(self, shuffle=True, batch_size=self.batchsize)
+        else:
+            return DataLoader(self, shuffle=False, batch_size=self.batchsize)
+        # shape: (batch_size, n_channels, seq_len)
