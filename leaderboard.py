@@ -3,6 +3,7 @@ import sys
 import numpy as np
 import pandas as pd
 import time
+import datetime
 
 src_path = os.path.abspath(os.path.join("src"))
 if src_path not in sys.path:
@@ -30,13 +31,39 @@ from samay.metric import *
 # }
 
 print("Loading datasets...")
-start = time.time()
-df = pd.read_csv("data/gifteval/gifteval_datasets.csv")
-filesizes = [(x[0], x[1], x[2]) for x in df.values]
-df1 = df.groupby("datasets").agg({"freq":list}).reset_index()
-NAMES = dict(zip(df1["datasets"], df1["freq"]))
-end = time.time()
-print(f"Time taken to load datasets: {end-start:.2f} seconds")
+# start = time.time()
+# df = pd.read_csv("data/gifteval/gifteval_datasets.csv")
+# filesizes = [(x[0], x[1], x[2]) for x in df.values]
+# df1 = df.groupby("datasets").agg({"freq":list}).reset_index()
+# NAMES = dict(zip(df1["datasets"], df1["freq"]))
+# end = time.time()
+# print(f"Time taken to load datasets: {end-start:.2f} seconds")
+
+NAMES = {'LOOP_SEATTLE': ['H', '5T'],
+  'bitbrains_fast_storage': ['H', '5T'],
+  'bitbrains_rnd': ['H', '5T'],
+  'electricity': ['H', '15T'],
+  'm4_daily': ['D'],
+  'm4_monthly': ['M'],
+  'm4_quarterly': ['Q-DEC'],
+  'm4_yearly': ['A-DEC'],
+  'solar': ['W', 'D', 'H', '10T'],
+  'temperature_rain_with_missing': ['D']}
+
+filesizes = [
+#   ('bitbrains_fast_storage', 'H', 15.636815),
+#   ('LOOP_SEATTLE', 'H', 27.053807),
+#   ('solar', '10T', 33.396137),
+#   ('m4_yearly', 'A-DEC', 51.396002),
+#   ('bitbrains_rnd', '5T', 63.693623),
+#   ('electricity', 'H', 110.57665),
+#   ('temperature_rain_with_missing', 'D', 113.989065),
+  ('bitbrains_fast_storage', '5T', 160.063361),
+  ('m4_quarterly', 'Q-DEC', 163.930224),
+  ('m4_daily', 'D', 316.27674),
+  ('LOOP_SEATTLE', '5T', 324.080655),
+  ('electricity', '15T', 442.387613),
+  ('m4_monthly', 'M', 1025.335628)]
 
 MODEL_NAMES = ["moirai", "chronos", "chronosbolt", "timesfm", "moment", "ttm"]
 MONASH_NAMES = {
@@ -149,7 +176,7 @@ def calc_pred_and_context_len(freq):
 
 if __name__ == "__main__":
     mod_times = {}
-    for model_name in MODEL_NAMES[:3]:
+    for model_name in ["chronos"]:
         print(f"Evaluating model: {model_name}")
         # create csv file for leaderboard if not already created
         csv_path = f"leaderboard/{model_name}.csv"
@@ -176,8 +203,10 @@ if __name__ == "__main__":
             args = load_args(arg_path)
 
         mod_start = time.time()
+        mod_timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         for fname, freq, fs in filesizes:
-            print(f"Evaluating {fname} ({freq})")
+            print(f"Model eval started at: {mod_timestamp}")
+            print(f"Evaluating {fname} ({freq}) started at: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             # Adjust the context and prediction length based on the frequency
 
             # pred_len, context_len = calc_pred_and_context_len(freq)
@@ -236,7 +265,7 @@ if __name__ == "__main__":
                 args["config"]["context_length"] = dataset.horizon_len
                 model = ChronosModel(**args)
                 start = time.time()
-                metrics = model.evaluate(dataset, horizon_len=dataset_config["prediction_length"], quantile_levels=[0.1, 0.5, 0.9])
+                metrics = model.evaluate(dataset, horizon_len=dataset.horizon_len, quantile_levels=[0.1, 0.5, 0.9])
                 end = time.time()
                 print(f"Size of dataset: {fs:.2f} MB")
                 print(f"Time taken for evaluation of {fname}: {end-start:.2f} seconds")
@@ -246,7 +275,7 @@ if __name__ == "__main__":
                 model = ChronosBoltModel(repo=repo)
                 dataset = ChronosBoltDataset(datetime_col='timestamp', path=dataset_path, mode='test', batch_size=8, context_len=context_len, horizon_len=pred_len, boundaries=[-1, -1, -1])
                 start = time.time()
-                metrics = model.evaluate(dataset, horizon_len=pred_len, quantile_levels=[0.1, 0.5, 0.9])
+                metrics = model.evaluate(dataset, horizon_len=dataset.horizon_lend, quantile_levels=[0.1, 0.5, 0.9])
                 end = time.time()
                 print(f"Size of dataset: {fs:.2f} MB")
                 print(f"Time taken for evaluation of {fname}: {end-start:.2f} seconds")

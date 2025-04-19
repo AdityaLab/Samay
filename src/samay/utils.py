@@ -5,7 +5,7 @@ import os
 import numpy as np
 import pandas as pd
 import yaml
-
+from tqdm import tqdm
 from datasets import load_from_disk 
 from matplotlib import pyplot as plt
 from collections import defaultdict
@@ -322,6 +322,38 @@ def get_gifteval_datasets(path:str):
     dataset_dict = dict(dataset_dict)
 
     return dataset_dict, fil
+
+def get_monash_datasets(path):
+    datasets = os.listdir(path)
+    
+    # Get the filesizes
+    data = []
+    for x in datasets:
+        d_path = os.path.join(path, x, "test", "data.csv")
+        fsize = os.path.getsize(d_path)/1e6
+        data.append((x, fsize))
+
+    data = sorted(data, key=lambda x: x[1])
+
+    # Infer frequencies
+    filesizes = []
+    for i in tqdm(range(len(data)), desc="Freq inferring Monash"):
+        d_path = os.path.join(path, data[i][0], "test", "data.csv")
+        df = pd.read_csv(d_path)
+        freq = pd.infer_freq(df["timestamp"])
+        filesizes.append((data[i][0], freq, data[i][1]))
+
+    filesizes = sorted(filesizes, key=lambda x: x[2])
+
+    # Get dictionary for each dataset
+    NAMES = defaultdict(list)
+    for x in filesizes:
+        NAMES[x[0]].append(x[1])
+
+    NAMES = dict(NAMES)
+
+    return NAMES, filesizes
+
   
 if __name__ == "__main__":
     # ts_path = "/nethome/sli999/TSFMProject/src/tsfmproject/models/moment/data/ECG5000_TRAIN.ts"
