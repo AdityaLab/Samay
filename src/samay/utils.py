@@ -178,7 +178,7 @@ def visualize(task_name="forecasting", trues=None, preds=None, history=None, mas
         pred = preds[time_idx, channel_idx, :]
 
         if figsize is None:
-            figsize = (len(history), 4)
+            figsize = (0.2*len(history), 4)
         # Set figure size proportional to the number of forecasts
         plt.figure(figsize=figsize)
 
