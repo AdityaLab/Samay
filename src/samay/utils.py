@@ -143,7 +143,7 @@ def arrow_to_csv(arrow_dir, freq=None):
     print(f"Conversion complete for {arrow_dir}.")
 
 
-def visualize(task_name="forecasting", trues=None, preds=None, history=None, masks=None, context_len=512, **kwargs):
+def visualize(task_name="forecasting", trues=None, preds=None, history=None, masks=None, context_len=512, figsize=None,**kwargs):
     """
     Visualize the data.
     If task_name is "forecasting", trues, preds, and history should be provided, which channel_idx and time_idx are optional.
@@ -177,8 +177,10 @@ def visualize(task_name="forecasting", trues=None, preds=None, history=None, mas
         true = trues[time_idx, channel_idx, :]
         pred = preds[time_idx, channel_idx, :]
 
+        if figsize is None:
+            figsize = (len(history), 4)
         # Set figure size proportional to the number of forecasts
-        plt.figure(figsize=(0.02 * len(history), 4))
+        plt.figure(figsize=figsize)
 
         # Plotting the first time series from history
         plt.plot(
