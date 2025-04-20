@@ -1,14 +1,9 @@
 import gc
 import os
-import sys
 
 import numpy as np
 import pandas as pd
 import torch
-
-src_path = os.path.abspath(os.path.join("src"))
-if src_path not in sys.path:
-    sys.path.insert(0, src_path)
 
 from samay.dataset import MoiraiDataset
 from samay.model import MoiraiTSModel
@@ -27,7 +22,7 @@ def update_leaderboard(dataset_name, model_name, metrics, leaderboard_path):
     """
     if not os.path.exists(leaderboard_path):
         # Create the leaderboard with appropriate columns if it doesn't exist
-        columns = ["Dataset"] + [
+        columns: list[str] = ["Dataset"] + [
             f"{model}_{metric}"
             for model in ["TimesFM", "Chronos", "Moirai"]
             for metric in metrics.keys()
@@ -131,6 +126,6 @@ if __name__ == "__main__":
         eval_results, _, _, _ = moirai.evaluate(val_dataset, metrics=["MSE", "MASE"])
         metrics = {"MSE": eval_results["MSE"], "MASE": eval_results["MASE"]}
         update_leaderboard(dataset, model_name, metrics, leaderboard_path)
-    del chronos
+    del moirai
     torch.cuda.empty_cache()
     gc.collect()
