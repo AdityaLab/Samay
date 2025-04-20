@@ -178,7 +178,7 @@ def visualize(task_name="forecasting", trues=None, preds=None, history=None, mas
         pred = preds[time_idx, channel_idx, :]
 
         # Set figure size proportional to the number of forecasts
-        plt.figure(figsize=(0.2 * len(history), 4))
+        plt.figure(figsize=(0.02 * len(history), 4))
 
         # Plotting the first time series from history
         plt.plot(
@@ -304,55 +304,49 @@ def get_gifteval_datasets(path:str):
         size = os.path.getsize(d_path)
         df = pd.read_csv(d_path)
         freq = pd.infer_freq(df["timestamp"])
-        fil1.append((d, freq, size/1e6))
+        fil1.append((d_path, freq, size/1e6))
     
     fil2 = []
     for data,freq in hier:
         for f in freq:
             d_path = os.path.join(path, data, f, "data.csv")
             size = os.path.getsize(d_path)
-            fil2.append((data, f, size/1e6))
+            fil2.append((d_path, f, size/1e6))
     fil = fil1 + fil2
     fil.sort(key=lambda x: x[2])
     # Create a dictionary to hold the dataset names and their frequencies
-    dataset_dict = defaultdict(list)
-    for name, freq, size in fil:
-        dataset_dict[name].append(freq)
+    dataset_dict = defaultdict()
+    for p, freq, size in fil:
+        dataset_dict[p] = (freq, size)
     # Convert the defaultdict to a regular dict
     dataset_dict = dict(dataset_dict)
 
-    return dataset_dict, fil
+    return dataset_dict
 
-def get_monash_datasets(path):
-    datasets = os.listdir(path)
+def get_monash_datasets(path:str, config:dict, setting:dict):
+    dataset_names = config.keys()
+    dataset_paths = [path + "/" + name + "/test/data.csv" for name in dataset_names]
+    # Get the frequencies for each dataset
+    dataset_freqs = [config[name] for name in dataset_names]
+    dataset_horizons = [setting[name] for name in dataset_names]
     
-    # Get the filesizes
-    data = []
-    for x in datasets:
-        d_path = os.path.join(path, x, "test", "data.csv")
-        fsize = os.path.getsize(d_path)/1e6
-        data.append((x, fsize))
+    # sort the datasets by size, ascending
+    dataset_sizes = []
+    for p in dataset_paths:
+        size = os.path.getsize(p)
+        dataset_sizes.append(size/1e6)
+    dataset_paths, dataset_freqs, dataset_horizons, dataset_sizes = zip(*sorted(zip(dataset_paths, dataset_freqs, dataset_horizons, dataset_sizes), key=lambda x: x[3]))
+    # Create a dictionary to hold the dataset names and their frequencies
+    dataset_dict = defaultdict()
+    fil = zip(dataset_paths, dataset_freqs, dataset_horizons, dataset_sizes)
+    # turn fil into a list
+    fil = list(fil)
+    for p, freq, horizon, size in fil:
+        dataset_dict[p] = (freq, horizon, size)
+    # Convert the defaultdict to a regular dict
+    dataset_dict = dict(dataset_dict)
 
-    data = sorted(data, key=lambda x: x[1])
-
-    # Infer frequencies
-    filesizes = []
-    for i in tqdm(range(len(data)), desc="Freq inferring Monash"):
-        d_path = os.path.join(path, data[i][0], "test", "data.csv")
-        df = pd.read_csv(d_path)
-        freq = pd.infer_freq(df["timestamp"])
-        filesizes.append((data[i][0], freq, data[i][1]))
-
-    filesizes = sorted(filesizes, key=lambda x: x[2])
-
-    # Get dictionary for each dataset
-    NAMES = defaultdict(list)
-    for x in filesizes:
-        NAMES[x[0]].append(x[1])
-
-    NAMES = dict(NAMES)
-
-    return NAMES, filesizes
+    return dataset_dict
 
   
 if __name__ == "__main__":
