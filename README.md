@@ -38,7 +38,7 @@ uv sync --reinstall
 
 ## Usage Examples
 
-Check out example notebooks at `examples/` for more detailed examples. 
+Check out example notebooks at https://github.com/AdityaLab/Samay/tree/main/example to quickly get started. 
 
 ### LPTM
 
