@@ -289,6 +289,14 @@ def prep_finetune_config(file_path: str = None, config: dict = None):
 
 
 def get_gifteval_datasets(path:str):
+    """Fetch the path of the Gifteval datasets and their frequencies.
+
+    Args:
+        path (str): Path containing the datasets.
+
+    Returns:
+        dict: Dictionary containing the dataset path (key), and a tuple of their frequencies, and their sizes (value).
+    """
     # Get the list of hierarchical and direct datasets in the given path
     data = [x for x in os.listdir(path) if x.startswith(".")==False]
     hier, dire = [], []
@@ -326,6 +334,16 @@ def get_gifteval_datasets(path:str):
     return dataset_dict
 
 def get_monash_datasets(path:str, config:dict, setting:dict):
+    """Fetch the path of the monash datasets and their frequencies.
+
+    Args:
+        path (str): Path containing the datasets.
+        config (dict): Dictionary containing the dataset names (key) and their frequencies (value).
+        setting (dict): Dictionary containing the dataset names (key) and their horizons (value).
+
+    Returns:
+        dict: Dictionary containing the dataset path (key), and a tuple of their frequencies, and their sizes (value).
+    """
     dataset_names = config.keys()
     dataset_paths = [path + "/" + name + "/test/data.csv" for name in dataset_names]
     # Get the frequencies for each dataset
