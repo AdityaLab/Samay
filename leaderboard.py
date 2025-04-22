@@ -3,6 +3,7 @@ import sys
 import numpy as np
 import pandas as pd
 import time
+import datetime
 import torch
 import gc
 
@@ -156,8 +157,8 @@ def calc_pred_and_context_len(freq):
     
 
 if __name__ == "__main__":
-    
-    for model_name in ["moment"]:
+    mod_times = {}
+    for model_name in ["chronos"]:
         print(f"Evaluating model: {model_name}")
         # create csv file for leaderboard if not already created
         csv_path = f"leaderboard/{model_name}.csv"
@@ -188,7 +189,11 @@ if __name__ == "__main__":
             arg_path = "config/lptm.json"
             args = load_args(arg_path)
 
+        mod_start = time.time()
+        mod_timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         for fpath, attrs in NAMES.items():
+            print(f"Model eval started at: {mod_timestamp}")
+            print(f"Evaluating {fname} ({freq}) started at: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             if SERIES == "monash":
                 freq = attrs[0]
                 horizon = attrs[1]
@@ -266,7 +271,7 @@ if __name__ == "__main__":
                 args["config"]["context_length"] = dataset.horizon_len
                 model = ChronosModel(**args)
                 start = time.time()
-                metrics = model.evaluate(dataset, horizon_len=dataset_config["prediction_length"], quantile_levels=[0.1, 0.5, 0.9])
+                metrics = model.evaluate(dataset, horizon_len=dataset.horizon_len, quantile_levels=[0.1, 0.5, 0.9])
                 end = time.time()
                 print(f"Size of dataset: {fs:.2f} MB")
                 print(f"Time taken for evaluation of {fname}: {end-start:.2f} seconds")
@@ -281,7 +286,7 @@ if __name__ == "__main__":
                 model = ChronosBoltModel(repo=repo)
                 dataset = ChronosBoltDataset(datetime_col='timestamp', path=dataset_path, mode='test', batch_size=8, context_len=context_len, horizon_len=pred_len, boundaries=[-1, -1, -1])
                 start = time.time()
-                metrics = model.evaluate(dataset, horizon_len=pred_len, quantile_levels=[0.1, 0.5, 0.9])
+                metrics = model.evaluate(dataset, horizon_len=dataset.horizon_lend, quantile_levels=[0.1, 0.5, 0.9])
                 end = time.time()
                 print(f"Size of dataset: {fs:.2f} MB")
                 print(f"Time taken for evaluation of {fname}: {end-start:.2f} seconds")
@@ -360,4 +365,10 @@ if __name__ == "__main__":
                 new_row = pd.DataFrame([{**{"dataset": row_name, "size_in_MB":round(fs,2), "eval_time":str(round(eval_time,2)) + unit}, **metrics}])
                 df = pd.concat([df, new_row], ignore_index=True)
 
-            df.to_csv(csv_path, index=False)            
+            df.to_csv(csv_path, index=False)
+        mod_end = time.time()
+        print(f"Time taken for model {model_name}: {mod_end-mod_start:.2f} seconds")
+        mod_times[model_name] = round(mod_end - mod_start,2)
+    
+    print("All models evaluated!")
+    print("Model evaluation times: ", mod_times)

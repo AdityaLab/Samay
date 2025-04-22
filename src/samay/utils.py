@@ -5,7 +5,7 @@ import os
 import numpy as np
 import pandas as pd
 import yaml
-
+from tqdm import tqdm
 from datasets import load_from_disk 
 from matplotlib import pyplot as plt
 from collections import defaultdict
@@ -143,7 +143,7 @@ def arrow_to_csv(arrow_dir, freq=None):
     print(f"Conversion complete for {arrow_dir}.")
 
 
-def visualize(task_name="forecasting", trues=None, preds=None, history=None, masks=None, context_len=512, **kwargs):
+def visualize(task_name="forecasting", trues=None, preds=None, history=None, masks=None, context_len=512, figsize=None,**kwargs):
     """
     Visualize the data.
     If task_name is "forecasting", trues, preds, and history should be provided, which channel_idx and time_idx are optional.
@@ -177,8 +177,10 @@ def visualize(task_name="forecasting", trues=None, preds=None, history=None, mas
         true = trues[time_idx, channel_idx, :]
         pred = preds[time_idx, channel_idx, :]
 
+        if figsize is None:
+            figsize = (0.02*len(history), 4)
         # Set figure size proportional to the number of forecasts
-        plt.figure(figsize=(0.02 * len(history), 4))
+        plt.figure(figsize=figsize)
 
         # Plotting the first time series from history
         plt.plot(
@@ -287,6 +289,14 @@ def prep_finetune_config(file_path: str = None, config: dict = None):
 
 
 def get_gifteval_datasets(path:str):
+    """Fetch the path of the Gifteval datasets and their frequencies.
+
+    Args:
+        path (str): Path containing the datasets.
+
+    Returns:
+        dict: Dictionary containing the dataset path (key), and a tuple of their frequencies, and their sizes (value).
+    """
     # Get the list of hierarchical and direct datasets in the given path
     data = [x for x in os.listdir(path) if x.startswith(".")==False]
     hier, dire = [], []
@@ -324,6 +334,16 @@ def get_gifteval_datasets(path:str):
     return dataset_dict
 
 def get_monash_datasets(path:str, config:dict, setting:dict):
+    """Fetch the path of the monash datasets and their frequencies.
+
+    Args:
+        path (str): Path containing the datasets.
+        config (dict): Dictionary containing the dataset names (key) and their frequencies (value).
+        setting (dict): Dictionary containing the dataset names (key) and their horizons (value).
+
+    Returns:
+        dict: Dictionary containing the dataset path (key), and a tuple of their frequencies, and their sizes (value).
+    """
     dataset_names = config.keys()
     dataset_paths = [path + "/" + name + "/test/data.csv" for name in dataset_names]
     # Get the frequencies for each dataset
