@@ -49,12 +49,15 @@ if __name__ == "__main__":
         for split in splits:
             arrow_dir = os.path.join(monash_dir, dataset, split)
             freq = FREQS[dataset]
-            arrow_to_csv(arrow_dir, freq)
-            csv_file = os.path.join(monash_dir, dataset, split + "/data.csv")
-            df = pd.read_csv(csv_file)
-            # fill missing values with 0
-            df.fillna(0, inplace=True)
-            df.to_csv(csv_file, index=False)
+            if os.path.exists(os.path.join(monash_dir, dataset, split + "/data.csv")) == False:
+                if freq == "1YE":
+                    freq = "1Y"
+                arrow_to_csv(arrow_dir, freq)
+                csv_file = os.path.join(monash_dir, dataset, split + "/data.csv")
+                df = pd.read_csv(csv_file)
+                # fill missing values with 0
+                df.fillna(0, inplace=True)
+                df.to_csv(csv_file, index=False)
             
 
 

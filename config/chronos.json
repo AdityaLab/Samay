@@ -1,3 +1,6 @@
 {
-    "repo": "amazon/chronos-t5-small"
+    "repo": "amazon/chronos-t5-small",
+    "config": {
+        "num_layers": 6
+    }
 }

@@ -8,7 +8,7 @@ import torch
 from pandas._libs.tslibs.period import Period
 from torch.utils.data import Dataset
 
-from samay.models.uni2ts.distribution import MixtureOutput
+from uni2ts.distribution import MixtureOutput
 
 # for finetune class
 
