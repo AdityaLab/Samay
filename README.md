@@ -8,8 +8,7 @@ Current repository contains the following models:
 2. [MOMENT](https://arxiv.org/abs/2402.03885)
 3. [TimesFM](https://arxiv.org/html/2310.10688v2)
 4. [Chronos](https://arxiv.org/abs/2403.07815)
-5. [MOIRAI](https://arxiv.org/abs/2402.02592)
-6. [TinytTimeMixers](https://arxiv.org/abs/2401.03955)
+5. [TinytTimeMixers](https://arxiv.org/abs/2401.03955)
 
 More models will be added soon...
 
@@ -19,23 +18,6 @@ You can add the package to your project by running the following command:
 
 ```bash
 pip install git+https://github.com/AdityaLab/Samay.git
-```
-
-**Note:** If the installation fails because rust is missing run:
-
-For MacOS:
-
-```bash
-brew install rustup
-rustup-init
-source ~/.cargo/env
-```
-
-For Linux:
-
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source ~/.cargo/env
 ```
 
 ### Development workflow
@@ -56,7 +38,7 @@ uv sync --reinstall
 
 ## Usage Examples
 
-Check out example notebooks at `examples/` for more detailed examples. We also have google colab notebooks at `examples/colab/`.
+Check out example notebooks at https://github.com/AdityaLab/Samay/tree/main/example to quickly get started. 
 
 ### LPTM
 
@@ -134,43 +116,6 @@ val_dataset = TimesfmDataset(name="ett", datetime_col='date', path='data/ETTh1.c
 
 ```python
 avg_loss, trues, preds, histories = tfm.evaluate(val_dataset)
-```
-
-### MOIRAI
-
-#### Loading  Model
-
-```python
-from samay.dataset import MoiraiDataset
-from samay.model import MoiraiTSModel
-
-repo = "Salesforce/moirai-moe-1.0-R-small"
-config = {
-        "context_len": 128,
-        "horizon_len": 64,
-        "num_layers": 100,
-        "model_type": "moirai-moe",
-        "model_size": "small"
-    }
-
-moirai_model = MoiraiTSModel(repo=repo, config=config)
-```
-
-#### Loading Dataset
-
-```python
-
-train_dataset = MoiraiDataset(name="ett", mode="train", path="data/ETTh1.csv", datetime_col="date", freq="h",
-                            context_len=config['context_len'], horizon_len=config['horizon_len'])
-
-test_dataset = MoiraiDataset(name="ett", mode="test", path="data/ETTh1.csv", datetime_col="date", freq="h",
-                            context_len=config['context_len'], horizon_len=config['horizon_len'])
-```
-
-#### Zero-Forecasting
-
-```python
-eval_results, trues, preds, histories = moirai_model.evaluate(test_dataset, metrics=["MSE", "MASE"])
 ```
 
 ### Support

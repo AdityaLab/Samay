@@ -1,14 +1,15 @@
 import json
-import subprocess
 import os
+import subprocess
+from collections import defaultdict
 
 import numpy as np
 import pandas as pd
 import yaml
-from tqdm import tqdm
-from datasets import load_from_disk 
+from datasets import load_from_disk
 from matplotlib import pyplot as plt
-from collections import defaultdict
+from tqdm import tqdm
+
 
 def get_least_used_gpu():
     """Get the least used GPU device."""
@@ -143,7 +144,15 @@ def arrow_to_csv(arrow_dir, freq=None):
     print(f"Conversion complete for {arrow_dir}.")
 
 
-def visualize(task_name="forecasting", trues=None, preds=None, history=None, masks=None, context_len=512, **kwargs):
+def visualize(
+    task_name="forecasting",
+    trues=None,
+    preds=None,
+    history=None,
+    masks=None,
+    context_len=512,
+    **kwargs,
+):
     """
     Visualize the data.
     If task_name is "forecasting", trues, preds, and history should be provided, which channel_idx and time_idx are optional.
@@ -178,7 +187,7 @@ def visualize(task_name="forecasting", trues=None, preds=None, history=None, mas
         pred = preds[time_idx, channel_idx, :]
 
         # Set figure size proportional to the number of forecasts
-        plt.figure(figsize=(0.2 * len(history), 4))
+        plt.figure(figsize=(0.02 * len(history), 4))
 
         # Plotting the first time series from history
         plt.plot(
@@ -286,17 +295,27 @@ def prep_finetune_config(file_path: str = None, config: dict = None):
     }
 
 
-def get_gifteval_datasets(path:str):
+def get_gifteval_datasets(path: str):
     # Get the list of hierarchical and direct datasets in the given path
-    data = [x for x in os.listdir(path) if x.startswith(".")==False]
+    data = [x for x in os.listdir(path) if x.startswith(".") == False]
     hier, dire = [], []
     for x in data:
         if os.path.isdir(os.path.join(path, x)):
             if os.path.exists(os.path.join(path, x, "data.csv")):
                 dire.append(x)
             else:
-                hier.append((x, [p for p in os.listdir(os.path.join(path, x)) if os.path.isdir(os.path.join(path, x, p)) and p.startswith(".")==False]))
-    
+                hier.append(
+                    (
+                        x,
+                        [
+                            p
+                            for p in os.listdir(os.path.join(path, x))
+                            if os.path.isdir(os.path.join(path, x, p))
+                            and p.startswith(".") == False
+                        ],
+                    )
+                )
+
     # Get file sizes for each dataset
     fil1 = []
     for d in dire:
@@ -304,33 +323,34 @@ def get_gifteval_datasets(path:str):
         size = os.path.getsize(d_path)
         df = pd.read_csv(d_path)
         freq = pd.infer_freq(df["timestamp"])
-        fil1.append((d, freq, size/1e6))
-    
+        fil1.append((d_path, freq, size / 1e6))
+
     fil2 = []
-    for data,freq in hier:
+    for data, freq in hier:
         for f in freq:
             d_path = os.path.join(path, data, f, "data.csv")
             size = os.path.getsize(d_path)
-            fil2.append((data, f, size/1e6))
+            fil2.append((d_path, f, size / 1e6))
     fil = fil1 + fil2
     fil.sort(key=lambda x: x[2])
     # Create a dictionary to hold the dataset names and their frequencies
-    dataset_dict = defaultdict(list)
-    for name, freq, size in fil:
-        dataset_dict[name].append(freq)
+    dataset_dict = defaultdict()
+    for p, freq, size in fil:
+        dataset_dict[p] = (freq, size)
     # Convert the defaultdict to a regular dict
     dataset_dict = dict(dataset_dict)
 
     return dataset_dict, fil
 
+
 def get_monash_datasets(path):
     datasets = os.listdir(path)
-    
+
     # Get the filesizes
     data = []
     for x in datasets:
         d_path = os.path.join(path, x, "test", "data.csv")
-        fsize = os.path.getsize(d_path)/1e6
+        fsize = os.path.getsize(d_path) / 1e6
         data.append((x, fsize))
 
     data = sorted(data, key=lambda x: x[1])
@@ -354,7 +374,7 @@ def get_monash_datasets(path):
 
     return NAMES, filesizes
 
-  
+
 if __name__ == "__main__":
     # ts_path = "/nethome/sli999/TSFMProject/src/tsfmproject/models/moment/data/ECG5000_TRAIN.ts"
     # csv_path = "/nethome/sli999/TSFMProject/src/tsfmproject/models/moment/data/ECG5000_TRAIN.csv"
