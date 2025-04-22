@@ -1,5 +1,5 @@
-import math
 import json
+import math
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -16,21 +16,21 @@ from samay.dataset import MoiraiDataset
 
 # from chronos import ChronosPipeline
 from samay.models.chronosforecasting.chronos.chronos import ChronosPipeline
-from samay.models.uni2ts.model.moirai import MoiraiForecast, MoiraiModule
-from samay.models.uni2ts.model.moirai.finetune import MoiraiFinetune
-from samay.models.uni2ts.model.moirai_moe import MoiraiMoEForecast, MoiraiMoEModule
-from samay.models.uni2ts.module.norm import RMSNorm
+from samay.moirai_utils import convert_module_kwargs, filter_dict
+from uni2ts.model.moirai import MoiraiForecast, MoiraiModule
+from uni2ts.model.moirai.finetune import MoiraiFinetune
+from uni2ts.model.moirai_moe import MoiraiMoEForecast, MoiraiMoEModule
+from uni2ts.module.norm import RMSNorm
 
 # from gluonts.model.forecast import Forecast, QuantileForecast, SampleForecast
-from samay.models.uni2ts.module.position import (
+from uni2ts.module.position import (
     BinaryAttentionBias,
     LearnedEmbedding,
     LearnedProjection,
 )
 
 # For moirai finetuning
-from samay.models.uni2ts.module.ts_embed import MultiInSizeLinear, MultiOutSizeLinear
-from samay.moirai_utils import convert_module_kwargs, filter_dict
+from uni2ts.module.ts_embed import MultiInSizeLinear, MultiOutSizeLinear
 
 from .metric import *
 from .models.chronosforecasting.chronos.chronos import ChronosConfig, ChronosPipeline
@@ -1390,7 +1390,7 @@ class MoiraiTSModel(Basemodel):
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        if model_type == "moirai": # standard moirai
+        if model_type == "moirai":  # standard moirai
             if repo is None:
                 repo = f"Salesforce/moirai-1.1-R-{model_size}"
             self.repo = repo
@@ -1406,7 +1406,7 @@ class MoiraiTSModel(Basemodel):
                 past_feat_dynamic_real_dim=self.past_feat_dynamic_real_dim,
             )
 
-        elif model_type == "moirai-moe": # moirai with Mixture of Experts
+        elif model_type == "moirai-moe":  # moirai with Mixture of Experts
             if repo is None:
                 repo = f"Salesforce/moirai-moe-1.0-R-{model_size}"
             self.repo = repo
@@ -1699,10 +1699,24 @@ class MoiraiTSModel(Basemodel):
         with torch.no_grad():  # No need to compute gradients
             # Iterate over each window
             for input, label, forecast in zip(input_it, label_it, forecast_it):
-                true_values = label["target"].squeeze() if isinstance(label["target"], np.ndarray) else np.array(label["target"])
-                past_values = input["target"].squeeze() if isinstance(input["target"], np.ndarray) else np.array(input["target"])
-                quantiles = np.percentile(forecast[:,:min(self.horizon_len, true_values.shape[0])], [q*100 for q in quantile_levels], axis=0)
-                pred_values = np.median(forecast, axis=0)[:min(self.horizon_len, true_values.shape[0])] # Median of the forecasted values
+                true_values = (
+                    label["target"].squeeze()
+                    if isinstance(label["target"], np.ndarray)
+                    else np.array(label["target"])
+                )
+                past_values = (
+                    input["target"].squeeze()
+                    if isinstance(input["target"], np.ndarray)
+                    else np.array(input["target"])
+                )
+                quantiles = np.percentile(
+                    forecast[:, : min(self.horizon_len, true_values.shape[0])],
+                    [q * 100 for q in quantile_levels],
+                    axis=0,
+                )
+                pred_values = np.median(forecast, axis=0)[
+                    : min(self.horizon_len, true_values.shape[0])
+                ]  # Median of the forecasted values
 
                 length = len(past_values)
 
@@ -1745,7 +1759,9 @@ class MoiraiTSModel(Basemodel):
         histories = [np.array(histories[key]) for key in histories.keys()]
         trues = [np.array(trues[key]) for key in trues.keys()]
         preds = [np.array(preds[key]) for key in preds.keys()]
-        quantile_preds = [np.array(quantile_preds[key]) for key in quantile_preds.keys()]
+        quantile_preds = [
+            np.array(quantile_preds[key]) for key in quantile_preds.keys()
+        ]
         quantile_preds = [np.transpose(q, (1, 0, 2)) for q in quantile_preds]
 
         mse = np.mean(np.array([MSE(t, p) for t, p in zip(trues, preds)]), axis=0)
@@ -1756,13 +1772,30 @@ class MoiraiTSModel(Basemodel):
         nrmse = np.mean(np.array([NRMSE(t, p) for t, p in zip(trues, preds)]), axis=0)
         smape = np.mean(np.array([SMAPE(t, p) for t, p in zip(trues, preds)]), axis=0)
         msis = np.mean(np.array([MSIS(t, p) for t, p in zip(trues, preds)]), axis=0)
-        nd = np.mean(np.array([ND(t, p) for t,p in zip(trues, preds)]), axis=0)
+        nd = np.mean(np.array([ND(t, p) for t, p in zip(trues, preds)]), axis=0)
 
-        mwsq = np.mean(np.array([MWSQ(t, p, q) for t,p,q in zip(trues, preds,quantile_preds)]), axis=0)
-        crps = np.mean(np.array([CRPS(t, p, q) for t,p,q in zip(trues, preds,quantile_preds)]), axis=0)
+        mwsq = np.mean(
+            np.array([MWSQ(t, p, q) for t, p, q in zip(trues, preds, quantile_preds)]),
+            axis=0,
+        )
+        crps = np.mean(
+            np.array([CRPS(t, p, q) for t, p, q in zip(trues, preds, quantile_preds)]),
+            axis=0,
+        )
 
-        leaderboard_metrics = {"mse": mse, "mae": mae, "mase": mase, "mape": mape, "rmse": rmse,
-                       "nrmse": nrmse, "smape": smape, "msis": msis, "nd": nd, "mwsq": mwsq, "crps": crps}
+        leaderboard_metrics = {
+            "mse": mse,
+            "mae": mae,
+            "mase": mase,
+            "mape": mape,
+            "rmse": rmse,
+            "nrmse": nrmse,
+            "smape": smape,
+            "msis": msis,
+            "nd": nd,
+            "mwsq": mwsq,
+            "crps": crps,
+        }
 
         if leaderboard:
             return leaderboard_metrics
@@ -1780,9 +1813,11 @@ class MoiraiTSModel(Basemodel):
         """
         model_size = self.repo.split("-")[-1]
         if self.model_type == "moirai":
-            model_config = f"../src/samay/models/uni2ts/cli/conf/finetune/model/moirai_1.1_R_{model_size}.yaml"
+            model_config = (
+                f"../src/uni2ts/cli/conf/finetune/model/moirai_1.1_R_{model_size}.yaml"
+            )
         elif self.model_type == "moirai-moe":
-            model_config = f"../src/samay/models/uni2ts/cli/conf/finetune/model/moirai_moe_1.0_R_{model_size}.yaml"
+            model_config = f"../src/uni2ts/cli/conf/finetune/model/moirai_moe_1.0_R_{model_size}.yaml"
 
         with open(model_config, "r") as file:
             fin_model_config = yaml.safe_load(file)
@@ -1820,7 +1855,7 @@ class MoiraiTSModel(Basemodel):
             0
         ]  # update patch_size
 
-        # Trainer configuration (from samay.models.uni2ts/cli/train.py)
+        # Trainer configuration (from uni2ts/cli/train.py)
         # mod_torch is the trainer configuration without _target_ fields or any key
         # whose value is neither a list or dictionary
         if kwargs["tf32"]:
