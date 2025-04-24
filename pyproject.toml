@@ -43,3 +43,6 @@ dev = [
     "ruff>=0.8.1",
     "wandb>=0.18.5",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/samay", "src/uni2ts"]
