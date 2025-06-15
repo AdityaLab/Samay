@@ -32,7 +32,7 @@ from uni2ts.module.position import (
 # For moirai finetuning
 from uni2ts.module.ts_embed import MultiInSizeLinear, MultiOutSizeLinear
 
-from .metric import *
+from .metric import CRPS, MAE, MAPE, MASE, MSE, MSIS, MWSQ, ND, NRMSE, RMSE, SMAPE
 from .models.chronosforecasting.chronos.chronos import ChronosConfig, ChronosPipeline
 from .models.chronosforecasting.chronos.chronos_bolt import (
     ChronosBoltConfig,
@@ -41,15 +41,13 @@ from .models.chronosforecasting.chronos.chronos_bolt import (
 from .models.lptm.model.backbone import LPTMPipeline
 from .models.moment.momentfm.models.moment import MOMENTPipeline
 from .models.moment.momentfm.utils.masking import Masking
+from .models.Time_MoE.time_moe.models.configuration_time_moe import TimeMoeConfig
+from .models.Time_MoE.time_moe.models.modeling_time_moe import TimeMoeForPrediction
 from .models.timesfm import timesfm as tfm
 from .models.timesfm.timesfm import pytorch_patched_decoder as ppd
 from .models.TinyTimeMixer.models.tinytimemixer.modeling_tinytimemixer import (
     TinyTimeMixerForPrediction,
 )
-
-from .models.Time_MoE.time_moe.models.modeling_time_moe import TimeMoeForPrediction
-from .models.Time_MoE.time_moe.models.configuration_time_moe import TimeMoeConfig
-
 from .utils import get_least_used_gpu, visualize
 
 
@@ -2105,7 +2103,9 @@ class TimeMoEModel(Basemodel):
                 forecast_seq = forecast_seq.float().to(self.device)
                 loss_mask = loss_mask.float().to(self.device)
                 optimizer.zero_grad()
-                output = self.model(input_ids=context, labels=forecast_seq, loss_masks=loss_mask)
+                output = self.model(
+                    input_ids=context, labels=forecast_seq, loss_masks=loss_mask
+                )
                 loss = output.loss
                 loss.backward()
                 optimizer.step()
@@ -2114,7 +2114,6 @@ class TimeMoEModel(Basemodel):
             print(f"Epoch {epoch}, Loss: {avg_loss:.4f}")
 
         self.model.eval()
-
 
     def plot(self, dataset, **kwargs):
         """
@@ -2132,25 +2131,33 @@ class TimeMoEModel(Basemodel):
                 context, forecast_seq = data
                 context = context.float().to(self.device)
                 forecast_seq = forecast_seq.float().to(self.device)
-                output = self.model.generate(inputs=context, max_new_tokens=forecast_seq.shape[1])
-                pred = output[:, -forecast_seq.shape[1]:]
+                output = self.model.generate(
+                    inputs=context, max_new_tokens=forecast_seq.shape[1]
+                )
+                pred = output[:, -forecast_seq.shape[1] :]
                 pred = pred.cpu().numpy()
                 true = forecast_seq.cpu().numpy()
                 history = context.cpu().numpy()
                 trues.append(true)
                 preds.append(pred)
                 histories.append(history)
-        trues = np.concatenate(trues, axis=0).reshape(-1, dataset.n_channels, dataset.horizon_len)
-        preds = np.concatenate(preds, axis=0).reshape(-1, dataset.n_channels, dataset.horizon_len)
-        histories = np.concatenate(histories, axis=0).reshape(-1, dataset.n_channels, dataset.context_len)
-        
+        trues = np.concatenate(trues, axis=0).reshape(
+            -1, dataset.n_channels, dataset.horizon_len
+        )
+        preds = np.concatenate(preds, axis=0).reshape(
+            -1, dataset.n_channels, dataset.horizon_len
+        )
+        histories = np.concatenate(histories, axis=0).reshape(
+            -1, dataset.n_channels, dataset.context_len
+        )
+
         visualize(
             task_name="forecasting",
             trues=trues,
             preds=preds,
             history=histories,
         )
-        
+
     def evaluate(self, dataset, **kwargs):
         """
         Evaluate the model on the given dataset.
@@ -2168,17 +2175,25 @@ class TimeMoEModel(Basemodel):
                 context, forecast_seq = data
                 context = context.float().to(self.device)
                 forecast_seq = forecast_seq.float().to(self.device)
-                output = self.model.generate(inputs=context, max_new_tokens=forecast_seq.shape[1])
-                pred = output[:, -forecast_seq.shape[1]:]
+                output = self.model.generate(
+                    inputs=context, max_new_tokens=forecast_seq.shape[1]
+                )
+                pred = output[:, -forecast_seq.shape[1] :]
                 pred = pred.cpu().numpy()
                 true = forecast_seq.cpu().numpy()
                 history = context.cpu().numpy()
                 trues.append(true)
                 preds.append(pred)
                 histories.append(history)
-        trues = np.concatenate(trues, axis=0).reshape(-1, dataset.n_channels, dataset.horizon_len)
-        preds = np.concatenate(preds, axis=0).reshape(-1, dataset.n_channels, dataset.horizon_len)
-        histories = np.concatenate(histories, axis=0).reshape(-1, dataset.n_channels, dataset.context_len)
+        trues = np.concatenate(trues, axis=0).reshape(
+            -1, dataset.n_channels, dataset.horizon_len
+        )
+        preds = np.concatenate(preds, axis=0).reshape(
+            -1, dataset.n_channels, dataset.horizon_len
+        )
+        histories = np.concatenate(histories, axis=0).reshape(
+            -1, dataset.n_channels, dataset.context_len
+        )
 
         # Calculate metrics
         mse = MSE(trues, preds)
@@ -2202,7 +2217,6 @@ class TimeMoEModel(Basemodel):
             "msis": msis,
             "nd": nd,
         }
-        
 
 
 if __name__ == "__main__":
