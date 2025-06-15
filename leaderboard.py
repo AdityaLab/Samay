@@ -7,10 +7,6 @@ import time
 import pandas as pd
 import torch
 
-src_path = os.path.abspath(os.path.join("src"))
-if src_path not in sys.path:
-    sys.path.insert(0, src_path)
-
 from samay.dataset import (
     ChronosBoltDataset,
     ChronosDataset,
@@ -267,7 +263,7 @@ if __name__ == "__main__":
             # pred_len, context_len = calc_pred_and_context_len(freq)
             pred_len, context_len = 96, 512
             if SERIES == "monash":
-                pred_len = horizon
+                pred_len = MONASH_SETTINGS[fname]
 
             if model_name == "timesfm":
                 args["config"]["horizon_len"] = pred_len
@@ -390,7 +386,7 @@ if __name__ == "__main__":
                 start = time.time()
                 metrics = model.evaluate(
                     dataset,
-                    horizon_len=dataset.horizon_lend,
+                    horizon_len=dataset.horizon_len,
                     quantile_levels=[0.1, 0.5, 0.9],
                 )
                 end = time.time()
