@@ -7,15 +7,10 @@ import time
 import pandas as pd
 import torch
 
-from samay.dataset import (
-    ChronosBoltDataset,
-    ChronosDataset,
-    LPTMDataset,
-    MoiraiDataset,
-    MomentDataset,
-    TimesfmDataset,
-    TinyTimeMixerDataset,
-)
+
+from samay.model import TimesfmModel, MomentModel, ChronosModel, ChronosBoltModel, TinyTimeMixerModel, MoiraiTSModel, LPTMModel, TimeMoEModel
+from samay.dataset import TimesfmDataset, MomentDataset, ChronosDataset, ChronosBoltDataset, TinyTimeMixerDataset, MoiraiDataset, LPTMDataset, TimeMoEDataset
+from samay.utils import load_args, get_gifteval_datasets, get_monash_datasets
 from samay.metric import *
 from samay.model import (
     ChronosBoltModel,
@@ -42,6 +37,9 @@ from samay.utils import get_gifteval_datasets, get_monash_datasets, load_args
 #     "hierarchical_sales": ['D', 'W'],
 #     "restaurant": ['D'],
 # }
+
+
+SERIES = "gifteval" # "monash" or "gifteval"
 
 print("Loading datasets...")
 # start = time.time()
@@ -82,7 +80,8 @@ filesizes = [
 ]
 
 MODEL_NAMES = ["moirai", "chronos", "chronosbolt", "timesfm", "moment", "ttm"]
-SERIES = "monash"
+# SERIES = "monash"
+
 
 MODEL_NAMES = ["moirai", "chronos", "chronosbolt", "timesfm", "moment", "ttm", "lptm"]
 MONASH_NAMES = {
@@ -202,8 +201,8 @@ def calc_pred_and_context_len(freq):
 
 
 if __name__ == "__main__":
-    mod_times = {}
-    for model_name in ["chronos"]:
+    
+    for model_name in ["timemoe"]:
         print(f"Evaluating model: {model_name}")
         # create csv file for leaderboard if not already created
         csv_path = f"leaderboard/{model_name}.csv"
@@ -249,6 +248,9 @@ if __name__ == "__main__":
             args = load_args(arg_path)
         elif model_name == "lptm":
             arg_path = "config/lptm.json"
+            args = load_args(arg_path)
+        elif model_name == "timemoe":
+            arg_path = "config/timemoe.json"
             args = load_args(arg_path)
 
         mod_start = time.time()
@@ -470,6 +472,23 @@ if __name__ == "__main__":
                 print(
                     f"Time taken for evaluation of {fname}: {end - start:.2f} seconds"
                 )
+
+                del model
+                del dataset
+                torch.cuda.empty_cache()
+                gc.collect()
+
+
+            elif model_name == "timemoe":
+                dataset = TimeMoEDataset(name=fname, datetime_col='timestamp', freq=freq, batch_size=64,
+                                        path=dataset_path, mode='test', context_len=context_len, horizon_len=pred_len, boundaries=[-1, -1, -1])
+                args["config"]["horizon_len"] = dataset.horizon_len
+                model = TimeMoEModel(**args)
+                start = time.time()
+                metrics = model.evaluate(dataset)
+                end = time.time()
+                print(f"Size of dataset: {fs:.2f} MB")
+                print(f"Time taken for evaluation of {fname}: {end-start:.2f} seconds")
 
                 del model
                 del dataset

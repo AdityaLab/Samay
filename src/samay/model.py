@@ -2095,6 +2095,7 @@ class TimeMoEModel(Basemodel):
         self.model.to(self.device)
         self.model.train()
         optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-4)
+        self.model.config.horizon_lengths = [dataset.horizon_len]
         for epoch in range(5):
             total_loss = 0
             for i, data in enumerate(dataloader):

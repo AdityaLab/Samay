@@ -1808,6 +1808,14 @@ class TimeMoEDataset(BaseDataset):
 
     def _read_data(self):
         self.df = pd.read_csv(self.data_path)
+        self.horizon_len = min(self.horizon_len, int(0.3*len(self.df)+1))
+
+        self.n_channels = self.df.shape[1] - 1
+        
+        if self.datetime_col:
+            self.df.drop(columns=[self.datetime_col], inplace=True)
+
+        self.df = np.array(self.df)
 
         if self.boundaries[0] == 0:
             self.boundaries[0] = int(len(self.df) * 0.5)
@@ -1816,18 +1824,16 @@ class TimeMoEDataset(BaseDataset):
         if self.boundaries[2] == 0:
             self.boundaries[2] = int(len(self.df) - 1)
 
+        scaler = StandardScaler()
         if self.boundaries == [-1, -1, -1]:
             # use all data for training
             self.boundaries = [0, 0, len(self.df) - 1]
 
-        self.horizon_len = min(self.horizon_len, int(0.3 * len(self.df) + 1))
+            scaler = scaler.fit(self.df)
+        else:
+            # fit the scaler on the training data
+            scaler = scaler.fit(self.df[slice(0, self.boundaries[0]), :])
 
-        self.n_channels = self.df.shape[1] - 1
-
-        if self.datetime_col:
-            self.df.drop(columns=[self.datetime_col], inplace=True)
-
-        self.df = np.array(self.df)
 
         if self.mode == "train":
             self.data = self.df[slice(0, self.boundaries[0]), :]
@@ -1835,8 +1841,6 @@ class TimeMoEDataset(BaseDataset):
         elif self.mode == "test":
             self.data = self.df[slice(self.boundaries[1], self.boundaries[2]), :]
 
-        scaler = StandardScaler()
-        scaler = scaler.fit(self.df[slice(0, self.boundaries[0]), :])
         self.data = scaler.transform(self.data)
 
         self.length_timeseries = self.data.shape[0]
