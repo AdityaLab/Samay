@@ -7,7 +7,7 @@ def main():
     dataset = MomentDataset(
         name="ett",
         datetime_col="date",
-        path="/nethome/sli999/TSFMProject/src/tsfmproject/models/moment/data/ETTh1.csv",
+        path="data/data/ETTh1.csv",
     )
 
     # repo = "google/timesfm-1.0-200m-pytorch"

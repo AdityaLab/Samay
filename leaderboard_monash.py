@@ -1,27 +1,29 @@
 import datetime
-import gc
 import os
 import sys
 import time
 
+import numpy as np
 import pandas as pd
-import torch
 
-
-from samay.model import TimesfmModel, MomentModel, ChronosModel, ChronosBoltModel, TinyTimeMixerModel, MoiraiTSModel, LPTMModel, TimeMoEModel
-from samay.dataset import TimesfmDataset, MomentDataset, ChronosDataset, ChronosBoltDataset, TinyTimeMixerDataset, MoiraiDataset, LPTMDataset, TimeMoEDataset
-from samay.utils import load_args, get_gifteval_datasets, get_monash_datasets
+from samay.dataset import (
+    ChronosBoltDataset,
+    ChronosDataset,
+    MoiraiDataset,
+    MomentDataset,
+    TimesfmDataset,
+    TinyTimeMixerDataset,
+)
 from samay.metric import *
 from samay.model import (
     ChronosBoltModel,
     ChronosModel,
-    LPTMModel,
     MoiraiTSModel,
     MomentModel,
     TimesfmModel,
     TinyTimeMixerModel,
 )
-from samay.utils import get_gifteval_datasets, get_monash_datasets, load_args
+from samay.utils import get_gifteval_datasets, load_args
 
 # ECON_NAMES = {
 #     "m4_yearly": ["Y"],
@@ -38,12 +40,9 @@ from samay.utils import get_gifteval_datasets, get_monash_datasets, load_args
 #     "restaurant": ['D'],
 # }
 
-
-SERIES = "gifteval" # "monash" or "gifteval"
-
 print("Loading datasets...")
 # start = time.time()
-# df = pd.read_csv("data/gifteval/gifteval_datasets.csv")
+# df = pd.read_csv("data/monash/monash_datasets.csv")
 # filesizes = [(x[0], x[1], x[2]) for x in df.values]
 # df1 = df.groupby("datasets").agg({"freq":list}).reset_index()
 # NAMES = dict(zip(df1["datasets"], df1["freq"]))
@@ -51,91 +50,76 @@ print("Loading datasets...")
 # print(f"Time taken to load datasets: {end-start:.2f} seconds")
 
 NAMES = {
-    "LOOP_SEATTLE": ["H", "5T"],
-    "bitbrains_fast_storage": ["H", "5T"],
-    "bitbrains_rnd": ["H", "5T"],
-    "electricity": ["H", "15T"],
-    "m4_daily": ["D"],
-    "m4_monthly": ["M"],
-    "m4_quarterly": ["Q-DEC"],
-    "m4_yearly": ["A-DEC"],
-    "solar": ["W", "D", "H", "10T"],
-    "temperature_rain_with_missing": ["D"],
+    "kaggle_web_traffic": ["D"],
+    "london_smart_meters": ["30T"],
+    "solar_4_seconds": ["4S"],
+    "weather": ["D"],
+    "wind_4_seconds": ["4S"],
+    "wind_farms_minutely": ["T"],
 }
 
 filesizes = [
-    #   ('bitbrains_fast_storage', 'H', 15.636815),
-    #   ('LOOP_SEATTLE', 'H', 27.053807),
-    #   ('solar', '10T', 33.396137),
-    #   ('m4_yearly', 'A-DEC', 51.396002),
-    #   ('bitbrains_rnd', '5T', 63.693623),
-    #   ('electricity', 'H', 110.57665),
-    #   ('temperature_rain_with_missing', 'D', 113.989065),
-    ("bitbrains_fast_storage", "5T", 160.063361),
-    ("m4_quarterly", "Q-DEC", 163.930224),
-    ("m4_daily", "D", 316.27674),
-    ("LOOP_SEATTLE", "5T", 324.080655),
-    ("electricity", "15T", 442.387613),
-    ("m4_monthly", "M", 1025.335628),
+    ("solar_4_seconds", "4S", 181.726275),
+    ("wind_4_seconds", "4S", 184.145404),
+    ("kaggle_web_traffic", "D", 639.06982),
+    ("wind_farms_minutely", "T", 835.989173),
+    ("weather", "D", 1180.743458),
+    ("london_smart_meters", "30T", 3320.44015),
 ]
 
 MODEL_NAMES = ["moirai", "chronos", "chronosbolt", "timesfm", "moment", "ttm"]
-# SERIES = "monash"
-
-
-MODEL_NAMES = ["moirai", "chronos", "chronosbolt", "timesfm", "moment", "ttm", "lptm"]
 MONASH_NAMES = {
     # "weather": "1D",
-    "tourism_yearly": "1YE",
-    "tourism_quarterly": "1Q",
-    "tourism_monthly": "1M",
-    "cif_2016": "1M",
+    "tourism_yearly": ["1YE"],
+    "tourism_quarterly": ["1Q"],
+    "tourism_monthly": ["1M"],
+    "cif_2016": ["1M"],
     # "london_smart_meters": ["30min"],
-    "australian_electricity_demand": "30min",
+    "australian_electricity_demand": ["30min"],
     # "wind_farms_minutely": ["1min"],
-    "bitcoin": "1D",
-    "pedestrian_counts": "1h",
-    "vehicle_trips": "1D",
-    "kdd_cup_2018": "1H",
-    "nn5_daily": "1D",
-    "nn5_weekly": "1W",
+    "bitcoin": ["1D"],
+    "pedestrian_counts": ["1h"],
+    "vehicle_trips": ["1D"],
+    "kdd_cup_2018": ["1H"],
+    "nn5_daily": ["1D"],
+    "nn5_weekly": ["1W"],
     # "kaggle_web_traffic": ["1D"],
     # "kaggle_web_traffic_weekly": ["1W"],
-    "solar_10_minutes": "10min",
-    "solar_weekly": "1W",
-    "car_parts": "1M",
-    "fred_md": "1M",
-    "traffic_hourly": "1h",
-    "traffic_weekly": "1W",
-    "hospital": "1M",
-    "covid_deaths": "1D",
-    "sunspot": "1D",
-    "saugeenday": "1D",
-    "us_births": "1D",
-    "solar_4_seconds": "4s",
-    "wind_4_seconds": "4s",
-    "rideshare": "1h",
-    "oikolab_weather": "1h",
-    "temperature_rain": "1D",
+    "solar_10_minutes": ["10min"],
+    "solar_weekly": ["1W"],
+    "car_parts": ["1M"],
+    "fred_md": ["1M"],
+    "traffic_hourly": ["1h"],
+    "traffic_weekly": ["1W"],
+    "hospital": ["1M"],
+    "covid_deaths": ["1D"],
+    "sunspot": ["1D"],
+    "saugeenday": ["1D"],
+    "us_births": ["1D"],
+    "solar_4_seconds": ["4s"],
+    "wind_4_seconds": ["4s"],
+    "rideshare": ["1h"],
+    "oikolab_weather": ["1h"],
+    "temperature_rain": ["1D"],
 }
 
 MONASH_SETTINGS = {
-    # "weather": 30,
+    "weather": 30,
     "tourism_yearly": 4,
     "tourism_quarterly": 8,
     "tourism_monthly": 24,
     "cif_2016": 12,
-    # "london_smart_meters": 60,
+    "london_smart_meters": 60,
     "australian_electricity_demand": 60,
-    # "wind_farms_minutely": 60,
+    "wind_farms_minutely": 60,
     "bitcoin": 30,
     "pedestrian_counts": 48,
     "vehicle_trips": 30,
     "kdd_cup_2018": 48,
     "nn5_daily": 56,
     "nn5_weekly": 8,
-    # "kaggle_web_traffic": 59,
-    # "kaggle_web_traffic_weekly": 8,
+    "kaggle_web_traffic": 59,
+    "kaggle_web_traffic_weekly": 8,
     "solar_10_minutes": 60,
     "solar_weekly": 5,
     "car_parts": 12,
@@ -155,19 +139,6 @@ MONASH_SETTINGS = {
 }
 
 MODEL_CONTEXT_LEN = {"timesfm": 32, "moment": 512, "chronos": 512}
-
-start = time.time()
-if SERIES == "gifteval":
-    # Load the datasets from the Gifteval dataset
-    NAMES = get_gifteval_datasets("data/gifteval")
-elif SERIES == "monash":
-    # Load the datasets from the Monash dataset
-    NAMES = get_monash_datasets("data/monash", MONASH_NAMES, MONASH_SETTINGS)
-
-end = time.time()
-print(NAMES)
-
-print(f"Time taken to load datasets: {end - start:.2f} seconds")
 
 
 def calc_pred_and_context_len(freq):
@@ -201,13 +172,11 @@ def calc_pred_and_context_len(freq):
 
 
 if __name__ == "__main__":
-    
-    for model_name in ["timemoe"]:
+    mod_times = {}
+    for model_name in ["moirai"]:
         print(f"Evaluating model: {model_name}")
         # create csv file for leaderboard if not already created
-        csv_path = f"leaderboard/{model_name}.csv"
-        if SERIES == "monash":
-            csv_path = f"leaderboard/monash_{model_name}.csv"
+        csv_path = f"leaderboard/monash_{model_name}.csv"
         if not os.path.exists(csv_path):
             print(f"Creating leaderboard csv file: {csv_path}")
             df = pd.DataFrame(
@@ -246,12 +215,6 @@ if __name__ == "__main__":
         elif model_name == "moirai":
             arg_path = "config/moirai.json"
             args = load_args(arg_path)
-        elif model_name == "lptm":
-            arg_path = "config/lptm.json"
-            args = load_args(arg_path)
-        elif model_name == "timemoe":
-            arg_path = "config/timemoe.json"
-            args = load_args(arg_path)
 
         mod_start = time.time()
         mod_timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -263,10 +226,7 @@ if __name__ == "__main__":
             # Adjust the context and prediction length based on the frequency
 
             # pred_len, context_len = calc_pred_and_context_len(freq)
-            pred_len, context_len = 96, 512
-            if SERIES == "monash":
-                pred_len = MONASH_SETTINGS[fname]
-
+            pred_len, context_len = MONASH_SETTINGS[fname], 512
             if model_name == "timesfm":
                 args["config"]["horizon_len"] = pred_len
                 args["config"]["context_len"] = context_len
@@ -279,7 +239,11 @@ if __name__ == "__main__":
                 args["config"]["horizon_len"] = pred_len
                 args["config"]["context_len"] = context_len
 
-            dataset_path = fpath
+            # Set the dataset path
+            if len(NAMES.get(fname)) == 1:
+                dataset_path = f"data/monash/{fname}/test/data.csv"
+            else:
+                dataset_path = f"data/monash/{fname}/{freq}/test/data.csv"
 
             if model_name == "timesfm":
                 dataset = TimesfmDataset(
@@ -301,10 +265,6 @@ if __name__ == "__main__":
                 print(
                     f"Time taken for evaluation of {fname}: {end - start:.2f} seconds"
                 )
-
-                del model
-                torch.cuda.empty_cache()
-                gc.collect()
 
             elif model_name == "moment":
                 args["config"]["task_name"] = "forecasting"
@@ -335,13 +295,6 @@ if __name__ == "__main__":
                 )
                 print(metrics)
 
-                del model
-                del finetuned_model
-                del dataset
-                del train_dataset
-                torch.cuda.empty_cache()
-                gc.collect()
-
             elif model_name == "chronos":
                 dataset_config = load_args("config/chronos_dataset.json")
                 dataset_config["context_length"] = context_len
@@ -368,11 +321,6 @@ if __name__ == "__main__":
                     f"Time taken for evaluation of {fname}: {end - start:.2f} seconds"
                 )
 
-                del model
-                del dataset
-                torch.cuda.empty_cache()
-                gc.collect()
-
             elif model_name == "chronosbolt":
                 repo = "amazon/chronos-bolt-small"
                 model = ChronosBoltModel(repo=repo)
@@ -397,11 +345,6 @@ if __name__ == "__main__":
                     f"Time taken for evaluation of {fname}: {end - start:.2f} seconds"
                 )
 
-                del model
-                del dataset
-                torch.cuda.empty_cache()
-                gc.collect()
-
             elif model_name == "ttm":
                 dataset = TinyTimeMixerDataset(
                     datetime_col="timestamp",
@@ -416,16 +359,10 @@ if __name__ == "__main__":
                 start = time.time()
                 metrics = model.evaluate(dataset)
                 end = time.time()
-                print("Metrics: ", metrics)
                 print(f"Size of dataset: {fs:.2f} MB")
                 print(
                     f"Time taken for evaluation of {fname}: {end - start:.2f} seconds"
                 )
-
-                del model
-                del dataset
-                torch.cuda.empty_cache()
-                gc.collect()
 
             elif model_name == "moirai":
                 model = MoiraiTSModel(**args)
@@ -446,54 +383,6 @@ if __name__ == "__main__":
                 print(
                     f"Time taken for evaluation of {fname}: {end - start:.2f} seconds"
                 )
-
-                del model
-                del dataset
-                torch.cuda.empty_cache()
-                gc.collect()
-
-            elif model_name == "lptm":
-                args["config"]["task_name"] = "forecasting2"
-                dataset = LPTMDataset(
-                    name=fname,
-                    datetime_col="timestamp",
-                    task_name="forecasting2",
-                    path=dataset_path,
-                    mode="test",
-                    seq_len=context_len,
-                    horizon=pred_len,
-                )
-                args["config"]["forecast_horizon"] = dataset.forecast_horizon
-                model = LPTMModel(**args)
-                start = time.time()
-                metrics = model.evaluate(dataset, task_name="forecasting2")
-                end = time.time()
-                print(f"Size of dataset: {fs:.2f} MB")
-                print(
-                    f"Time taken for evaluation of {fname}: {end - start:.2f} seconds"
-                )
-
-                del model
-                del dataset
-                torch.cuda.empty_cache()
-                gc.collect()
-
-
-            elif model_name == "timemoe":
-                dataset = TimeMoEDataset(name=fname, datetime_col='timestamp', freq=freq, batch_size=64,
-                                        path=dataset_path, mode='test', context_len=context_len, horizon_len=pred_len, boundaries=[-1, -1, -1])
-                args["config"]["horizon_len"] = dataset.horizon_len
-                model = TimeMoEModel(**args)
-                start = time.time()
-                metrics = model.evaluate(dataset)
-                end = time.time()
-                print(f"Size of dataset: {fs:.2f} MB")
-                print(f"Time taken for evaluation of {fname}: {end-start:.2f} seconds")
-
-                del model
-                del dataset
-                torch.cuda.empty_cache()
-                gc.collect()
 
             print("Evaluation done!")
 
