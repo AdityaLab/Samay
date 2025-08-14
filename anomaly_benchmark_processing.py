@@ -35,7 +35,7 @@ def detect_anomalies_in_data(epochs, data_path, image_name, train_end, anomaly_s
 
     from src.samay.anomaly_dataset_script import LPTMDataset
     dataset_path = data_path
-    train_len = 35000
+    train_len = train_end
     train_dataset = LPTMDataset(
         name="ett",
         datetime_col=None,

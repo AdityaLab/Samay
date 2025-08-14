@@ -1036,7 +1036,7 @@ class LPTMDataset(BaseDataset):
             self.num_series, self.n_channels, self.len_timeseries = self.data.shape
             self.data = self.data.reshape(
                 -1, self.len_timeseries
-            )  # reshape data into (num_samples*num_channels, num_timesteps)
+            )  
             self.scaler.fit(self.data)
             self.data = self.scaler.transform(self.data)
 
