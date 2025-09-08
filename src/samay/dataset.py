@@ -558,7 +558,7 @@ class MomentDataset(BaseDataset):
         self.mode = mode
         
         self.seq_len = 512
-        self.stride = stride if self.mode == 'train' else horizon_len
+        self.stride = stride if self.mode == 'train' else max(horizon_len, 10)
         self.forecast_horizon = horizon_len
         self.boundaries = boundaries
         self.max_col_num = 64
@@ -577,11 +577,11 @@ class MomentDataset(BaseDataset):
         if self.boundaries[1] == 0:
             self.boundaries[1] = int(len(self.df) * 0.7)
         if self.boundaries[2] == 0:
-            self.boundaries[2] = int(len(self.df) - 1)
+            self.boundaries[2] = int(len(self.df))
 
         if self.boundaries == [-1, -1, -1]:
             # use all data for training
-            self.boundaries = [0, 0, len(self.df) - 1]
+            self.boundaries = [0, 0, len(self.df)]
 
         self.forecast_horizon = min(self.forecast_horizon, int(0.3*len(self.df)+1))
 
@@ -605,7 +605,10 @@ class MomentDataset(BaseDataset):
         elif self.task_name == 'detection':
             self.labels = self.df.iloc[:, -1].values
             ts = self.df.iloc[:, 0].values.reshape(-1, 1)
-            self.scaler.fit(ts[slice(0, self.boundaries[0])])
+            if self.mode == 'train':
+                self.scaler.fit(ts[slice(0, self.boundaries[0])])
+            elif self.mode == 'test':
+                self.scaler.fit(ts[slice(self.boundaries[1], self.boundaries[2])])
             ts = self.scaler.transform(ts)
 
         elif self.task_name == 'classification':
@@ -646,8 +649,12 @@ class MomentDataset(BaseDataset):
             self.data = np.pad(
                 self.data, ((self.pad_len, 0), (0, 0))
             )
+            if self.task_name == 'detection':
+                self.labels = np.pad(
+                    self.labels, (self.pad_len, 0)
+                )
         # If num of channels isn't multiple of max_col_num, pad with zeros
-        if self.n_channels % self.max_col_num != 0:
+        if self.n_channels % self.max_col_num != 0 and self.task_name == "forecasting":
             self.data = np.pad(
                 self.data, ((0, 0), (0, self.max_col_num - self.n_channels % self.max_col_num))
             )
@@ -693,7 +700,7 @@ class MomentDataset(BaseDataset):
     def __len__(self):
         if self.task_name == 'classification':
             return self.num_series
-        if self.length_timeseries < self.seq_len + self.forecast_horizon:
+        if self.length_timeseries <= self.seq_len + self.forecast_horizon:
             return 1 * self.num_chunks
         return self.num_chunks * self.one_chunk_num
     

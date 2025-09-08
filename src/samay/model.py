@@ -1150,7 +1150,7 @@ class MomentModel(Basemodel):
             preds = np.concatenate(preds, axis=0).flatten()
             labels = np.concatenate(labels, axis=0).flatten()
 
-            visualize(task_name="detection", trues=trues, preds=preds, labels=labels)
+            visualize(task_name="detection", trues=trues, preds=preds, labels=labels, pad_len=dataset.pad_len)
 
             # return trues, preds, labels
 

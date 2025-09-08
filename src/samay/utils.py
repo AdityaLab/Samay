@@ -143,12 +143,12 @@ def arrow_to_csv(arrow_dir, freq=None):
     print(f"Conversion complete for {arrow_dir}.")
 
 
-def visualize(task_name="forecasting", trues=None, preds=None, history=None, masks=None, context_len=512, **kwargs):
+def visualize(task_name="forecasting", trues=None, preds=None, history=None, labels=None, masks=None, context_len=512, pad_len=0, **kwargs):
     """
     Visualize the data.
-    If task_name is "forecasting", trues, preds, and history should be provided, which channel_idx and time_idx are optional.
-    If task_name is "anomaly_detection", trues and preds should be provided, which start and end are optional.
-    If task_name is "imputation", trues, preds, and masks should be provided, which channel_idx and time_idx are optional.
+    If task_name is "forecasting", trues, preds and history should be provided, which channel_idx and time_idx are optional.
+    If task_name is "anomaly_detection", trues, preds and labels should be provided, which start and end are optional.
+    If task_name is "imputation", trues, preds and masks should be provided, which channel_idx and time_idx are optional.
 
     channel_idx correpsonds to a specific variate (column) in the dataset.
     time_idx corresponds to a specific window (context + horizon) in the augmented dataset.
@@ -215,14 +215,34 @@ def visualize(task_name="forecasting", trues=None, preds=None, history=None, mas
         plt.show()
 
     elif task_name == "detection":
+        trues, preds, labels = trues[pad_len:], preds[pad_len:], labels[pad_len:]
+        print(preds)
         anomaly_scores = (trues - preds) ** 2
         start = 0 if "start" not in kwargs else kwargs["start"]
-        end = 1000 if "end" not in kwargs else kwargs["end"]
-        plt.plot(trues[start:end], label="Observed", c="darkblue")
-        plt.plot(preds[start:end], label="Predicted", c="red")
-        plt.plot(anomaly_scores[start:end], label="Anomaly Score", c="black")
-        plt.legend(fontsize=16)
+        end = len(trues) if "end" not in kwargs else kwargs["end"]
+        # plt.plot(trues[start:end], label="Observed", c="darkblue")
+        # plt.plot(preds[start:end], label="Predicted", c="red")
+        # plt.plot(anomaly_scores[start:end], label="Anomaly Score", c="black")
+        # plt.legend(fontsize=16)
+        # plt.show()
+        fig, ax1 = plt.subplots()
+        ax1.plot(trues[start:end], label="Observed", c="darkblue")
+        ax1.plot(preds[start:end], label="Predicted", c="red")
+        ax1.legend(fontsize=16, loc="upper left")
+        ax1.set_ylabel("Value", fontsize=14)
+
+        ax2 = ax1.twinx()
+        ax2.plot(anomaly_scores[start:end], label="Anomaly Score", c="black")
+        ax2.set_ylabel("Anomaly Score", fontsize=14)
+        ax2.legend(fontsize=16, loc="upper right")
+
+        plt.title(f"Anomaly Detection ({start}:{end})", fontsize=18)
+        plt.xlabel("Time", fontsize=14)
         plt.show()
+
+        best_f1, best_threshold = adjbestf1(labels, anomaly_scores)
+        print(f"Best F1 Score: {best_f1:.4f} at threshold {best_threshold:.4f}")
+
 
     elif task_name == "imputation":
         time_idx = (
@@ -347,6 +367,80 @@ def get_monash_datasets(path:str, config:dict, setting:dict):
     dataset_dict = dict(dataset_dict)
 
     return dataset_dict
+
+
+def adjust_predicts(score, label, threshold=None, pred=None, calc_latency=False):
+    """
+    Calculate adjusted predict labels using given `score`, `threshold` (or given `pred`) and `label`.
+    Args:
+        score (np.ndarray): The anomaly score
+        label (np.ndarray): The ground-truth label
+        threshold (float): The threshold of anomaly score.
+            A point is labeled as "anomaly" if its score is lower than the threshold.
+        pred (np.ndarray or None): if not None, adjust `pred` and ignore `score` and `threshold`,
+        calc_latency (bool):
+    Returns:
+        np.ndarray: predict labels
+    """
+    if len(score) != len(label):
+        raise ValueError("score and label must have the same length")
+    score = np.asarray(score)
+    label = np.asarray(label)
+    latency = 0
+    if pred is None:
+        predict = score < threshold
+    else:
+        predict = pred
+    actual = label > 0.1
+    anomaly_state = False
+    anomaly_count = 0
+    for i in range(len(score)):
+        if actual[i] and predict[i] and not anomaly_state:
+            anomaly_state = True
+            anomaly_count += 1
+            for j in range(i, 0, -1):
+                if not actual[j]:
+                    break
+                else:
+                    if not predict[j]:
+                        predict[j] = True
+                        latency += 1
+        elif not actual[i]:
+            anomaly_state = False
+        if anomaly_state:
+            predict[i] = True
+    if calc_latency:
+        return predict, latency / (anomaly_count + 1e-4)
+    else:
+        return predict
+    
+def adjbestf1(y_true: np.array, y_scores: np.array, n_splits: int = 100):
+    thresholds = np.linspace(y_scores.min(), y_scores.max(), n_splits)
+    adjusted_f1 = np.zeros(thresholds.shape)
+
+    for i, threshold in enumerate(thresholds):
+        y_pred = y_scores >= threshold
+        y_pred = adjust_predicts(
+            score=y_scores,
+            label=(y_true > 0),
+            pred=y_pred,
+            threshold=None,
+            calc_latency=False,
+        )
+        adjusted_f1[i] = f1_score(y_pred, y_true)
+
+    best_adjusted_f1 = np.max(adjusted_f1)
+    return best_adjusted_f1, thresholds[np.argmax(adjusted_f1)]
+
+def f1_score(predict, actual):
+    TP = np.sum(predict * actual)
+    TN = np.sum((1 - predict) * (1 - actual))
+    FP = np.sum(predict * (1 - actual))
+    FN = np.sum((1 - predict) * actual)
+    precision = TP / (TP + FP + 0.00001)
+    recall = TP / (TP + FN + 0.00001)
+    f1 = 2 * precision * recall / (precision + recall + 0.00001)
+    return f1
 
   
 if __name__ == "__main__":
