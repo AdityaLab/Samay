@@ -42,7 +42,7 @@ class Masking:
         """
         return mask.repeat_interleave(patch_len, dim=-1)
 
-    def generate_mask(self, x: torch.Tensor, input_mask: Optional[torch.Tensor] = None):
+    def generate_mask(self, x: torch.Tensor, input_mask: torch.Tensor):
         """
         Input:
             x : torch.Tensor of shape
@@ -57,8 +57,12 @@ class Masking:
             return self._mask_patch_view(x, input_mask=input_mask)
         elif x.ndim == 3:
             return self._mask_seq_view(x, input_mask=input_mask)
+        else:
+            raise ValueError(
+                f"Invalid input shape: {x.shape}. Expected 3D or 4D tensor."
+            )
 
-    def _mask_patch_view(self, x, input_mask=None):
+    def _mask_patch_view(self, x, input_mask: torch.Tensor):
         """
         Input:
             x : torch.Tensor of shape
@@ -101,7 +105,7 @@ class Masking:
 
         return mask.long()
 
-    def _mask_seq_view(self, x, input_mask=None):
+    def _mask_seq_view(self, x, input_mask: torch.Tensor):
         """
         Input:
             x : torch.Tensor of shape
