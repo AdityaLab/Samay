@@ -65,6 +65,7 @@ from uni2ts.transform import (
 )
 
 from .module import MoiraiModule
+from uni2ts.model.moirai2 import Moirai2Module
 
 
 class MoiraiFinetune(L.LightningModule):
@@ -136,6 +137,15 @@ class MoiraiFinetune(L.LightningModule):
                 MoiraiMoEModule.from_pretrained(repo) if module is None else module
             )
 
+        elif model_type == "moirai2":  # moirai2
+            if repo is None:
+                repo = f"Salesforce/moirai-2.0-R-{model_size}"
+            self.module = (
+                Moirai2Module.from_pretrained(repo) if module is None else module
+            )
+
+        self.model_type = model_type
+
     def forward(
         self,
         target: Float[torch.Tensor, "*batch seq_len max_patch"],
@@ -146,16 +156,28 @@ class MoiraiFinetune(L.LightningModule):
         prediction_mask: Bool[torch.Tensor, "*batch seq_len"],
         patch_size: Int[torch.Tensor, "*batch seq_len"],
     ) -> Distribution:
-        distr = self.module(
-            target=target,
-            observed_mask=observed_mask,
-            sample_id=sample_id,
-            time_id=time_id,
-            variate_id=variate_id,
-            prediction_mask=prediction_mask,
-            patch_size=patch_size,
-        )
-        return distr
+        if self.model_type in ["moirai", "moirai-moe"]:
+            distr = self.module(
+                target=target,
+                observed_mask=observed_mask,
+                sample_id=sample_id,
+                time_id=time_id,
+                variate_id=variate_id,
+                prediction_mask=prediction_mask,
+                patch_size=patch_size,
+            )
+            return distr
+        elif self.model_type == "moirai2":
+            output = self.module(
+                target=target,
+                observed_mask=observed_mask,
+                sample_id=sample_id,
+                time_id=time_id,
+                variate_id=variate_id,
+                prediction_mask=prediction_mask,
+                training_mode=not self.training,
+            )
+            return output
 
     def training_step(
         self, batch: dict[str, torch.Tensor], batch_idx: int

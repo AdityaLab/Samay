@@ -29,7 +29,10 @@ def MASE(y_true: np.ndarray, y_pred: np.ndarray, freq: str = "h"):
         "QE": 4,
     }
     # seasonality = DEFAULT_SEASONALITIES[freq]
-    y_t = y_true[:, :, 1:] - y_true[:, :, :-1]
+    if len(y_true.shape) == 3:  # num_batch, bs, seq_len
+        y_t = y_true[:, :, 1:] - y_true[:, :, :-1]
+    else:  # num_seq, seq_len
+        y_t = y_true[:, 1:] - y_true[:, :-1]
     return np.mean(np.abs(y_true - y_pred) / (np.mean(np.abs(y_t)) + 1e-5))
 
 

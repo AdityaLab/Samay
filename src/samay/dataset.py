@@ -29,6 +29,17 @@ from .moirai_utils import (
 from .utils import get_multivariate_data
 
 
+def freq_mapping(freq: str)-> str:
+    if freq == 'ME':
+        return 'M'
+    elif freq.split('-')[0] == 'YE':
+        return 'Y-' + freq.split('-')[1]
+    elif freq.split('-')[0] == 'QE':
+        return 'Q-' + freq.split('-')[1]
+    else:
+        return freq
+
+
 # function for specific dataset to download and preprocess data, returning path
 # BaseDataset class call the specific function decided by "name" argument
 class BaseDataset:
@@ -1345,7 +1356,7 @@ class MoiraiDataset(BaseDataset):
         for i in range(self.dataset.shape[1]):
             data.append(
                 {
-                    "start": Period(self.start_date, freq=self.freq),
+                    "start": Period(self.start_date, freq=freq_mapping(self.freq)),
                     "target": self.dataset.iloc[:, i].values,
                     "item_id": self.dataset.columns[i],
                 }
@@ -1373,12 +1384,12 @@ class MoiraiDataset(BaseDataset):
                 data.append(
                     (
                         {  # input
-                            "start": Period(self.start_date, freq=self.freq),
+                            "start": Period(self.start_date, freq=freq_mapping(self.freq)),
                             "target": self.dataset.iloc[:start_idx, i].values,
                             "item_id": self.dataset.columns[i],
                         },
                         {  # label
-                            "start": Period(self.start_date, freq=self.freq),
+                            "start": Period(self.start_date, freq=freq_mapping(self.freq)),
                             "target": self.dataset.iloc[start_idx:end_idx, i].values,
                             "item_id": self.dataset.columns[i],
                         },

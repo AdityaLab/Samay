@@ -7,7 +7,8 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import yaml
-from einops import rearrange
+import importlib
+from einops import rearrange, repeat
 from jaxtyping import Float
 from sklearn.metrics import mean_squared_error
 from torchvision import transforms
@@ -20,6 +21,7 @@ from samay.moirai_utils import convert_module_kwargs, filter_dict
 from uni2ts.model.moirai import MoiraiForecast, MoiraiModule
 from uni2ts.model.moirai.finetune import MoiraiFinetune
 from uni2ts.model.moirai_moe import MoiraiMoEForecast, MoiraiMoEModule
+from uni2ts.model.moirai2 import Moirai2Forecast, Moirai2Module
 from uni2ts.module.norm import RMSNorm
 
 # from gluonts.model.forecast import Forecast, QuantileForecast, SampleForecast
@@ -48,7 +50,7 @@ from .models.timesfm.timesfm import pytorch_patched_decoder as ppd
 from .models.TinyTimeMixer.models.tinytimemixer.modeling_tinytimemixer import (
     TinyTimeMixerForPrediction,
 )
-from .utils import get_least_used_gpu, visualize
+from .utils import get_least_used_gpu, visualize, cleanup_dataloader
 
 
 class Basemodel:
@@ -1405,20 +1407,21 @@ class MoiraiTSModel(Basemodel):
     ):
         super().__init__(config=config, repo=repo)
         # config.get(<key>, <default_value> if key not found)
+        self.model_type = config.get("model_type", model_type)
         self.horizon_len = config.get("horizon_len", 32)
         self.context_len = config.get("context_len", 128)
         self.patch_size = config.get("patch_size", 16)
         self.batch_size = config.get("batch_size", 16)
-        self.num_samples = config.get("num_samples", 100)
+        self.quantiles = config.get("quantiles", [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]) if self.model_type == "moirai2" else []
+        self.num_samples = config.get("num_samples", 100) if self.model_type != "moirai2" else len(self.quantiles)    # for moirai2, we regard num_samples as the number of quantiles
         self.target_dim = config.get("target_dim", 1)
         self.feat_dynamic_real_dim = config.get("feat_dynamic_real_dim", 0)
         self.past_feat_dynamic_real_dim = config.get("past_feat_dynamic_real_dim", 0)
-        self.model_type = model_type
         self.finetuned_model = None
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        if model_type == "moirai":  # standard moirai
+        if self.model_type == "moirai":  # standard moirai
             if repo is None:
                 repo = f"Salesforce/moirai-1.1-R-{model_size}"
             self.repo = repo
@@ -1434,7 +1437,7 @@ class MoiraiTSModel(Basemodel):
                 past_feat_dynamic_real_dim=self.past_feat_dynamic_real_dim,
             )
 
-        elif model_type == "moirai-moe":  # moirai with Mixture of Experts
+        elif self.model_type == "moirai-moe":  # moirai with Mixture of Experts
             if repo is None:
                 repo = f"Salesforce/moirai-moe-1.0-R-{model_size}"
             self.repo = repo
@@ -1445,6 +1448,20 @@ class MoiraiTSModel(Basemodel):
                 context_length=self.context_len,
                 patch_size=self.patch_size,
                 num_samples=self.num_samples,
+                target_dim=self.target_dim,
+                feat_dynamic_real_dim=self.feat_dynamic_real_dim,
+                past_feat_dynamic_real_dim=self.past_feat_dynamic_real_dim,
+            )
+
+        elif self.model_type == "moirai2":
+            if repo is None:
+                repo = f"Salesforce/moirai-2.0-R-{model_size}"
+            self.repo = repo
+
+            self.model = Moirai2Forecast(
+                module=Moirai2Module.from_pretrained(self.repo),
+                prediction_length=self.horizon_len,
+                context_length=self.context_len,
                 target_dim=self.target_dim,
                 feat_dynamic_real_dim=self.feat_dynamic_real_dim,
                 past_feat_dynamic_real_dim=self.past_feat_dynamic_real_dim,
@@ -1494,19 +1511,55 @@ class MoiraiTSModel(Basemodel):
 
     def _format_preds(
         self,
-        preds: Float[torch.Tensor, "sample batch combine_seq patch"],
+        preds: Float[torch.Tensor, "sample batch combine_seq patch"], # if quantile_prediction: (batch, pred_idx*per_pred_tokens, num_quantiles, patch_size); else: (num_samples, batch, seq_len, patch_size)
         context_token_len: int,
         pred_token_len: int,
-    ) -> Float[torch.Tensor, "batch sample future_time *tgt"]:
+        quantile_prediction: bool = False,
+        target_dim: int = 1,
+    ) -> Float[torch.Tensor, "batch sample future_time *tgt"]:  # if quantile_prediction: (batch, num_quantiles, horizon, *tgt); else: (batch, num_samples, horizon, *tgt)
         start = self.target_dim * context_token_len
         end = start + self.target_dim * pred_token_len
-        preds = preds[..., start:end, : self.patch_size]
+        if not quantile_prediction:
+            preds = preds[..., start:end, : self.patch_size]
+            preds = rearrange(
+                preds,
+                "sample ... (dim seq) patch -> ... sample (seq patch) dim",
+                dim=self.target_dim,
+            )[..., : self.horizon_len, :]
+        else:
+            preds = preds[..., start:end, :len(self.quantiles), :self.patch_size]
+            preds = rearrange(
+                preds,
+                "... (dim seq) num_quantiles patch -> ... num_quantiles (seq patch) dim",
+                dim=target_dim,
+            )[..., : self.horizon_len, :]
+        return preds.squeeze(-1)
+    
+    def structure_multi_predict(
+        self,
+        per_var_predict_token,
+        pred_index,
+        assign_index,
+        preds,
+    ):
         preds = rearrange(
             preds,
-            "sample ... (dim seq) patch -> ... sample (seq patch) dim",
-            dim=self.target_dim,
-        )[..., : self.horizon_len, :]
-        return preds.squeeze(-1)
+            "... (predict_token num_quantiles patch_size) -> ... predict_token num_quantiles patch_size",
+            predict_token=self.model.module.num_predict_token,
+            num_quantiles=self.model.module.num_quantiles,
+            patch_size=self.model.module.patch_size,
+        )
+        preds = rearrange(
+            preds[..., pred_index, :per_var_predict_token, :, :],
+            "... pred_index predict_token num_quantiles patch_size -> ... (pred_index predict_token) num_quantiles patch_size",
+        )
+        adjusted_assign_index = torch.cat(
+            [
+                torch.arange(start=idx, end=idx + per_var_predict_token)
+                for idx in assign_index
+            ]
+        )
+        return preds, adjusted_assign_index
 
     def evaluate(
         self,
@@ -1576,6 +1629,7 @@ class MoiraiTSModel(Basemodel):
                     pred_token_len = math.ceil(self.horizon_len / self.patch_size)
                     num_context_tokens = context_token_len * self.target_dim
                     num_pred_tokens = pred_token_len * self.target_dim
+                    num_token_generate = self.model.module.num_predict_token if self.model_type == 'moirai2' else 1
 
                     # prepare the inputs
                     pred_index = torch.arange(
@@ -1597,88 +1651,208 @@ class MoiraiTSModel(Basemodel):
                         if isinstance(v, torch.Tensor):
                             inputs[k] = v.to(self.device)
 
+                    if self.model_type == "moirai2":
+                        quantile_prediction = repeat(
+                            inputs["target"],
+                            "... patch_size -> ... num_quantiles patch_size",
+                            num_quantiles=len(self.model.module.quantile_levels),
+                            patch_size=self.model.module.patch_size,
+                        ).clone()
+
                     # get the forecast
-                    if pred_token_len == 1:
-                        distr = self.finetuned_model.forward(**inputs)
-                        preds = distr.sample(torch.Size((self.num_samples,)))
-                        preds[..., assign_index, :] = preds[..., pred_index, :]
-                        outputs = self._format_preds(
-                            preds=preds,
-                            context_token_len=context_token_len,
-                            pred_token_len=pred_token_len,
-                        )
+                    if pred_token_len <= num_token_generate:
+                        if self.model_type in ["moirai", "moirai-moe"]:
+                            # old version models generate distribution outputs
+                            distr = self.finetuned_model.forward(**inputs)
+                            preds = distr.sample(torch.Size((self.num_samples,)))
+                            preds[..., assign_index, :] = preds[..., pred_index, :]
+                            outputs = self._format_preds(
+                                preds=preds,
+                                context_token_len=context_token_len,
+                                pred_token_len=pred_token_len,
+                            )
+
+                        elif self.model_type == "moirai2":
+                            # new version model directly generates prediction outputs
+                            preds = self.finetuned_model.forward(**inputs)  # (batch, all_pred_idx, num_tokens*quantiles*patch_size) # all_pred_idx = (c1/ps, c2/ps, ..., cN/ps, p1/ps, p2/ps, ..., pM/ps)
+                            preds, adjusted_assign_index = self.structure_multi_predict(
+                                per_var_predict_token=pred_token_len,
+                                pred_index=pred_index,
+                                assign_index=assign_index,
+                                preds=preds,
+                            )
+                            quantile_prediction[..., adjusted_assign_index, :, :] = preds
+                            outputs = self._format_preds(
+                                preds=quantile_prediction,
+                                context_token_len=context_token_len,
+                                pred_token_len=pred_token_len,
+                                quantile_prediction=True,
+                                target_dim=self.target_dim,
+                            )
                     else:
-                        distr = self.finetuned_model.forward(**inputs)
-                        preds = distr.sample(torch.Size((self.num_samples,)))
+                        if self.model_type in ["moirai", "moirai-moe"]:
+                            # old version models generate distribution outputs
+                            distr = self.finetuned_model.forward(**inputs)
+                            preds = distr.sample(torch.Size((self.num_samples,))) # (num_samples, batch, combine_seq, patch), combined_seq = all pred index
+                        elif self.model_type == "moirai2":
+                            # new version model directly generates prediction outputs
+                            preds = self.finetuned_model.forward(**inputs)  # (batch, all_pred_idx, num_tokens*quantiles*patch_size)
+                            preds, adjusted_assign_index = self.structure_multi_predict(
+                                self.model.module.num_predict_token,
+                                pred_index,
+                                assign_index,
+                                preds,
+                            )
+                            quantile_prediction[..., adjusted_assign_index, :, :] = preds
 
                         expand_target = (
                             inputs["target"]
                             .unsqueeze(0)
                             .repeat(self.num_samples, 1, 1, 1)
                         )
+                        if self.model_type == "moirai2":
+                            expand_target = expand_target.permute(1, 0, 2, 3)  # (batch, num_samples, seq_len, patch_size), here num_samples = num_quantiles
                         expand_prediction_mask = (
                             inputs["prediction_mask"]
                             .unsqueeze(0)
                             .repeat(self.num_samples, 1, 1)
                         )
+                        if self.model_type == "moirai2":
+                            expand_prediction_mask = expand_prediction_mask.permute(1, 0, 2)  # (batch, num_samples, seq_len), here num_samples = num_quantiles
                         expand_observed_mask = (
                             inputs["observed_mask"]
                             .unsqueeze(0)
                             .expand(self.num_samples, -1, -1, -1)
                         )
+                        if self.model_type == "moirai2":
+                            expand_observed_mask = expand_observed_mask.permute(1, 0, 2, 3)  # (batch, num_samples, seq_len, patch_size), here num_samples = num_quantiles
                         expand_sample_id = (
                             inputs["sample_id"]
                             .unsqueeze(0)
                             .expand(self.num_samples, -1, -1)
                         )
+                        if self.model_type == "moirai2":
+                            expand_sample_id = expand_sample_id.permute(1, 0, 2)  # (batch, num_samples, seq_len), here num_samples = num_quantiles
                         expand_time_id = (
                             inputs["time_id"]
                             .unsqueeze(0)
                             .expand(self.num_samples, -1, -1)
                         )
+                        if self.model_type == "moirai2":
+                            expand_time_id = expand_time_id.permute(1, 0, 2)  # (batch, num_samples, seq_len), here num_samples = num_quantiles
                         expand_variate_id = (
                             inputs["variate_id"]
                             .unsqueeze(0)
                             .expand(self.num_samples, -1, -1)
                         )
+                        if self.model_type == "moirai2":
+                            expand_variate_id = expand_variate_id.permute(1, 0, 2)  # (batch, num_samples, seq_len), here num_samples = num_quantiles
                         expand_patch_size = (
                             inputs["patch_size"]
                             .unsqueeze(0)
                             .expand(self.num_samples, -1, -1)
                         )
 
-                        expand_target[..., assign_index, :] = preds[..., pred_index, :]
-                        expand_prediction_mask[..., assign_index] = False
-
-                        remain_step = pred_token_len - 1
-                        while remain_step > 0:
-                            distr = self.finetuned_model.forward(
-                                expand_target,
-                                expand_observed_mask,
-                                expand_sample_id,
-                                expand_time_id,
-                                expand_variate_id,
-                                expand_prediction_mask,
-                                expand_patch_size,
-                            )
-                            preds = distr.sample(torch.Size((1,)))
-                            _, _, bs, token, ps = preds.shape
-                            preds = preds.view(-1, bs, token, ps)
-
-                            pred_index = assign_index
-                            assign_index = assign_index + 1
-                            expand_target[..., assign_index, :] = preds[
-                                ..., pred_index, :
-                            ]
+                        if self.model_type == "moirai2":
+                            expand_target[..., adjusted_assign_index, :, :] = preds.permute(0, 2, 1, 3)  # (batch, num_quantiles, seq_len, patch_size)
+                            expand_prediction_mask[..., adjusted_assign_index] = False
+                        else:
+                            expand_target[..., assign_index, :] = preds[..., pred_index, :]
                             expand_prediction_mask[..., assign_index] = False
 
-                            remain_step -= 1
+                        remain_step = pred_token_len - num_token_generate
+                        while remain_step > 0:
+                            if self.model_type == "moirai2":
+                                preds = self.model.module(
+                                    expand_target,
+                                    expand_observed_mask,
+                                    expand_sample_id,
+                                    expand_time_id,
+                                    expand_variate_id,
+                                    expand_prediction_mask,
+                                    training_mode=False,
+                                )
+                                pred_index = assign_index + self.model.module.num_predict_token - 1
+                                assign_index = pred_index + 1
+                                preds, adjusted_assign_index = self.structure_multi_predict(
+                                    (
+                                        self.model.module.num_predict_token
+                                        if remain_step - self.model.module.num_predict_token > 0
+                                        else remain_step
+                                    ),
+                                    pred_index,
+                                    assign_index,
+                                    preds,
+                                )
+                                quantile_prediction_next_step = rearrange(
+                                    preds,
+                                    "... num_quantiles_prev pred_index num_quantiles patch_size -> ... pred_index (num_quantiles_prev num_quantiles) patch_size",
+                                    num_quantiles=self.model.module.num_quantiles,
+                                    patch_size=self.model.module.patch_size,
+                                )
+                                # compute quantile forecast based on quantile forecast from quantile samples
+                                quantile_prediction_next_step = torch.quantile(
+                                    quantile_prediction_next_step,
+                                    torch.tensor(
+                                        self.model.module.quantile_levels,
+                                        device=self.device,
+                                        dtype=torch.float32,
+                                    ),
+                                    dim=-2,
+                                )
+                                quantile_prediction[..., adjusted_assign_index, :, :] = rearrange(
+                                    quantile_prediction_next_step,
+                                    "num_quantiles ... patch_size -> ... num_quantiles patch_size",
+                                )
 
-                        outputs = self._format_preds(
-                            preds=expand_target,
-                            context_token_len=context_token_len,
-                            pred_token_len=pred_token_len,
-                        )
+                                # choose current quantiles values as point forecast for next-step prediction
+                                expand_target[..., adjusted_assign_index, :] = rearrange(
+                                    quantile_prediction_next_step,
+                                    "num_quantiles batch_size predict_token patch_size -> batch_size num_quantiles predict_token patch_size",
+                                    num_quantiles=self.model.module.num_quantiles,
+                                    patch_size=self.model.module.patch_size,
+                                    predict_token=len(adjusted_assign_index),
+                                )
+                                expand_prediction_mask[..., adjusted_assign_index] = False
+
+                                remain_step -= self.model.module.num_predict_token
+                            else:
+                                distr = self.finetuned_model.forward(
+                                    expand_target,
+                                    expand_observed_mask,
+                                    expand_sample_id,
+                                    expand_time_id,
+                                    expand_variate_id,
+                                    expand_prediction_mask,
+                                    expand_patch_size,
+                                )
+                                preds = distr.sample(torch.Size((1,)))
+                                _, _, bs, token, ps = preds.shape
+                                preds = preds.view(-1, bs, token, ps)
+
+                                pred_index = assign_index
+                                assign_index = assign_index + 1
+                                expand_target[..., assign_index, :] = preds[
+                                    ..., pred_index, :
+                                ]
+                                expand_prediction_mask[..., assign_index] = False
+
+                                remain_step -= 1
+
+                        if self.model_type == "moirai2":
+                            outputs = self._format_preds(
+                                preds=quantile_prediction,
+                                context_token_len=context_token_len,
+                                pred_token_len=pred_token_len,
+                                quantile_prediction=True,
+                                target_dim=self.target_dim,
+                            )
+                        else:
+                            outputs = self._format_preds(
+                                preds=expand_target,
+                                context_token_len=context_token_len,
+                                pred_token_len=pred_token_len,
+                            )
 
                 # Apply output transforms
                 if output_transforms is not None:
@@ -1707,7 +1881,6 @@ class MoiraiTSModel(Basemodel):
                     assert len(outputs[0]) == self.num_samples, (
                         "We do not have enough samples"
                     )
-
                 forecast.extend([np.array(x) for x in outputs.tolist()])
 
         # Iterators for input, label and forecast
@@ -1716,7 +1889,10 @@ class MoiraiTSModel(Basemodel):
         label_it = iter(dataset.dataset.label)
         forecast_it = iter(forecast)
         # Quantile levels obtained from cli/conf/eval/default.yaml of MOIRAI repository
-        quantile_levels = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+        if self.model_type == "moirai2":
+            quantile_levels = self.quantiles
+        else:
+            quantile_levels = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 
         trues = {}
         preds = {}
@@ -1737,11 +1913,18 @@ class MoiraiTSModel(Basemodel):
                     if isinstance(input["target"], np.ndarray)
                     else np.array(input["target"])
                 )
-                quantiles = np.percentile(
-                    forecast[:, : min(self.horizon_len, true_values.shape[0])],
-                    [q * 100 for q in quantile_levels],
-                    axis=0,
-                )
+                if self.model_type == 'moirai2':
+                    quantiles = np.array(forecast)
+                    if len(quantiles.shape) == 3:  # (quantiles, horizon, target_dim)
+                        quantiles = quantiles[: len(quantile_levels), : min(self.horizon_len, true_values.shape[0]), :]  # (quantiles, horizon, target_dim)
+                    elif len(quantiles.shape) == 2:  # (quantiles, horizon)
+                        quantiles = quantiles[: len(quantile_levels), : min(self.horizon_len, true_values.shape[0])]  # (quantiles, horizon)
+                else:
+                    quantiles = np.percentile(
+                        forecast[:, : min(self.horizon_len, true_values.shape[0])],
+                        [q * 100 for q in quantile_levels],
+                        axis=0,
+                    )
                 pred_values = np.median(forecast, axis=0)[
                     : min(self.horizon_len, true_values.shape[0])
                 ]  # Median of the forecasted values
@@ -1825,6 +2008,8 @@ class MoiraiTSModel(Basemodel):
             "crps": crps,
         }
 
+        cleanup_dataloader(inference_loader)
+
         if leaderboard:
             return leaderboard_metrics
         else:
@@ -1846,9 +2031,12 @@ class MoiraiTSModel(Basemodel):
             )
         elif self.model_type == "moirai-moe":
             model_config = f"../src/uni2ts/cli/conf/finetune/model/moirai_moe_1.0_R_{model_size}.yaml"
+        elif self.model_type == "moirai2":
+            # only small version is available for moirai2 for now
+            model_config = f"../src/uni2ts/cli/conf/finetune/model/moirai_2.0_R_{model_size}.yaml" 
 
         with open(model_config, "r") as file:
-            fin_model_config = yaml.safe_load(file)
+            fin_model_config = yaml.load(file, Loader=yaml.FullLoader)
 
         # lr = 1e-4 if "lr" not in fin_model_config else float(fin_model_config["lr"])
         lr = 5e-6
@@ -1879,9 +2067,12 @@ class MoiraiTSModel(Basemodel):
         module_args = convert_module_kwargs(
             fin_model_config["module_kwargs"]
         )  # remove _target_ fields
-        self.patch_size = self.model.module.in_proj.in_features_ls[
-            0
-        ]  # update patch_size
+        if self.model_type == "moirai2":
+            self.patch_size = self.model.module.patch_size  # update patch_size
+        else:
+            self.patch_size = self.model.module.in_proj.in_features_ls[
+                0
+            ]  # update patch_size
 
         # Trainer configuration (from uni2ts/cli/train.py)
         # mod_torch is the trainer configuration without _target_ fields or any key
@@ -1893,10 +2084,21 @@ class MoiraiTSModel(Basemodel):
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True
 
-        # For now, self.model.module.patch_sizes i just [16] from the config file
+        # For now, self.model.module.patch_sizes is just [16] from the config file
         # But in finetune, we are using patch_sizes as [8,16,32,64,128]
         # So, we need to update the patch_sizes in the model
         # self.model.module.patch_sizes = list(module_args["patch_sizes"])
+
+        # instantiate loss function
+        spec = fin_model_config["loss_func"]
+        def locate(path: str):
+            """Locate a class from a string path."""
+            module_path, class_name = path.rsplit(".", 1)
+            module = importlib.import_module(module_path)
+            return getattr(module, class_name)   
+        cls = locate(spec["_target_"])
+        kwargs = {k: v for k, v in spec.items() if k != "_target_"}
+        fin_model_config["loss_func"] = cls(**kwargs)
 
         # Load the model
         FinetunedModel = MoiraiFinetune(
@@ -1913,6 +2115,7 @@ class MoiraiTSModel(Basemodel):
             weight_decay=fin_model_config["weight_decay"],
             model_type=self.model_type,
             model_size=model_size,
+            loss_func=fin_model_config["loss_func"],
         )
 
         # Pytorch version
@@ -2040,6 +2243,40 @@ class MoiraiTSModel(Basemodel):
                     prediction_mask=inputs["prediction_mask"],
                     patch_size=inputs["patch_size"],
                 )
+
+                if self.model_type == "moirai2":
+                    quantile_prediction = repeat(
+                        inputs["target"],
+                        "... patch_size -> ... num_quantiles patch_size",
+                        num_quantiles=len(self.model.module.quantile_levels),
+                        patch_size=self.model.module.patch_size,
+                    ).clone()
+                    context_token_len = math.ceil(self.context_len / self.patch_size)
+                    pred_token_len = math.ceil(self.horizon_len / self.patch_size)
+                    num_context_tokens = context_token_len * self.target_dim
+                    num_pred_tokens = pred_token_len * self.target_dim
+                    pred_index = torch.arange(
+                        start=context_token_len - 1,
+                        end=num_context_tokens,
+                        step=context_token_len,
+                    )
+                    assign_index = torch.arange(
+                        start=num_context_tokens,
+                        end=num_context_tokens + num_pred_tokens,
+                        step=pred_token_len,
+                    )
+                    preds, adjusted_assign_index = self.structure_multi_predict(
+                        per_var_predict_token=pred_token_len,
+                        pred_index=pred_index,
+                        assign_index=assign_index,
+                        preds=outputs,
+                    )
+                    quantile_prediction[..., adjusted_assign_index, :, :] = preds
+                    outputs = rearrange(
+                        quantile_prediction,
+                        "... num_quantiles patch_size -> ... (num_quantiles patch_size)",
+                    )
+
                 loss = FinetunedModel.hparams.loss_func(
                     pred=outputs,
                     **{
@@ -2069,10 +2306,27 @@ class MoiraiTSModel(Basemodel):
         plt.xlabel("Epoch")
         plt.ylabel("Loss")
         plt.title("Training Loss")
-        plt.savefig(f"training_loss_{epochs}_epochs_wo_scheduler.png")
+        # plt.savefig(f"training_loss_{epochs}_epochs_wo_scheduler.png")
 
         self.finetuned_model = FinetunedModel
         print("Fineuned model updated")
+        cleanup_dataloader(dataloader)
+
+    def plot(self, dataset, zero_shot=False, **kwargs):
+        """Plot the results of the model on the given dataset.
+
+        Args:
+            dataset (MoiraiDataset): Dataset containing the input data and relevant functions like dataloaders etc.
+        """
+        _, trues, preds, history = self.evaluate(dataset, leaderboard=False, zero_shot=zero_shot)
+        visualize(
+            task_name="forecasting",
+            trues=np.concatenate(trues, axis=0),
+            preds=np.concatenate(preds, axis=0),
+            history=np.concatenate(history, axis=0
+            ),
+        )
+
 
 
 class TimeMoEModel(Basemodel):

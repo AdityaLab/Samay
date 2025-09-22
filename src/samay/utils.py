@@ -6,6 +6,7 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 import yaml
+import gc
 from datasets import load_from_disk
 from matplotlib import pyplot as plt
 from tqdm import tqdm
@@ -187,7 +188,7 @@ def visualize(
         pred = preds[time_idx, channel_idx, :]
 
         # Set figure size proportional to the number of forecasts
-        plt.figure(figsize=(0.02 * len(history), 4))
+        plt.figure(figsize=(max(0.02 * len(history), 6), 4))
 
         # Plotting the first time series from history
         plt.plot(
@@ -360,12 +361,11 @@ def get_gifteval_datasets(path: str):
     # Convert the defaultdict to a regular dict
     dataset_dict = dict(dataset_dict)
 
-    return dataset_dict, fil
+    return dataset_dict
 
 
 def get_monash_datasets(path):
     datasets = os.listdir(path)
-
     # Get the filesizes
     data = []
     for x in datasets:
@@ -377,22 +377,23 @@ def get_monash_datasets(path):
 
     # Infer frequencies
     filesizes = []
-    for i in tqdm(range(len(data)), desc="Freq inferring Monash"):
+    print("Inferring frequencies for Monash datasets...")
+    for i in range(len(data)):
         d_path = os.path.join(path, data[i][0], "test", "data.csv")
         df = pd.read_csv(d_path)
         freq = pd.infer_freq(df["timestamp"])
-        filesizes.append((data[i][0], freq, data[i][1]))
+        filesizes.append((d_path, freq, data[i][1]))
 
     filesizes = sorted(filesizes, key=lambda x: x[2])
 
     # Get dictionary for each dataset
-    NAMES = defaultdict(list)
+    NAMES = defaultdict(tuple)
     for x in filesizes:
-        NAMES[x[0]].append(x[1])
+        NAMES[x[0]] = (x[1], x[2])
 
     NAMES = dict(NAMES)
 
-    return NAMES, filesizes
+    return NAMES
 
 
 
@@ -469,6 +470,45 @@ def f1_score(predict, actual):
     f1 = 2 * precision * recall / (precision + recall + 0.00001)
     return f1
 
+
+def cleanup_dataloader(loader):
+    """
+    Best-effort shutdown for PyTorch DataLoader workers across versions.
+    - Stops worker processes/queues
+    - Drops iterator references so the resource_tracker doesn't see leaked semaphores
+    """
+    try:
+        # Classic API: iterator lives on loader._iterator
+        it = getattr(loader, "_iterator", None)
+
+        # Newer versions: shutdown lives on the iterator
+        if it is not None:
+            shutdown = getattr(it, "_shutdown_workers", None)
+            if callable(shutdown):
+                try:
+                    shutdown()
+                except Exception:
+                    pass
+
+        # Older versions had loader._shutdown_workers()
+        if it is None:
+            shutdown_loader = getattr(loader, "_shutdown_workers", None)
+            if callable(shutdown_loader):
+                try:
+                    shutdown_loader()
+                except Exception:
+                    pass
+
+    finally:
+        # Drop strong refs so GC can reap queues/semlocks
+        try:
+            if hasattr(loader, "_iterator"):
+                loader._iterator = None
+        except Exception:
+            pass
+        del loader
+        gc.collect()
+
   
 if __name__ == "__main__":
     # ts_path = "/nethome/sli999/TSFMProject/src/tsfmproject/models/moment/data/ECG5000_TRAIN.ts"
@@ -480,9 +520,11 @@ if __name__ == "__main__":
     # ts_labels = np.array(ts_labels, dtype=int)
     # print(data - ts_data)
     # print(labels - ts_labels)
-    arrow_dir = "/nethome/sli999/TSFMProject/data/monash/wind_farms_minutely/train"
+    # arrow_dir = "/nethome/sli999/TSFMProject/data/monash/wind_farms_minutely/train"
     # arrow_to_csv(arrow_dir)
     # print("Conversion complete.")
-    csv_file = arrow_dir + "/data.csv"
-    df = pd.read_csv(csv_file)
-    print(df.head())
+    # csv_file = arrow_dir + "/data.csv"
+    # df = pd.read_csv(csv_file)
+    # print(df.head())
+    nms = get_monash_datasets("../../data/monash")
+    print(nms)
