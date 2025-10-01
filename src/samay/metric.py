@@ -75,17 +75,34 @@ def ND(y_true: np.ndarray, y_pred: np.ndarray):
 
 
 def MWSQ(y_true: np.ndarray, y_pred: np.ndarray, quantiles: np.ndarray):
-    """Mean weighted squared quantile loss"""
+    """
+    Mean weighted squared quantile loss
+    y_true: (num_seq, n_var, seq_len)
+    y_pred: (q, num_seq, n_var, seq_len)
+    quantiles: (q, )
+    """
 
-    def quantile_loss(y_true, y_pred, q):
-        return np.maximum(q * (y_true - y_pred), (q - 1) * (y_true - y_pred)).mean()
-
-    return np.mean([quantile_loss(y_true, y_pred, q) for q in quantiles])
+    y_true = np.expand_dims(y_true, axis=0)  # (1, num_seq, n_var, seq_len)
+    diff = y_true - y_pred  # (q, num_seq, n_var, seq_len)
+    quantiles = np.expand_dims(
+        np.expand_dims(np.expand_dims(quantiles, axis=-1), axis=-1), axis=-1
+    )  # (q, 1, 1, 1)
+    pinball = np.maximum(quantiles * diff, (quantiles - 1) * diff)  # (num_seq, n_var, seq_len, q)
+    mwsq = np.mean(pinball ** 2)  # (num_seq, n_var, seq_len)
+    return mwsq
 
 
 def CRPS(y_true: np.ndarray, y_pred: np.ndarray, quantiles: np.ndarray):
-    """Continuous ranked probability score"""
-    crps = np.mean(
-        (y_pred - y_true) ** 2 * np.abs(quantiles - (y_true <= y_pred).astype(float))
-    )
-    return crps
+    """
+    Continuous ranked probability score
+    y_true: (num_seq, n_var, seq_len)
+    y_pred: (q, num_seq, n_var, seq_len)
+    quantiles: (q, )
+    """
+    y_true = np.expand_dims(y_true, axis=0)  # (1, num_seq, n_var, seq_len)
+    diff = y_true - y_pred  # (q, num_seq, n_var, seq_len)
+    quantiles = np.expand_dims(
+        np.expand_dims(np.expand_dims(quantiles, axis=-1), axis=-1), axis=-1
+    )  # (q, 1, 1, 1)
+    pinball = np.maximum(quantiles * diff, (quantiles - 1) * diff)  # (num_seq, n_var, seq_len, q)
+    return np.mean(pinball)

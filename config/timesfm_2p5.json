@@ -1,0 +1,12 @@
+{
+    "repo": "google/timesfm-2.5-200m-pytorch",
+    "config": {
+        "max_context": 1024,
+        "max_horizon": 256,
+        "normalize_inputs": true,
+        "use_continuous_quantile_head": true,
+        "force_flip_invariance": true,
+        "infer_is_positive": true,
+        "fix_quantile_crossing": true
+    }
+}

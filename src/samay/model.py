@@ -47,10 +47,13 @@ from .models.Time_MoE.time_moe.models.configuration_time_moe import TimeMoeConfi
 from .models.Time_MoE.time_moe.models.modeling_time_moe import TimeMoeForPrediction
 from .models.timesfm import timesfm as tfm
 from .models.timesfm.timesfm import pytorch_patched_decoder as ppd
+from .models.timesfm.timesfm.v2.timesfm_2p5_torch import TimesFM_2p5_200M_torch
+from .models.timesfm.timesfm.v2.configs import ForecastConfig
+from .models.timesfm.timesfm.v2 import util
 from .models.TinyTimeMixer.models.tinytimemixer.modeling_tinytimemixer import (
     TinyTimeMixerForPrediction,
 )
-from .utils import get_least_used_gpu, visualize, cleanup_dataloader
+from .utils import get_least_used_gpu, visualize, cleanup_dataloader, quantile_loss
 
 
 class Basemodel:
@@ -120,8 +123,8 @@ class TimesfmModel(Basemodel):
         dataloader = dataset.get_data_loader()
         optimizer = torch.optim.Adam(FinetunedModel.parameters(), lr=lr)
 
-        avg_loss = 0
         for epoch in range(epoch):
+            avg_loss = 0
             for i, (inputs) in enumerate(dataloader):
                 inputs = dataset.preprocess(inputs)
                 inputs = {k: v.to(self.device) for k, v in inputs.items()}
@@ -158,7 +161,7 @@ class TimesfmModel(Basemodel):
             dataset: dataset for plotting, call get_data_loader() to get the dataloader
         """
         dataloader = dataset.get_data_loader()
-        trues, preds, histories, losses = [], [], [], []
+        trues, preds, histories, losses, quantiles = [], [], [], [], []
         with torch.no_grad():
             for i, (inputs) in enumerate(dataloader):
                 inputs = dataset.preprocess(inputs)
@@ -167,14 +170,18 @@ class TimesfmModel(Basemodel):
                 actual_ts = inputs["actual_ts"].detach().cpu().numpy()
                 actual_ts = np.squeeze(actual_ts, axis=0)
 
-                output, _ = self.model.forecast(input_ts)
+                output, quantile_output = self.model.forecast(input_ts)
                 output = output[:, 0 : actual_ts.shape[1]]
+
+                quantile_output = quantile_output.transpose(2, 0, 1)  # q, b, h
+                quantile_output = quantile_output[..., 0 : actual_ts.shape[1]]
 
                 loss = np.mean((output - actual_ts) ** 2)
                 losses.append(loss.item())
                 trues.append(actual_ts)
                 preds.append(output)
                 histories.append(input_ts)
+                quantiles.append(quantile_output)
 
         losses = np.array(losses)
         average_loss = np.average(losses)
@@ -187,12 +194,23 @@ class TimesfmModel(Basemodel):
         histories = np.concatenate(histories, axis=0).reshape(
             -1, dataset.num_ts, histories[-1].shape[-1]
         )
+        quantiles = np.concatenate(quantiles, axis=1).reshape(
+            quantiles[-1].shape[0], -1, dataset.num_ts, quantiles[-1].shape[-1]
+        )
+
+        # denormalize
+        if dataset.normalize:
+            trues = dataset._denormalize_data(trues.reshape(-1, 1)).reshape(trues.shape)
+            preds = dataset._denormalize_data(preds.reshape(-1, 1)).reshape(preds.shape)
+            histories = dataset._denormalize_data(histories.reshape(-1, 1)).reshape(histories.shape)
+            quantiles = dataset._denormalize_data(quantiles.reshape(-1, 1)).reshape(quantiles.shape)
 
         visualize(
             task_name="forecasting",
             trues=trues,
             preds=preds,
             history=histories,
+            quantiles=quantiles,
             **kwargs,
         )
 
@@ -219,7 +237,7 @@ class TimesfmModel(Basemodel):
 
                 output, quantile_output = self.model.forecast(input_ts)
                 output = output[:, 0 : actual_ts.shape[1]]
-                quantile_output = quantile_output[:, 0 : actual_ts.shape[1]]
+                quantile_output = quantile_output[:, 0 : actual_ts.shape[1], 1:].transpose(2, 0, 1)  # q, b, h
 
                 loss = np.mean((output - actual_ts) ** 2)
                 losses.append(loss.item())
@@ -239,9 +257,16 @@ class TimesfmModel(Basemodel):
         histories = np.concatenate(histories, axis=0).reshape(
             -1, dataset.num_ts, histories[-1].shape[-1]
         )
-        quantiles = np.concatenate(quantiles, axis=0).reshape(
-            quantiles[-1].shape[-1], -1, dataset.num_ts, quantiles[-1].shape[-2]
+        quantiles = np.concatenate(quantiles, axis=1).reshape(
+            quantiles[-1].shape[0], -1, dataset.num_ts, quantiles[-1].shape[-1]
         )
+
+        # denormalize
+        if dataset.normalize:
+            trues = dataset._denormalize_data(trues.reshape(-1, 1)).reshape(trues.shape)
+            preds = dataset._denormalize_data(preds.reshape(-1, 1)).reshape(preds.shape)
+            histories = dataset._denormalize_data(histories.reshape(-1, 1)).reshape(histories.shape)
+            quantiles = dataset._denormalize_data(quantiles.reshape(-1, 1)).reshape(quantiles.shape)
 
         mse = MSE(trues, preds)
         mae = MAE(trues, preds)
@@ -252,8 +277,8 @@ class TimesfmModel(Basemodel):
         smape = SMAPE(trues, preds)
         msis = MSIS(trues, preds)
         nd = ND(trues, preds)
-        mwsq = MWSQ(trues, preds, quantiles)
-        crps = CRPS(trues, preds, quantiles)
+        mwsq = MWSQ(trues, quantiles, self.config["quantiles"])
+        crps = CRPS(trues, quantiles, self.config["quantiles"])
 
         return {
             "mse": mse,
@@ -340,14 +365,14 @@ class ChronosModel(Basemodel):
         """
         # Todo: forecast
         dataloader = dataset.get_data_loader()
-        trues, preds, histories = [], [], []
+        trues, preds, histories, quantiles = [], [], [], []
         for i, data in enumerate(dataloader):
             input_seq = data["input_seq"]
             forecast_seq = data["forecast_seq"]
             shape = input_seq.shape
             input_seq = input_seq.reshape(shape[0] * shape[1], shape[2])
             input_seq = torch.tensor(input_seq)
-            quantiles, mean = self.pipeline.predict_quantiles(
+            quantile_outputs, mean = self.pipeline.predict_quantiles(
                 context=input_seq,
                 prediction_length=horizon_len,
                 quantile_levels=quantile_levels,
@@ -359,16 +384,19 @@ class ChronosModel(Basemodel):
             preds.append(mean.detach().cpu().numpy())
             input_seq = input_seq.reshape(shape[0], shape[1], shape[2])
             histories.append(input_seq.detach().cpu().numpy())
+            quantiles.append(quantile_outputs.detach().cpu().numpy().transpose(2, 0, 1))  # q, b, h
 
         trues = np.concatenate(trues, axis=0)
         preds = np.concatenate(preds, axis=0)
         histories = np.concatenate(histories, axis=0)
+        quantiles = np.concatenate(quantiles, axis=1)
 
         visualize(
             task_name="forecasting",
             trues=trues,
             preds=preds,
             history=histories,
+            quantiles=quantiles,
             **kwargs,
         )
 
@@ -425,8 +453,8 @@ class ChronosModel(Basemodel):
         smape = SMAPE(trues, preds)
         msis = MSIS(trues, preds)
         nd = ND(trues, preds)
-        mwsq = MWSQ(trues, preds, quantile_forecasts)
-        crps = CRPS(trues, preds, quantile_forecasts)
+        mwsq = MWSQ(trues, quantile_forecasts, quantile_levels)
+        crps = CRPS(trues, quantile_forecasts, quantile_levels)
 
         return {
             "mse": mse,
@@ -506,13 +534,13 @@ class ChronosBoltModel(Basemodel):
             quantile_levels: list, list of quantile levels
         """
         dataloader = dataset.get_data_loader()
-        trues, preds, histories = [], [], []
+        trues, preds, histories, quantiles = [], [], [], []
         for i, data in enumerate(dataloader):
             context, forecast_seq = data
             c_shape = context.shape
             context = context.reshape(c_shape[0] * c_shape[1], c_shape[2])
             context = torch.tensor(context)
-            quantiles, mean = self.pipeline.predict_quantiles(
+            quantile_outputs, mean = self.pipeline.predict_quantiles(
                 context=context,
                 prediction_length=horizon_len,
                 quantile_levels=quantile_levels,
@@ -524,16 +552,19 @@ class ChronosBoltModel(Basemodel):
             preds.append(mean.detach().cpu().numpy())
             input_seq = context.reshape(c_shape[0], c_shape[1], c_shape[2])
             histories.append(input_seq.detach().cpu().numpy())
+            quantiles.append(quantile_outputs.detach().cpu().numpy().transpose(2, 0, 1))  # q, b, h
 
         trues = np.concatenate(trues, axis=0)
         preds = np.concatenate(preds, axis=0)
         histories = np.concatenate(histories, axis=0)
+        quantiles = np.concatenate(quantiles, axis=1)
 
         visualize(
             task_name="forecasting",
             trues=trues,
             preds=preds,
             history=histories,
+            quantiles=quantiles,
             **kwargs,
         )
 
@@ -588,8 +619,8 @@ class ChronosBoltModel(Basemodel):
         smape = SMAPE(trues, preds)
         msis = MSIS(trues, preds)
         nd = ND(trues, preds)
-        mwsq = MWSQ(trues, preds, quantile_forecasts)
-        crps = CRPS(trues, preds, quantile_forecasts)
+        mwsq = MWSQ(trues, quantile_forecasts, quantile_levels)
+        crps = CRPS(trues, quantile_forecasts, quantile_levels)
 
         return {
             "mse": mse,
@@ -1986,11 +2017,11 @@ class MoiraiTSModel(Basemodel):
         nd = np.mean(np.array([ND(t, p) for t, p in zip(trues, preds)]), axis=0)
 
         mwsq = np.mean(
-            np.array([MWSQ(t, p, q) for t, p, q in zip(trues, preds, quantile_preds)]),
+            np.array([MWSQ(t, p, q) for t, p, q in zip(trues, quantile_preds, quantile_levels)],),
             axis=0,
         )
         crps = np.mean(
-            np.array([CRPS(t, p, q) for t, p, q in zip(trues, preds, quantile_preds)]),
+            np.array([CRPS(t, p, q) for t, p, q in zip(trues, quantile_preds, quantile_levels)],),
             axis=0,
         )
 
@@ -2013,7 +2044,7 @@ class MoiraiTSModel(Basemodel):
         if leaderboard:
             return leaderboard_metrics
         else:
-            return leaderboard_metrics, trues, preds, histories
+            return leaderboard_metrics, trues, preds, histories, quantile_preds
 
     def finetune(self, dataset, **kwargs):
         """Finetune the model on the given dataset.
@@ -2474,6 +2505,248 @@ class TimeMoEModel(Basemodel):
         }
 
 
+class TimesFM_2p5_Model(Basemodel):
+    """TimesFM 2.5 model class."""
+
+    def __init__(self, config=None, repo=None, **kwargs):
+        super().__init__(config=config, repo=repo)
+        self.model = TimesFM_2p5_200M_torch(device=self.device)
+        if repo:
+            self.model.load_checkpoint(hf_repo_id=repo)
+        else:
+            self.model.load_checkpoint()
+
+        self.config = ForecastConfig(**config)
+        self.model.compile(self.config)
+
+    def evaluate(self, dataset, **kwargs):
+        """Evaluate the model on the given dataset.
+
+        Args:
+            dataset (TimesFm_2p5_Dataset): Dataset containing the input data and relevant functions like dataloaders etc.
+
+        Returns:
+            dict: Dictionary containing evaluation metrics.
+        """
+        # self.model.to(self.device)
+        self.model.model.eval()
+        inference_loader = dataset.get_data_loader()
+        horizon = dataset.horizon_len
+
+        trues = []
+        preds = []
+        q_preds = []
+        histories = []
+
+        for batch in inference_loader:
+            with torch.no_grad():  # No need to compute gradients
+                input_seq, target_seq = batch
+                input_seq = input_seq.float()
+                target_seq = target_seq.float()
+                mask_seq = torch.zeros_like(input_seq)
+                point_forecast, quantile_forecast = self.model.compiled_decode(
+                    horizon,
+                    input_seq,
+                    mask_seq,
+                )
+
+                trues.append(target_seq.cpu().numpy())
+                preds.append(point_forecast)
+                q_preds.append(quantile_forecast)
+                histories.append(input_seq.cpu().numpy())
+
+        trues = np.concatenate(trues, axis=0).reshape(-1, dataset.n_channels, dataset.horizon_len)
+        preds = np.concatenate(preds, axis=0).reshape(-1, dataset.n_channels, dataset.horizon_len)
+        q_preds = np.concatenate(q_preds, axis=0).reshape(q_preds[-1].shape[-1], -1, dataset.n_channels, dataset.horizon_len)
+        histories = np.concatenate(histories, axis=0).reshape(-1, dataset.n_channels, dataset.context_len)
+
+        # Calculate metrics
+        mse = MSE(trues, preds)
+        mae = MAE(trues, preds) 
+        mase = MASE(trues, preds)
+        mape = MAPE(trues, preds)
+        rmse = RMSE(trues, preds)
+        nrmse = NRMSE(trues, preds)
+        smape = SMAPE(trues, preds)
+        msis = MSIS(trues, preds)
+        nd = ND(trues, preds)
+        mwsq = MWSQ(trues, preds, q_preds)
+        crps = CRPS(trues, preds, q_preds)
+
+        cleanup_dataloader(inference_loader)
+        return {
+            "mse": mse,
+            "mae": mae,
+            "mase": mase,
+            "mape": mape,
+            "rmse": rmse,
+            "nrmse": nrmse,
+            "smape": smape,
+            "msis": msis,
+            "nd": nd,
+            "mwsq": mwsq,
+            "crps": crps,
+        }, trues, preds, histories
+    
+    def plot(self, dataset, **kwargs):
+        """Plot the results of the model on the given dataset.
+
+        Args:
+            dataset (TimesFm_2p5_Dataset): Dataset containing the input data and relevant functions like dataloaders etc.
+        """
+        _, trues, preds, history = self.evaluate(dataset, leaderboard=False)
+        visualize(
+            task_name="forecasting",
+            trues=np.concatenate(trues, axis=0),
+            preds=np.concatenate(preds, axis=0),
+            history=np.concatenate(history, axis=0
+            ),
+        )
+
+
+    def finetune(self, dataset, **kwargs):
+        """Finetune the model on the given dataset.
+
+        Args:
+            dataset (TimesFm_2p5_Dataset): Dataset containing the input data and relevant functions like dataloaders etc.
+        """
+        lr = 1e-4 if "lr" not in kwargs else kwargs["lr"]
+        epoch = 5 if "epoch" not in kwargs else kwargs["epoch"]
+
+        optimizer = torch.optim.AdamW(self.model.model.parameters(), lr=lr)
+        self.model.model.to(self.device)
+        self.model.model.train()
+        dataloader = dataset.get_data_loader()
+
+        for ep in range(epoch):
+            total_loss = 0
+            for i, batch in enumerate(dataloader):
+                input_seq, target_seq = batch
+                batch_size = input_seq.shape[0]
+                input_seq = input_seq.float().to(self.device)
+                target_seq = target_seq.float().to(self.device)
+                mask_seq = torch.zeros_like(input_seq).to(self.device)
+
+                optimizer.zero_grad()
+                # perform auto-regressive forward pass
+                num_decode_steps = (dataset.horizon_len - 1) // self.model.model.o 
+                num_input_patches = dataset.context_len // self.model.model.p
+                decode_cache_size = num_input_patches + num_decode_steps * self.model.model.m
+
+                # Prefill
+                patched_inputs = torch.reshape(input_seq, (batch_size, -1, self.p))
+                patched_masks = torch.reshape(mask_seq, (batch_size, -1, self.p))
+
+                # running stats
+                n = torch.zeros(batch_size, device=input_seq.device)
+                mu = torch.zeros(batch_size, device=input_seq.device)
+                sigma = torch.zeros(batch_size, device=input_seq.device)
+                patch_mu = []
+                patch_sigma = []
+                for i in range(num_input_patches):
+                    (n, mu, sigma), _ = util.update_running_stats(
+                        n, mu, sigma, patched_inputs[:, i], patched_masks[:, i]
+                    )
+                    patch_mu.append(mu)
+                    patch_sigma.append(sigma)
+                last_n, last_mu, last_sigma = n, mu, sigma
+                context_mu = torch.stack(patch_mu, dim=1)
+                context_sigma = torch.stack(patch_sigma, dim=1)
+                decode_caches = [
+                    util.DecodeCache(
+                        next_index=torch.zeros(
+                            batch_size, dtype=torch.int32, device=input_seq.device
+                        ),
+                        num_masked=torch.zeros(
+                            batch_size, dtype=torch.int32, device=input_seq.device
+                        ),
+                        key=torch.zeros(
+                            batch_size,
+                            decode_cache_size,
+                            self.model.model.h,
+                            self.model.model.hd,
+                            device=input_seq.device,
+                        ),
+                        value=torch.zeros(
+                            batch_size,
+                            decode_cache_size,
+                            self.model.model.h,
+                            self.model.model.hd,
+                            device=input_seq.device,
+                        ),
+                    )
+                    for _ in range(self.model.model.x)
+                ]
+
+                normed_inputs = util.revin(
+                    patched_inputs, context_mu, context_sigma, reverse=False
+                )
+                normed_inputs = torch.where(patched_masks, 0.0, normed_inputs)
+                (_, _, normed_outputs, normed_quantile_spread), decode_caches = self.model.model(
+                    normed_inputs, patched_masks, decode_caches
+                )
+                renormed_outputs = torch.reshape(
+                    util.revin(normed_outputs, context_mu, context_sigma, reverse=True),
+                    (batch_size, -1, self.model.model.o, self.model.model.q),
+                )
+                renormed_quantile_spread = torch.reshape(
+                    util.revin(
+                        normed_quantile_spread, context_mu, context_sigma, reverse=True
+                    ),
+                    (batch_size, -1, self.model.model.os, self.model.model.q),
+                )[:, -1, ...]
+
+                # Autogressive decode
+                ar_outputs = []
+                last_renormed_output = renormed_outputs[:, -1, :, self.model.model.aridx]
+
+                for _ in range(num_decode_steps):
+                    new_patched_input = torch.reshape(
+                        last_renormed_output, (batch_size, self.model.model.m, self.model.model.p)
+                    )
+                    new_mask = torch.zeros_like(new_patched_input, dtype=torch.bool)
+
+                    n, mu, sigma = last_n, last_mu, last_sigma
+                    new_mus, new_sigmas = [], []
+                    for i in range(self.model.model.m):
+                        (n, mu, sigma), _ = util.update_running_stats(
+                            n, mu, sigma, new_patched_input[:, i], new_mask[:, i]
+                        )
+                        new_mus.append(mu)
+                        new_sigmas.append(sigma)
+                    last_n, last_mu, last_sigma = n, mu, sigma
+                    new_mu = torch.stack(new_mus, dim=1)
+                    new_sigma = torch.stack(new_sigmas, dim=1)
+
+                    new_normed_input = util.revin(
+                        new_patched_input, new_mu, new_sigma, reverse=False
+                    )
+                    (_, _, new_normed_output, _), decode_caches = self.model.model(
+                        new_normed_input, new_mask, decode_caches
+                    )
+
+                    new_renormed_output = torch.reshape(
+                        util.revin(new_normed_output, new_mu, new_sigma, reverse=True),
+                        (batch_size, self.model.model.m, self.model.model.o, self.model.model.q),
+                    )
+                    ar_outputs.append(new_renormed_output[:, -1, ...])
+                    last_renormed_output = new_renormed_output[:, -1, :, self.model.model.aridx]
+
+                if num_decode_steps > 0:
+                    ar_renormed_outputs = torch.stack(ar_outputs, dim=1)
+                else:
+                    ar_renormed_outputs = None
+
+                forecast_seq = ar_renormed_outputs if ar_renormed_outputs is not None else renormed_outputs[:, :, :dataset.horizon_len, :]
+
+                loss.backward()
+                optimizer.step()
+                total_loss += loss.item()
+            avg_loss = total_loss / len(dataloader)
+            print(f"Epoch {ep}, Loss: {avg_loss:.4f}")
+
+
+
 if __name__ == "__main__":
     name = "timesfm"
     repo = "google/timesfm-1.0-200m-pytorch"
@@ -2508,3 +2781,7 @@ if __name__ == "__main__":
     forecast_df.columns = ["ds", "unique_id", "y"]
 
     print(forecast_df.head())
+
+
+
+        

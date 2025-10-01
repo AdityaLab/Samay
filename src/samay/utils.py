@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import yaml
 import gc
+import torch
 from datasets import load_from_disk
 from matplotlib import pyplot as plt
 from tqdm import tqdm
@@ -152,6 +153,7 @@ def visualize(
     history=None,
     masks=None,
     context_len=512,
+    quantiles=None,
     **kwargs,
 ):
     """
@@ -214,6 +216,23 @@ def visualize(
             color="red",
             linestyle="--",
         )
+
+        # Plot quantile ranges if available
+        if quantiles is not None:
+            # quantiles shape: (num_quantiles, num_samples, num_channels, horizon)
+            # get the quantiles for the specific time_idx and channel_idx
+            quantile = quantiles[:, time_idx, channel_idx, :]
+            lower_q = quantile[1, :]
+            upper_q = quantile[-1, :]
+
+            plt.fill_between(
+                range(offset, offset + len(pred)),
+                lower_q,
+                upper_q,
+                color="lightcoral",
+                alpha=0.5,
+                label="Quantile Range",
+            )
 
         plt.title(
             f"{dataset} ({freq}) -- (window={time_idx}, variate index={channel_idx})",
@@ -469,6 +488,14 @@ def f1_score(predict, actual):
     recall = TP / (TP + FN + 0.00001)
     f1 = 2 * precision * recall / (precision + recall + 0.00001)
     return f1
+
+
+def quantile_loss(self, pred, actual, quantile):
+        """Calculates quantile loss."""
+        dev = actual - pred
+        loss_first = dev * quantile
+        loss_second = -dev * (1.0 - quantile)
+        return 2 * torch.where(loss_first >= 0, loss_first, loss_second)
 
 
 def cleanup_dataloader(loader):
