@@ -6,6 +6,8 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 import yaml
+import gc
+import torch
 from datasets import load_from_disk
 from matplotlib import pyplot as plt
 from tqdm import tqdm
@@ -151,13 +153,14 @@ def visualize(
     history=None,
     masks=None,
     context_len=512,
+    quantiles=None,
     **kwargs,
 ):
     """
     Visualize the data.
-    If task_name is "forecasting", trues, preds, and history should be provided, which channel_idx and time_idx are optional.
-    If task_name is "anomaly_detection", trues and preds should be provided, which start and end are optional.
-    If task_name is "imputation", trues, preds, and masks should be provided, which channel_idx and time_idx are optional.
+    If task_name is "forecasting", trues, preds and history should be provided, which channel_idx and time_idx are optional.
+    If task_name is "anomaly_detection", trues, preds and labels should be provided, which start and end are optional.
+    If task_name is "imputation", trues, preds and masks should be provided, which channel_idx and time_idx are optional.
 
     channel_idx correpsonds to a specific variate (column) in the dataset.
     time_idx corresponds to a specific window (context + horizon) in the augmented dataset.
@@ -187,7 +190,7 @@ def visualize(
         pred = preds[time_idx, channel_idx, :]
 
         # Set figure size proportional to the number of forecasts
-        plt.figure(figsize=(0.02 * len(history), 4))
+        plt.figure(figsize=(max(0.02 * len(history), 6), 4))
 
         # Plotting the first time series from history
         plt.plot(
@@ -214,6 +217,23 @@ def visualize(
             linestyle="--",
         )
 
+        # Plot quantile ranges if available
+        if quantiles is not None:
+            # quantiles shape: (num_quantiles, num_samples, num_channels, horizon)
+            # get the quantiles for the specific time_idx and channel_idx
+            quantile = quantiles[:, time_idx, channel_idx, :]
+            lower_q = quantile[1, :]
+            upper_q = quantile[-1, :]
+
+            plt.fill_between(
+                range(offset, offset + len(pred)),
+                lower_q,
+                upper_q,
+                color="lightcoral",
+                alpha=0.5,
+                label="Quantile Range",
+            )
+
         plt.title(
             f"{dataset} ({freq}) -- (window={time_idx}, variate index={channel_idx})",
             fontsize=18,
@@ -224,14 +244,34 @@ def visualize(
         plt.show()
 
     elif task_name == "detection":
+        trues, preds, labels = trues[pad_len:], preds[pad_len:], labels[pad_len:]
+        print(preds)
         anomaly_scores = (trues - preds) ** 2
         start = 0 if "start" not in kwargs else kwargs["start"]
-        end = 1000 if "end" not in kwargs else kwargs["end"]
-        plt.plot(trues[start:end], label="Observed", c="darkblue")
-        plt.plot(preds[start:end], label="Predicted", c="red")
-        plt.plot(anomaly_scores[start:end], label="Anomaly Score", c="black")
-        plt.legend(fontsize=16)
+        end = len(trues) if "end" not in kwargs else kwargs["end"]
+        # plt.plot(trues[start:end], label="Observed", c="darkblue")
+        # plt.plot(preds[start:end], label="Predicted", c="red")
+        # plt.plot(anomaly_scores[start:end], label="Anomaly Score", c="black")
+        # plt.legend(fontsize=16)
+        # plt.show()
+        fig, ax1 = plt.subplots()
+        ax1.plot(trues[start:end], label="Observed", c="darkblue")
+        ax1.plot(preds[start:end], label="Predicted", c="red")
+        ax1.legend(fontsize=16, loc="upper left")
+        ax1.set_ylabel("Value", fontsize=14)
+
+        ax2 = ax1.twinx()
+        ax2.plot(anomaly_scores[start:end], label="Anomaly Score", c="black")
+        ax2.set_ylabel("Anomaly Score", fontsize=14)
+        ax2.legend(fontsize=16, loc="upper right")
+
+        plt.title(f"Anomaly Detection ({start}:{end})", fontsize=18)
+        plt.xlabel("Time", fontsize=14)
         plt.show()
+
+        best_f1, best_threshold = adjbestf1(labels, anomaly_scores)
+        print(f"Best F1 Score: {best_f1:.4f} at threshold {best_threshold:.4f}")
+
 
     elif task_name == "imputation":
         time_idx = (
@@ -340,12 +380,11 @@ def get_gifteval_datasets(path: str):
     # Convert the defaultdict to a regular dict
     dataset_dict = dict(dataset_dict)
 
-    return dataset_dict, fil
+    return dataset_dict
 
 
 def get_monash_datasets(path):
     datasets = os.listdir(path)
-
     # Get the filesizes
     data = []
     for x in datasets:
@@ -357,24 +396,147 @@ def get_monash_datasets(path):
 
     # Infer frequencies
     filesizes = []
-    for i in tqdm(range(len(data)), desc="Freq inferring Monash"):
+    print("Inferring frequencies for Monash datasets...")
+    for i in range(len(data)):
         d_path = os.path.join(path, data[i][0], "test", "data.csv")
         df = pd.read_csv(d_path)
         freq = pd.infer_freq(df["timestamp"])
-        filesizes.append((data[i][0], freq, data[i][1]))
+        filesizes.append((d_path, freq, data[i][1]))
 
     filesizes = sorted(filesizes, key=lambda x: x[2])
 
     # Get dictionary for each dataset
-    NAMES = defaultdict(list)
+    NAMES = defaultdict(tuple)
     for x in filesizes:
-        NAMES[x[0]].append(x[1])
+        NAMES[x[0]] = (x[1], x[2])
 
     NAMES = dict(NAMES)
 
-    return NAMES, filesizes
+    return NAMES
 
 
+
+def adjust_predicts(score, label, threshold=None, pred=None, calc_latency=False):
+    """
+    Calculate adjusted predict labels using given `score`, `threshold` (or given `pred`) and `label`.
+    Args:
+        score (np.ndarray): The anomaly score
+        label (np.ndarray): The ground-truth label
+        threshold (float): The threshold of anomaly score.
+            A point is labeled as "anomaly" if its score is lower than the threshold.
+        pred (np.ndarray or None): if not None, adjust `pred` and ignore `score` and `threshold`,
+        calc_latency (bool):
+    Returns:
+        np.ndarray: predict labels
+    """
+    if len(score) != len(label):
+        raise ValueError("score and label must have the same length")
+    score = np.asarray(score)
+    label = np.asarray(label)
+    latency = 0
+    if pred is None:
+        predict = score < threshold
+    else:
+        predict = pred
+    actual = label > 0.1
+    anomaly_state = False
+    anomaly_count = 0
+    for i in range(len(score)):
+        if actual[i] and predict[i] and not anomaly_state:
+            anomaly_state = True
+            anomaly_count += 1
+            for j in range(i, 0, -1):
+                if not actual[j]:
+                    break
+                else:
+                    if not predict[j]:
+                        predict[j] = True
+                        latency += 1
+        elif not actual[i]:
+            anomaly_state = False
+        if anomaly_state:
+            predict[i] = True
+    if calc_latency:
+        return predict, latency / (anomaly_count + 1e-4)
+    else:
+        return predict
+    
+def adjbestf1(y_true: np.array, y_scores: np.array, n_splits: int = 100):
+    thresholds = np.linspace(y_scores.min(), y_scores.max(), n_splits)
+    adjusted_f1 = np.zeros(thresholds.shape)
+
+    for i, threshold in enumerate(thresholds):
+        y_pred = y_scores >= threshold
+        y_pred = adjust_predicts(
+            score=y_scores,
+            label=(y_true > 0),
+            pred=y_pred,
+            threshold=None,
+            calc_latency=False,
+        )
+        adjusted_f1[i] = f1_score(y_pred, y_true)
+
+    best_adjusted_f1 = np.max(adjusted_f1)
+    return best_adjusted_f1, thresholds[np.argmax(adjusted_f1)]
+
+def f1_score(predict, actual):
+    TP = np.sum(predict * actual)
+    TN = np.sum((1 - predict) * (1 - actual))
+    FP = np.sum(predict * (1 - actual))
+    FN = np.sum((1 - predict) * actual)
+    precision = TP / (TP + FP + 0.00001)
+    recall = TP / (TP + FN + 0.00001)
+    f1 = 2 * precision * recall / (precision + recall + 0.00001)
+    return f1
+
+
+def quantile_loss(self, pred, actual, quantile):
+        """Calculates quantile loss."""
+        dev = actual - pred
+        loss_first = dev * quantile
+        loss_second = -dev * (1.0 - quantile)
+        return 2 * torch.where(loss_first >= 0, loss_first, loss_second)
+
+
+def cleanup_dataloader(loader):
+    """
+    Best-effort shutdown for PyTorch DataLoader workers across versions.
+    - Stops worker processes/queues
+    - Drops iterator references so the resource_tracker doesn't see leaked semaphores
+    """
+    try:
+        # Classic API: iterator lives on loader._iterator
+        it = getattr(loader, "_iterator", None)
+
+        # Newer versions: shutdown lives on the iterator
+        if it is not None:
+            shutdown = getattr(it, "_shutdown_workers", None)
+            if callable(shutdown):
+                try:
+                    shutdown()
+                except Exception:
+                    pass
+
+        # Older versions had loader._shutdown_workers()
+        if it is None:
+            shutdown_loader = getattr(loader, "_shutdown_workers", None)
+            if callable(shutdown_loader):
+                try:
+                    shutdown_loader()
+                except Exception:
+                    pass
+
+    finally:
+        # Drop strong refs so GC can reap queues/semlocks
+        try:
+            if hasattr(loader, "_iterator"):
+                loader._iterator = None
+        except Exception:
+            pass
+        del loader
+        gc.collect()
+
+  
 if __name__ == "__main__":
     # ts_path = "/nethome/sli999/TSFMProject/src/tsfmproject/models/moment/data/ECG5000_TRAIN.ts"
     # csv_path = "/nethome/sli999/TSFMProject/src/tsfmproject/models/moment/data/ECG5000_TRAIN.csv"
@@ -385,9 +547,11 @@ if __name__ == "__main__":
     # ts_labels = np.array(ts_labels, dtype=int)
     # print(data - ts_data)
     # print(labels - ts_labels)
-    arrow_dir = "/nethome/sli999/TSFMProject/data/monash/wind_farms_minutely/train"
+    # arrow_dir = "/nethome/sli999/TSFMProject/data/monash/wind_farms_minutely/train"
     # arrow_to_csv(arrow_dir)
     # print("Conversion complete.")
-    csv_file = arrow_dir + "/data.csv"
-    df = pd.read_csv(csv_file)
-    print(df.head())
+    # csv_file = arrow_dir + "/data.csv"
+    # df = pd.read_csv(csv_file)
+    # print(df.head())
+    nms = get_monash_datasets("../../data/monash")
+    print(nms)
