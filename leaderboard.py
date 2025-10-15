@@ -205,7 +205,7 @@ def calc_pred_and_context_len(freq):
 
 if __name__ == "__main__":
     
-    for model_name in ["moirai2"]:
+    for model_name in ["moirai2", "moment", "moirai"]:
         print(f"Evaluating model: {model_name}")
         # create csv file for leaderboard if not already created
         csv_path = f"leaderboard/{model_name}.csv"
@@ -444,6 +444,7 @@ if __name__ == "__main__":
                     mode="test",
                     context_len=context_len,
                     horizon_len=pred_len,
+                    boundaries=(-1, -1, -1)
                 )
 
                 start = time.time()
@@ -469,6 +470,7 @@ if __name__ == "__main__":
                     mode="test",
                     context_len=context_len,
                     horizon_len=pred_len,
+                    boundaries=(-1, -1, -1)
                 )
 
                 start = time.time()
@@ -563,7 +565,7 @@ if __name__ == "__main__":
             df.to_csv(csv_path, index=False)
         mod_end = time.time()
         print(f"Time taken for model {model_name}: {mod_end - mod_start:.2f} seconds")
-        mod_timestamp[model_name] = round(mod_end - mod_start, 2)
+        mod_timestamp = round(mod_end - mod_start, 2)
 
     print("All models evaluated!")
     print("Model evaluation times: ", mod_timestamp)
