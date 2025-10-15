@@ -263,10 +263,10 @@ class TimesfmModel(Basemodel):
 
         # denormalize
         if dataset.normalize:
-            trues = dataset._denormalize_data(trues.reshape(-1, 1)).reshape(trues.shape)
-            preds = dataset._denormalize_data(preds.reshape(-1, 1)).reshape(preds.shape)
-            histories = dataset._denormalize_data(histories.reshape(-1, 1)).reshape(histories.shape)
-            quantiles = dataset._denormalize_data(quantiles.reshape(-1, 1)).reshape(quantiles.shape)
+            trues = dataset._denormalize_data(trues)
+            preds = dataset._denormalize_data(preds)
+            histories = dataset._denormalize_data(histories)
+            quantiles = dataset._denormalize_data(q for q in quantiles)
 
         mse = MSE(trues, preds)
         mae = MAE(trues, preds)
@@ -801,7 +801,33 @@ class LPTMModel(Basemodel):
             preds = np.concatenate(preds, axis=0)
             histories = np.concatenate(histories, axis=0)
 
-            return average_loss, trues, preds, histories
+            # denormalize
+            trues = dataset._denormalize_data(trues)
+            preds = dataset._denormalize_data(preds)
+            histories = dataset._denormalize_data(histories)
+
+            # return average_loss, trues, preds, histories
+            mse = MSE(trues, preds)
+            mae = MAE(trues, preds)
+            mase = MASE(trues, preds)
+            mape = MAPE(trues, preds)   
+            rmse = RMSE(trues, preds)
+            nrmse = NRMSE(trues, preds)
+            smape = SMAPE(trues, preds)
+            msis = MSIS(trues, preds)
+            nd = ND(trues, preds)
+
+            return {
+                "mse": mse,
+                "mae": mae,
+                "mase": mase,
+                "mape": mape,           
+                "rmse": rmse,
+                "nrmse": nrmse,
+                "smape": smape,
+                "msis": msis,
+                "nd": nd,
+            }
 
         elif task_name == "forecasting2":
             trues, preds, histories, losses = [], [], [], []
@@ -828,6 +854,11 @@ class LPTMModel(Basemodel):
             trues = np.concatenate(trues, axis=0)
             preds = np.concatenate(preds, axis=0)
             histories = np.concatenate(histories, axis=0)
+
+            # denormalize
+            trues = dataset._denormalize_data(trues)
+            preds = dataset._denormalize_data(preds)
+            histories = dataset._denormalize_data(histories)
 
             mse = MSE(trues, preds)
             mae = MAE(trues, preds)
@@ -937,6 +968,39 @@ class LPTMModel(Basemodel):
             embeddings = np.concatenate(embeddings)
             labels = np.concatenate(labels)
             return accuracy, embeddings, labels
+
+    def plot(self, dataset, task_name="forecasting", **kwargs):
+        dataloader = dataset.get_data_loader()
+        if task_name == "forecasting":
+            trues, preds, histories = [], [], []
+            with torch.no_grad():
+                for i, data in enumerate(dataloader):
+                    # unpack the data
+                    timeseries, input_mask, forecast = data
+                    # Move the data to the GPU
+                    timeseries = timeseries.float().to(self.device)
+                    input_mask = input_mask.to(self.device)
+                    forecast = forecast.float().to(self.device)
+
+                    output = self.model(x_enc=timeseries, input_mask=input_mask)
+                    trues.append(forecast.detach().cpu().numpy())
+                    preds.append(output.forecast.detach().cpu().numpy())
+                    histories.append(timeseries.detach().cpu().numpy())
+
+            trues = np.concatenate(trues, axis=0)
+            preds = np.concatenate(preds, axis=0)
+            histories = np.concatenate(histories, axis=0)
+
+            visualize(
+                task_name="forecasting",
+                trues=trues,
+                preds=preds,
+                history=histories,
+                **kwargs,
+            )
+
+        else:
+            raise ValueError(f"Task {task_name} not supported for plotting.")
 
 
 class MomentModel(Basemodel):
@@ -1246,6 +1310,10 @@ class MomentModel(Basemodel):
             preds = np.concatenate(preds, axis=0)
             histories = np.concatenate(histories, axis=0)
 
+            # denormalize
+            trues = dataset._denormalize_data(trues)
+            preds = dataset._denormalize_data(preds)
+            histories = dataset._denormalize_data(histories)
             mse = MSE(trues, preds)
             mae = MAE(trues, preds)
             mase = MASE(trues, preds)
@@ -2006,6 +2074,17 @@ class MoiraiTSModel(Basemodel):
         ]
         quantile_preds = [np.transpose(q, (1, 0, 2)) for q in quantile_preds]
 
+        # print([h.shape for h in histories])
+        # denormalize the data
+        if dataset.normalize:
+            trues = dataset._denormalize_data(trues)
+            preds = dataset._denormalize_data(preds)
+            histories = dataset._denormalize_data(histories)
+            quantile_preds = [
+                dataset._denormalize_data(q)
+                for q in quantile_preds
+            ]
+
         mse = np.mean(np.array([MSE(t, p) for t, p in zip(trues, preds)]), axis=0)
         mae = np.mean(np.array([MAE(t, p) for t, p in zip(trues, preds)]), axis=0)
         mase = np.mean(np.array([MASE(t, p) for t, p in zip(trues, preds)]), axis=0)
@@ -2480,6 +2559,11 @@ class TimeMoEModel(Basemodel):
         histories = np.concatenate(histories, axis=0).reshape(
             -1, dataset.n_channels, dataset.context_len
         )
+
+        # denormalize the data
+        trues = dataset._denormalize_data(trues)
+        preds = dataset._denormalize_data(preds)
+        histories = dataset._denormalize_data(histories)
 
         # Calculate metrics
         mse = MSE(trues, preds)
