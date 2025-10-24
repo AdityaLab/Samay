@@ -266,7 +266,10 @@ class TimesfmModel(Basemodel):
             trues = dataset._denormalize_data(trues)
             preds = dataset._denormalize_data(preds)
             histories = dataset._denormalize_data(histories)
-            quantiles = dataset._denormalize_data(q for q in quantiles)
+            new_quantiles = []
+            for i in range(quantiles.shape[0]):
+                new_quantiles.append(dataset._denormalize_data(quantiles[i]))
+            quantiles = np.array(new_quantiles)
 
         mse = MSE(trues, preds)
         mae = MAE(trues, preds)
@@ -2594,14 +2597,15 @@ class TimesFM_2p5_Model(Basemodel):
 
     def __init__(self, config=None, repo=None, **kwargs):
         super().__init__(config=config, repo=repo)
-        self.model = TimesFM_2p5_200M_torch(device=self.device)
+        
         if repo:
-            self.model.load_checkpoint(hf_repo_id=repo)
+            self.model = TimesFM_2p5_200M_torch.from_pretrained(repo, device=self.device)
         else:
-            self.model.load_checkpoint()
+            self.model = TimesFM_2p5_200M_torch(device=self.device)
 
         self.config = ForecastConfig(**config)
         self.model.compile(self.config)
+        self.quantiles = self.model.model.config.quantiles
 
     def evaluate(self, dataset, **kwargs):
         """Evaluate the model on the given dataset.
@@ -2614,6 +2618,7 @@ class TimesFM_2p5_Model(Basemodel):
         """
         # self.model.to(self.device)
         self.model.model.eval()
+        self.model.model.to(self.device)
         inference_loader = dataset.get_data_loader()
         horizon = dataset.horizon_len
 
@@ -2633,6 +2638,7 @@ class TimesFM_2p5_Model(Basemodel):
                     input_seq,
                     mask_seq,
                 )
+                quantile_forecast = quantile_forecast[..., 1:].transpose(2, 0, 1)
 
                 trues.append(target_seq.cpu().numpy())
                 preds.append(point_forecast)
@@ -2641,8 +2647,16 @@ class TimesFM_2p5_Model(Basemodel):
 
         trues = np.concatenate(trues, axis=0).reshape(-1, dataset.n_channels, dataset.horizon_len)
         preds = np.concatenate(preds, axis=0).reshape(-1, dataset.n_channels, dataset.horizon_len)
-        q_preds = np.concatenate(q_preds, axis=0).reshape(q_preds[-1].shape[-1], -1, dataset.n_channels, dataset.horizon_len)
+        q_preds = np.concatenate(q_preds, axis=1).reshape(q_preds[-1].shape[0], -1, dataset.n_channels, dataset.horizon_len)
         histories = np.concatenate(histories, axis=0).reshape(-1, dataset.n_channels, dataset.context_len)
+
+        trues = dataset._denormalize_data(trues)
+        preds = dataset._denormalize_data(preds)
+        new_q_preds = np.zeros_like(q_preds)
+        for i in range(q_preds.shape[0]):
+            new_q_preds[i] = dataset._denormalize_data(q_preds[i])
+        q_preds = new_q_preds
+        histories = dataset._denormalize_data(histories)
 
         # Calculate metrics
         mse = MSE(trues, preds)
@@ -2654,8 +2668,8 @@ class TimesFM_2p5_Model(Basemodel):
         smape = SMAPE(trues, preds)
         msis = MSIS(trues, preds)
         nd = ND(trues, preds)
-        mwsq = MWSQ(trues, preds, q_preds)
-        crps = CRPS(trues, preds, q_preds)
+        mwsq = MWSQ(trues, q_preds, quantiles=self.quantiles)
+        crps = CRPS(trues, q_preds, quantiles=self.quantiles)
 
         cleanup_dataloader(inference_loader)
         return {
@@ -2698,130 +2712,38 @@ class TimesFM_2p5_Model(Basemodel):
         epoch = 5 if "epoch" not in kwargs else kwargs["epoch"]
 
         optimizer = torch.optim.AdamW(self.model.model.parameters(), lr=lr)
-        self.model.model.to(self.device)
+        # self.model.model.to(self.device)
         self.model.model.train()
         dataloader = dataset.get_data_loader()
+        horizon = dataset.horizon_len
+        # torch.autograd.set_detect_anomaly(True)
 
         for ep in range(epoch):
             total_loss = 0
-            for i, batch in enumerate(dataloader):
+            for batch in dataloader:
                 input_seq, target_seq = batch
                 batch_size = input_seq.shape[0]
-                input_seq = input_seq.float().to(self.device)
+                input_seq = input_seq.float()
                 target_seq = target_seq.float().to(self.device)
-                mask_seq = torch.zeros_like(input_seq).to(self.device)
+                mask_seq = torch.zeros_like(input_seq)
 
                 optimizer.zero_grad()
-                # perform auto-regressive forward pass
-                num_decode_steps = (dataset.horizon_len - 1) // self.model.model.o 
-                num_input_patches = dataset.context_len // self.model.model.p
-                decode_cache_size = num_input_patches + num_decode_steps * self.model.model.m
-
-                # Prefill
-                patched_inputs = torch.reshape(input_seq, (batch_size, -1, self.p))
-                patched_masks = torch.reshape(mask_seq, (batch_size, -1, self.p))
-
-                # running stats
-                n = torch.zeros(batch_size, device=input_seq.device)
-                mu = torch.zeros(batch_size, device=input_seq.device)
-                sigma = torch.zeros(batch_size, device=input_seq.device)
-                patch_mu = []
-                patch_sigma = []
-                for i in range(num_input_patches):
-                    (n, mu, sigma), _ = util.update_running_stats(
-                        n, mu, sigma, patched_inputs[:, i], patched_masks[:, i]
-                    )
-                    patch_mu.append(mu)
-                    patch_sigma.append(sigma)
-                last_n, last_mu, last_sigma = n, mu, sigma
-                context_mu = torch.stack(patch_mu, dim=1)
-                context_sigma = torch.stack(patch_sigma, dim=1)
-                decode_caches = [
-                    util.DecodeCache(
-                        next_index=torch.zeros(
-                            batch_size, dtype=torch.int32, device=input_seq.device
-                        ),
-                        num_masked=torch.zeros(
-                            batch_size, dtype=torch.int32, device=input_seq.device
-                        ),
-                        key=torch.zeros(
-                            batch_size,
-                            decode_cache_size,
-                            self.model.model.h,
-                            self.model.model.hd,
-                            device=input_seq.device,
-                        ),
-                        value=torch.zeros(
-                            batch_size,
-                            decode_cache_size,
-                            self.model.model.h,
-                            self.model.model.hd,
-                            device=input_seq.device,
-                        ),
-                    )
-                    for _ in range(self.model.model.x)
-                ]
-
-                normed_inputs = util.revin(
-                    patched_inputs, context_mu, context_sigma, reverse=False
+                point_forecast, quantile_forecast = self.model.compiled_decode(
+                    horizon,
+                    input_seq,
+                    mask_seq,
+                    train=True
                 )
-                normed_inputs = torch.where(patched_masks, 0.0, normed_inputs)
-                (_, _, normed_outputs, normed_quantile_spread), decode_caches = self.model.model(
-                    normed_inputs, patched_masks, decode_caches
-                )
-                renormed_outputs = torch.reshape(
-                    util.revin(normed_outputs, context_mu, context_sigma, reverse=True),
-                    (batch_size, -1, self.model.model.o, self.model.model.q),
-                )
-                renormed_quantile_spread = torch.reshape(
-                    util.revin(
-                        normed_quantile_spread, context_mu, context_sigma, reverse=True
-                    ),
-                    (batch_size, -1, self.model.model.os, self.model.model.q),
-                )[:, -1, ...]
-
-                # Autogressive decode
-                ar_outputs = []
-                last_renormed_output = renormed_outputs[:, -1, :, self.model.model.aridx]
-
-                for _ in range(num_decode_steps):
-                    new_patched_input = torch.reshape(
-                        last_renormed_output, (batch_size, self.model.model.m, self.model.model.p)
-                    )
-                    new_mask = torch.zeros_like(new_patched_input, dtype=torch.bool)
-
-                    n, mu, sigma = last_n, last_mu, last_sigma
-                    new_mus, new_sigmas = [], []
-                    for i in range(self.model.model.m):
-                        (n, mu, sigma), _ = util.update_running_stats(
-                            n, mu, sigma, new_patched_input[:, i], new_mask[:, i]
-                        )
-                        new_mus.append(mu)
-                        new_sigmas.append(sigma)
-                    last_n, last_mu, last_sigma = n, mu, sigma
-                    new_mu = torch.stack(new_mus, dim=1)
-                    new_sigma = torch.stack(new_sigmas, dim=1)
-
-                    new_normed_input = util.revin(
-                        new_patched_input, new_mu, new_sigma, reverse=False
-                    )
-                    (_, _, new_normed_output, _), decode_caches = self.model.model(
-                        new_normed_input, new_mask, decode_caches
-                    )
-
-                    new_renormed_output = torch.reshape(
-                        util.revin(new_normed_output, new_mu, new_sigma, reverse=True),
-                        (batch_size, self.model.model.m, self.model.model.o, self.model.model.q),
-                    )
-                    ar_outputs.append(new_renormed_output[:, -1, ...])
-                    last_renormed_output = new_renormed_output[:, -1, :, self.model.model.aridx]
-
-                if num_decode_steps > 0:
-                    ar_renormed_outputs = torch.stack(ar_outputs, dim=1)
-                else:
-                    ar_renormed_outputs = None
-
-                forecast_seq = ar_renormed_outputs if ar_renormed_outputs is not None else renormed_outputs[:, :, :dataset.horizon_len, :]
+                # quantile_forecast = quantile_forecast[..., 1:]
+                # point_forecast, quantile_forecast = torch.Tensor(point_forecast), torch.Tensor(quantile_forecast)
+                
+                loss = nn.functional.mse_loss(point_forecast, target_seq)
+                quantiles = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+                for i, quantile in enumerate(quantiles):
+                    last_patch_quantile = quantile_forecast[:, :, i + 1]
+                    loss += torch.mean(
+                        quantile_loss(last_patch_quantile, target_seq.squeeze(-1),
+                                            quantile))
 
                 loss.backward()
                 optimizer.step()

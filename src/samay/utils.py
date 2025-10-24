@@ -490,7 +490,7 @@ def f1_score(predict, actual):
     return f1
 
 
-def quantile_loss(self, pred, actual, quantile):
+def quantile_loss(pred, actual, quantile):
         """Calculates quantile loss."""
         dev = actual - pred
         loss_first = dev * quantile

@@ -17,11 +17,12 @@
 import logging
 import math
 import os
-from typing import Sequence
+from typing import Dict, Optional, Sequence, Union
 
 import huggingface_hub
 import numpy as np
-from safetensors.torch import load_file
+from safetensors.torch import load_file, save_file
+from pathlib import Path
 import torch
 from torch import nn
 
@@ -80,11 +81,17 @@ class TimesFM_2p5_200M_torch_module(nn.Module):
     else:
       self.device_count = 1
 
-  def load_checkpoint(self, path: str):
+  def load_checkpoint(self, path: str, **kwargs):
     """Loads a PyTorch TimesFM model from a checkpoint."""
     tensors = load_file(path)
-    self.load_state_dict(tensors)
+    self.load_state_dict(tensors, strict=True)
     self.to(self.device)
+    torch_compile = True
+    if "torch_compile" in kwargs:
+      torch_compile = kwargs["torch_compile"]
+    if torch_compile:
+      print("Compiling model...")
+      self = torch.compile(self)
 
   def forward(
       self,
@@ -115,13 +122,13 @@ class TimesFM_2p5_200M_torch_module(nn.Module):
         output_quantile_spread,
     ), new_decode_caches
 
-  def decode(self, horizon: int, inputs, masks):
+  def decode(self, horizon: int, inputs, masks, train=False):
     """Decodes the time series."""
 
     inputs = inputs.to(self.device)
     masks = masks.to(self.device)
 
-    with torch.no_grad():
+    with torch.set_grad_enabled(train):
       batch_size, context = inputs.shape[0], inputs.shape[1]
       num_decode_steps = (horizon - 1) // self.o
       num_input_patches = context // self.p
@@ -274,7 +281,7 @@ class TimesFM_2p5_200M_torch_module(nn.Module):
     return outputs
 
 
-class TimesFM_2p5_200M_torch(timesfm_2p5_base.TimesFM_2p5):
+class TimesFM_2p5_200M_torch(timesfm_2p5_base.TimesFM_2p5, huggingface_hub.ModelHubMixin):
   """PyTorch implementation of TimesFM 2.5 with 200M parameters."""
 
   def __init__(self, device: torch.device = torch.device("cpu")):
@@ -283,33 +290,65 @@ class TimesFM_2p5_200M_torch(timesfm_2p5_base.TimesFM_2p5):
     self.model = TimesFM_2p5_200M_torch_module(device=device)
     assert isinstance(self.model, nn.Module) # For type checker.
 
-  def load_checkpoint(
-      self,
-      *,
-      path: str | None = None,
-      hf_repo_id: str | None = "google/timesfm-2.5-200m-pytorch",
-  ) -> None:
-    """Loads a PyTorch safetensors TimesFM model.
-
-    Args:
-        path: Path to a local checkpoint. If not provided, will try to download
-          from the default Hugging Face repo.
-        hf_repo_id: If provided, will download from the specified Hugging Face
-          repo instead.
+  @classmethod
+  def _from_pretrained(
+    cls,
+    *,
+    model_id: str = "google/timesfm-2.5-200m-pytorch",
+    revision: Optional[str],
+    cache_dir: Optional[Union[str, Path]],
+    force_download: bool,
+    proxies: Optional[Dict],
+    resume_download: Optional[bool],
+    local_files_only: bool,
+    token: Optional[str],
+    **model_kwargs,
+  ):
     """
-    if path:
-      pass
-    elif hf_repo_id:
-      logging.info(
-          "Downloading checkpoint from Hugging Face repo %s", hf_repo_id
-      )
-      path = os.path.join(
-          huggingface_hub.snapshot_download(hf_repo_id), "model.safetensors"
-      )
-      logging.info("Loading checkpoint from: %s", path)
+    Loads a PyTorch safetensors TimesFM model from a local path or the Hugging
+    Face Hub. This method is the backend for the `from_pretrained` class
+    method provided by `ModelHubMixin`.
+    """
+    # Create an instance of the model wrapper class.
+    instance = cls(**model_kwargs)
+
+    # Determine the path to the model weights.
+    model_file_path = ""
+    if os.path.isdir(model_id):
+      logging.info("Loading checkpoint from local directory: %s", model_id)
+      model_file_path = os.path.join(model_id, "model.safetensors")
+      if not os.path.exists(model_file_path):
+        raise FileNotFoundError(f"model.safetensors not found in directory {model_id}")
     else:
-      raise ValueError("Either path or hf_repo_id must be provided.")
-    self.model.load_checkpoint(path)
+      logging.info("Downloading checkpoint from Hugging Face repo %s", model_id)
+      model_file_path = huggingface_hub.hf_hub_download(
+        repo_id=model_id,
+        filename="model.safetensors",
+        revision=revision,
+        cache_dir=cache_dir,
+        force_download=force_download,
+        proxies=proxies,
+        resume_download=resume_download,
+        token=token,
+        local_files_only=local_files_only,
+      )
+
+    logging.info("Loading checkpoint from: %s", model_file_path)
+    # Load the weights into the model.
+    instance.model.load_checkpoint(model_file_path, **model_kwargs)
+    return instance
+
+  def _save_pretrained(self, save_directory: Union[str, Path]):
+    """
+    Saves the model's state dictionary to a safetensors file. This method
+    is called by the `save_pretrained` method from `ModelHubMixin`.
+    """
+    if not os.path.exists(save_directory):
+      os.makedirs(save_directory)
+
+    weights_path = os.path.join(save_directory, "model.safetensors")
+    save_file(self.model.state_dict(), weights_path)
+
 
   def compile(self, forecast_config: configs.ForecastConfig, **kwargs) -> None:
     """Attempts to compile the model for fast decoding.
@@ -361,7 +400,7 @@ class TimesFM_2p5_200M_torch(timesfm_2p5_base.TimesFM_2p5):
       )
     self.forecast_config = fc
 
-    def _compiled_decode(horizon, inputs, masks):
+    def _compiled_decode(horizon, inputs, masks, train=False):
       if horizon > fc.max_horizon:
         raise ValueError(
             "Horizon must be less than the max horizon."
@@ -385,7 +424,7 @@ class TimesFM_2p5_200M_torch(timesfm_2p5_base.TimesFM_2p5):
         mu, sigma = None, None
 
       pf_outputs, quantile_spreads, ar_outputs = self.model.decode(
-          forecast_config.max_horizon, inputs, masks
+          forecast_config.max_horizon, inputs, masks, train=train
       )
       to_cat = [pf_outputs[:, -1, ...]]
       if ar_outputs is not None:
@@ -398,7 +437,7 @@ class TimesFM_2p5_200M_torch(timesfm_2p5_base.TimesFM_2p5):
 
       if fc.force_flip_invariance:
         flipped_pf_outputs, flipped_quantile_spreads, flipped_ar_outputs = (
-            self.model.decode(forecast_config.max_horizon, -inputs, masks)
+            self.model.decode(forecast_config.max_horizon, -inputs, masks, train=train)
         )
         flipped_quantile_spreads = flip_quantile_fn(flipped_quantile_spreads)
         flipped_pf_outputs = flip_quantile_fn(flipped_pf_outputs)
@@ -413,13 +452,21 @@ class TimesFM_2p5_200M_torch(timesfm_2p5_base.TimesFM_2p5):
         full_forecast = (full_forecast - flipped_full_forecast) / 2
 
       if fc.use_continuous_quantile_head:
-        for quantile_index in [1, 2, 3, 4, 6, 7, 8, 9]:
-          full_forecast[:, :, quantile_index] = (
-              quantile_spreads[:, : fc.max_horizon, quantile_index]
-              - quantile_spreads[:, : fc.max_horizon, 5]
-              + full_forecast[:, : fc.max_horizon, 5]
-          )
-      full_forecast = full_forecast[:, :horizon, :]
+        # for quantile_index in [1, 2, 3, 4, 6, 7, 8, 9]:
+          # full_forecast[:, :, quantile_index] = (
+          #     quantile_spreads[:, : fc.max_horizon, quantile_index]
+          #     - quantile_spreads[:, : fc.max_horizon, 5]
+          #     + full_forecast[:, : fc.max_horizon, 5]
+          # )
+        idx = torch.tensor([1,2,3,4,6,7,8,9], device=full_forecast.device)
+        base = full_forecast[:, :fc.max_horizon, 5:6]                # (B, H, 1)
+        repl = (quantile_spreads[:, :fc.max_horizon, idx]            # (B, H, |idx|)
+                - quantile_spreads[:, :fc.max_horizon, 5:6] + base)
+
+        ff = full_forecast.clone()
+        ff[:, :fc.max_horizon, idx] = repl
+        full_forecast = ff
+      full_forecast = full_forecast[:, :horizon, :].contiguous()
 
       if fc.return_backcast:
         full_backcast = pf_outputs[:, :-1, : self.model.p, :].reshape(
@@ -428,18 +475,20 @@ class TimesFM_2p5_200M_torch(timesfm_2p5_base.TimesFM_2p5):
         full_forecast = torch.cat([full_backcast, full_forecast], dim=1)
 
       if fc.fix_quantile_crossing:
+        ff = full_forecast.clone()
         for i in [4, 3, 2, 1]:
-          full_forecast[:, :, i] = torch.where(
-              full_forecast[:, :, i] < full_forecast[:, :, i + 1],
-              full_forecast[:, :, i],
-              full_forecast[:, :, i + 1],
+          ff[:, :, i] = torch.where(
+              ff[:, :, i] < ff[:, :, i + 1],
+              ff[:, :, i],
+              ff[:, :, i + 1],
           )
         for i in [6, 7, 8, 9]:
-          full_forecast[:, :, i] = torch.where(
-              full_forecast[:, :, i] > full_forecast[:, :, i - 1],
-              full_forecast[:, :, i],
-              full_forecast[:, :, i - 1],
+          ff[:, :, i] = torch.where(
+              ff[:, :, i] > ff[:, :, i - 1],
+              ff[:, :, i],
+              ff[:, :, i - 1],
           )
+        full_forecast = ff
 
       if fc.normalize_inputs:
         full_forecast = revin(full_forecast, mu, sigma, reverse=True)
@@ -451,7 +500,8 @@ class TimesFM_2p5_200M_torch(timesfm_2p5_base.TimesFM_2p5):
             full_forecast,
         )
 
-      full_forecast = full_forecast.detach().cpu().numpy()
+      if not train:
+        full_forecast = full_forecast.detach().cpu().numpy()
       return full_forecast[..., 5], full_forecast
 
     self.compiled_decode = _compiled_decode
