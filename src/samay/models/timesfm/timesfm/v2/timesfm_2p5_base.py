@@ -107,6 +107,7 @@ class TimesFM_2p5_200M_Definition:
           use_bias=False,
           use_rotary_position_embeddings=True,
           ff_activation="swish",
+          fuse_qkv=True,
       ),
   )
   output_projection_point: ResidualBlockConfig = ResidualBlockConfig(

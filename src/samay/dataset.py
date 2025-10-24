@@ -2056,6 +2056,7 @@ class TimesFM_2P5_Dataset(BaseDataset):
         stride=10,
         context_len=512,
         horizon_len=96,
+        normalize=True,
         **kwargs,
     ):
         super().__init__(
@@ -2071,6 +2072,7 @@ class TimesFM_2P5_Dataset(BaseDataset):
 
         self.stride = stride
         self.boundaries = boundaries
+        self.normalize = normalize
 
         self.pad = False
         self._read_data()
@@ -2093,15 +2095,15 @@ class TimesFM_2P5_Dataset(BaseDataset):
         if self.boundaries[2] == 0:
             self.boundaries[2] = int(len(self.df) - 1)
 
-        scaler = StandardScaler()
+        self.scaler = StandardScaler()
         if self.boundaries == [-1, -1, -1]:
             # use all data for training
             self.boundaries = [0, 0, len(self.df) - 1]
 
-            scaler = scaler.fit(self.df)
+            self.scaler = self.scaler.fit(self.df)
         else:
             # fit the scaler on the training data
-            scaler = scaler.fit(self.df[slice(0, self.boundaries[0]), :])
+            self.scaler = self.scaler.fit(self.df[slice(0, self.boundaries[0]), :])
 
 
         if self.mode == "train":
@@ -2110,7 +2112,7 @@ class TimesFM_2P5_Dataset(BaseDataset):
         elif self.mode == "test":
             self.data = self.df[slice(self.boundaries[1], self.boundaries[2]), :]
 
-        self.data = scaler.transform(self.data)
+        self.data = self.scaler.transform(self.data)
 
         self.length_timeseries = self.data.shape[0]
         self.required_len = self.context_len + self.horizon_len
@@ -2150,7 +2152,7 @@ class TimesFM_2P5_Dataset(BaseDataset):
             return input_seq, forecast_seq
 
         elif self.task_name == "finetune":
-            pred_end = seq_end + 1
+            pred_end = seq_end + self.horizon_len
             if pred_end > self.length_timeseries:
                 pred_end = self.length_timeseries
                 seq_end = pred_end - 1
@@ -2160,8 +2162,8 @@ class TimesFM_2P5_Dataset(BaseDataset):
                 seq_start:seq_end, channel_idx
             ]  # shape: (context_len, )
             forecast_seq = self.data[seq_end:pred_end, channel_idx]
-            loss_mask = np.ones(input_seq.shape[0])
-            return input_seq, forecast_seq, loss_mask
+            # loss_mask = np.ones(input_seq.shape[0])
+            return input_seq, forecast_seq
 
     def __len__(self):
         if self.length_timeseries < self.context_len + self.horizon_len:
@@ -2174,3 +2176,14 @@ class TimesFM_2P5_Dataset(BaseDataset):
         else:
             return DataLoader(self, shuffle=False, batch_size=self.batchsize)
         # shape: (batch_size, n_channels, seq_len)
+
+    def _denormalize_data(self, data: np.ndarray):
+        data = np.asarray(data)
+        if self.normalize:
+            data = data[:, : self.n_channels, :]
+            data_flatten = np.transpose(data, (0, 2, 1)).reshape(-1, self.n_channels)
+            return self.scaler.inverse_transform(data_flatten).reshape(
+                data.shape[0], data.shape[1], data.shape[2]
+            )
+        else:
+            return data
