@@ -29,6 +29,17 @@ from .moirai_utils import (
 from .utils import get_multivariate_data
 
 
+def freq_mapping(freq: str)-> str:
+    if freq == 'ME':
+        return 'M'
+    elif freq.split('-')[0] == 'YE':
+        return 'Y-' + freq.split('-')[1]
+    elif freq.split('-')[0] == 'QE':
+        return 'Q-' + freq.split('-')[1]
+    else:
+        return freq
+
+
 # function for specific dataset to download and preprocess data, returning path
 # BaseDataset class call the specific function decided by "name" argument
 class BaseDataset:
@@ -200,6 +211,8 @@ class TimesfmDataset(BaseDataset):
             holiday=False,
             permute=False,
         )
+        if self.normalize:
+            self.scaler = tfdtl.scaler
         self.num_ts = len(self.ts_cols)
         if self.mode == "train":
             tfset = tfdtl.torch_dataset(mode="train", shift=self.stride)
@@ -228,6 +241,16 @@ class TimesfmDataset(BaseDataset):
             return self.preprocess_train_batch(data)
         else:
             return self.preprocess_eval_batch(data)
+        
+    def _denormalize_data(self, data):
+        if self.normalize:
+            data = data[:, : self.num_ts, :]
+            data_flatten = np.transpose(data, (0, 2, 1)).reshape(-1, self.num_ts)
+            return self.scaler.inverse_transform(data_flatten).reshape(
+                data.shape[0], data.shape[1], data.shape[2]
+            )
+        else:
+            return data
 
 
 class ChronosDataset(BaseDataset):
@@ -633,11 +656,11 @@ class MomentDataset(BaseDataset):
         if self.boundaries[1] == 0:
             self.boundaries[1] = int(len(self.df) * 0.7)
         if self.boundaries[2] == 0:
-            self.boundaries[2] = int(len(self.df) - 1)
+            self.boundaries[2] = int(len(self.df))
 
         if self.boundaries == [-1, -1, -1]:
             # use all data for training
-            self.boundaries = [0, 0, len(self.df) - 1]
+            self.boundaries = [0, 0, len(self.df)]
 
         self.forecast_horizon = min(self.forecast_horizon, int(0.3 * len(self.df) + 1))
 
@@ -661,7 +684,10 @@ class MomentDataset(BaseDataset):
         elif self.task_name == "detection":
             self.labels = self.df.iloc[:, -1].values
             ts = self.df.iloc[:, 0].values.reshape(-1, 1)
-            self.scaler.fit(ts[slice(0, self.boundaries[0])])
+            if self.mode == 'train':
+                self.scaler.fit(ts[slice(0, self.boundaries[0])])
+            elif self.mode == 'test':
+                self.scaler.fit(ts[slice(self.boundaries[1], self.boundaries[2])])
             ts = self.scaler.transform(ts)
 
         elif self.task_name == "classification":
@@ -709,9 +735,15 @@ class MomentDataset(BaseDataset):
         self.pad_len = self.required_len - self.length_timeseries
         # Pad data with zeros from the left
         if self.pad:
-            self.data = np.pad(self.data, ((self.pad_len, 0), (0, 0)))
+            self.data = np.pad(
+                self.data, ((self.pad_len, 0), (0, 0))
+            )
+            if self.task_name == 'detection':
+                self.labels = np.pad(
+                    self.labels, (self.pad_len, 0)
+                )
         # If num of channels isn't multiple of max_col_num, pad with zeros
-        if self.n_channels % self.max_col_num != 0:
+        if self.n_channels % self.max_col_num != 0 and self.task_name == "forecasting":
             self.data = np.pad(
                 self.data,
                 ((0, 0), (0, self.max_col_num - self.n_channels % self.max_col_num)),
@@ -764,7 +796,7 @@ class MomentDataset(BaseDataset):
     def __len__(self):
         if self.task_name == "classification":
             return self.num_series
-        if self.length_timeseries < self.seq_len + self.forecast_horizon:
+        if self.length_timeseries <= self.seq_len + self.forecast_horizon:
             return 1 * self.num_chunks
         return self.num_chunks * self.one_chunk_num
 
@@ -789,6 +821,34 @@ class MomentDataset(BaseDataset):
         labels = np.vectorize(transform.get)(labels)
 
         return labels
+
+    def _denormalize_data(self, data):
+        # rebuild the original shape
+        # original shape: (window_per_chunk, n_channels, seq_len)
+        # data shape: (chunk_num*window_per_chunk, max_col_num, seq_len)
+        # chunk*num*max_col_num >= n_channels, if not equal, the data is padded with zeros
+        num_chunks = (self.n_channels + self.max_col_num - 1) // self.max_col_num
+        if num_chunks > 1:
+            new_data = []
+            for i in range(num_chunks):
+                data_chunk = (
+                    data[
+                        i*self.one_chunk_num:(i+1)*self.one_chunk_num,:,:,
+                    ]
+                    if i != num_chunks - 1
+                    else data[i*self.one_chunk_num:, :, :]
+                )
+                if (i + 1) * self.max_col_num < self.n_channels:
+                    new_data.append(data_chunk)
+                else:
+                    new_data.append(data_chunk[:, : self.n_channels - i * self.max_col_num, :])
+            data = np.concatenate(new_data, axis=1)
+        else:
+            data = data[:, :self.n_channels, :]
+        data_flatten = np.transpose(data, (0, 2, 1)).reshape(-1, self.n_channels)
+        return self.scaler.inverse_transform(data_flatten).reshape(
+            data.shape[0], data.shape[1], data.shape[2]
+        )
 
 
 class TinyTimeMixerDataset(BaseDataset):
@@ -1163,6 +1223,34 @@ class LPTMDataset(BaseDataset):
 
         return labels
 
+    def _denormalize_data(self, data):
+        # rebuild the original shape
+        # original shape: (window_per_chunk, n_channels, seq_len)
+        # data shape: (chunk_num*window_per_chunk, max_col_num, seq_len)
+        # chunk*num*max_col_num >= n_channels, if not equal, the data is padded with zeros
+        num_chunks = (self.n_channels + self.max_col_num - 1) // self.max_col_num
+        if num_chunks > 1:
+            new_data = []
+            for i in range(num_chunks):
+                data_chunk = (
+                    data[
+                        i*self.one_chunk_num:(i+1)*self.one_chunk_num,:,:,
+                    ]
+                    if i != num_chunks - 1
+                    else data[i*self.one_chunk_num:, :, :]
+                )
+                if (i + 1) * self.max_col_num < self.n_channels:
+                    new_data.append(data_chunk)
+                else:
+                    new_data.append(data_chunk[:, : self.n_channels - i * self.max_col_num, :])
+            data = np.concatenate(new_data, axis=1)
+        else:
+            data = data[:, :self.n_channels, :]
+        data_flatten = np.transpose(data, (0, 2, 1)).reshape(-1, self.n_channels)
+        return self.scaler.inverse_transform(data_flatten).reshape(
+            data.shape[0], data.shape[1], data.shape[2]
+        )
+
 
 class MoiraiDataset(BaseDataset):
     """
@@ -1244,6 +1332,7 @@ class MoiraiDataset(BaseDataset):
         and splits the columns as index (datetime_col) and variates columns (ts_cols)
         """
         self.data = pd.read_csv(self.data_path)
+        self.horizon_len = min(self.horizon_len, int(0.3 * len(self.data) + 1))
 
         # set datetime_col as index and remove it from columns
         self.data[self.datetime_col] = pd.to_datetime(self.data[self.datetime_col])
@@ -1251,6 +1340,7 @@ class MoiraiDataset(BaseDataset):
         self.freq = pd.infer_freq(self.data.index)
         self.dataset = self.data
         self.ts_cols = [col for col in self.dataset.columns if col != self.datetime_col]
+        self.n_channels = len(self.ts_cols)
 
     def _preprocess(
         self, start_date=None, end_date=None, freq=None, operation="mean", **kwargs
@@ -1313,13 +1403,19 @@ class MoiraiDataset(BaseDataset):
                     int(self.dataset.shape[0] * 0.8),
                     self.dataset.shape[0] - 1,
                 ]
+        elif self.boundaries == (-1, -1, -1):
+            self.boundaries = [
+                0,
+                0,
+                self.dataset.shape[0] - 1,
+            ]
 
         # Normalize the dataset if required
         if self.normalize:
             print("Normalizing the dataset")
-            scaler = StandardScaler()
-            scaler = scaler.fit(self.dataset.iloc[: self.boundaries[1]])
-            data_normalized = scaler.transform(self.dataset)
+            self.scaler = StandardScaler()
+            self.scaler = self.scaler.fit(self.dataset.iloc[: int(self.dataset.shape[0] * 0.6)])
+            data_normalized = self.scaler.transform(self.dataset)
             self.dataset = pd.DataFrame(
                 data_normalized, columns=self.dataset.columns, index=self.dataset.index
             )
@@ -1336,7 +1432,7 @@ class MoiraiDataset(BaseDataset):
         for i in range(self.dataset.shape[1]):
             data.append(
                 {
-                    "start": Period(self.start_date, freq=self.freq),
+                    "start": Period(self.start_date, freq=freq_mapping(self.freq)),
                     "target": self.dataset.iloc[:, i].values,
                     "item_id": self.dataset.columns[i],
                 }
@@ -1354,22 +1450,25 @@ class MoiraiDataset(BaseDataset):
         data = []
         num_windows = (
             1
-            if (self.dataset.shape[0] - self.boundaries[1]) < self.horizon_len
-            else (self.dataset.shape[0] - self.boundaries[1]) // self.horizon_len
+            if (self.dataset.shape[0] - self.boundaries[1]) < self.horizon_len + self.context_len
+            else (self.dataset.shape[0] - self.boundaries[1] - self.context_len) // self.horizon_len
         )
         for i in range(self.dataset.shape[1]):
             for j in range(num_windows):
-                start_idx = self.boundaries[1] + j * self.horizon_len
+                if j == num_windows - 1:
+                    start_idx = self.dataset.shape[0] - self.horizon_len
+                else:
+                    start_idx = self.boundaries[1] + self.context_len + j * self.horizon_len
                 end_idx = start_idx + self.horizon_len
                 data.append(
                     (
                         {  # input
-                            "start": Period(self.start_date, freq=self.freq),
-                            "target": self.dataset.iloc[:start_idx, i].values,
+                            "start": Period(self.start_date, freq=freq_mapping(self.freq)),
+                            "target": self.dataset.iloc[max(0, start_idx-self.context_len):start_idx, i].values,
                             "item_id": self.dataset.columns[i],
                         },
                         {  # label
-                            "start": Period(self.start_date, freq=self.freq),
+                            "start": Period(self.start_date, freq=freq_mapping(self.freq)),
                             "target": self.dataset.iloc[start_idx:end_idx, i].values,
                             "item_id": self.dataset.columns[i],
                         },
@@ -1653,7 +1752,26 @@ class MoiraiDataset(BaseDataset):
         return super().__getitem__(idx)
 
     def __len__(self):
-        return len(self.dataset[0]["target"])
+        return len(self.data)
+    
+    def _denormalize_data(self, data: np.ndarray):
+        """Denormalizes the data
+
+        Args:
+            data (np.ndarray): Normalized data
+
+        Returns:
+            np.ndarray: Denormalized data
+        """
+        data = np.asarray(data)
+        if self.normalize:
+            data = data[:, : self.n_channels, :]
+            data_flatten = np.transpose(data, (0, 2, 1)).reshape(-1, self.n_channels)
+            return self.scaler.inverse_transform(data_flatten).reshape(
+                data.shape[0], data.shape[1], data.shape[2]
+            )
+        else:
+            return data
 
 
 class Moirai_old_Dataset(BaseDataset):
@@ -1824,15 +1942,15 @@ class TimeMoEDataset(BaseDataset):
         if self.boundaries[2] == 0:
             self.boundaries[2] = int(len(self.df) - 1)
 
-        scaler = StandardScaler()
+        self.scaler = StandardScaler()
         if self.boundaries == [-1, -1, -1]:
             # use all data for training
             self.boundaries = [0, 0, len(self.df) - 1]
 
-            scaler = scaler.fit(self.df)
+            self.scaler.fit(self.df)
         else:
             # fit the scaler on the training data
-            scaler = scaler.fit(self.df[slice(0, self.boundaries[0]), :])
+            self.scaler.fit(self.df[slice(0, self.boundaries[0]), :])
 
 
         if self.mode == "train":
@@ -1841,7 +1959,7 @@ class TimeMoEDataset(BaseDataset):
         elif self.mode == "test":
             self.data = self.df[slice(self.boundaries[1], self.boundaries[2]), :]
 
-        self.data = scaler.transform(self.data)
+        self.data = self.scaler.transform(self.data)
 
         self.length_timeseries = self.data.shape[0]
         self.required_len = self.context_len + self.horizon_len
@@ -1905,3 +2023,167 @@ class TimeMoEDataset(BaseDataset):
         else:
             return DataLoader(self, shuffle=False, batch_size=self.batchsize)
         # shape: (batch_size, n_channels, seq_len)
+
+    def _denormalize_data(self, data: np.ndarray):
+        # rebuild the original shape
+        # original shape: (window_per_col, n_channels, seq_len)
+        # data shape: (n_channels*window_per_col, 1, seq_len)
+        data = data.reshape(self.n_channels, self.num_windows, -1).transpose(1, 0, 2)
+        data_flatten = np.transpose(data, (0, 2, 1)).reshape(-1, self.n_channels)
+        return self.scaler.inverse_transform(data_flatten).reshape(
+            data.shape[0], data.shape[1], data.shape[2]
+        )
+
+
+class TimesFM_2P5_Dataset(BaseDataset):
+    """
+    Dataset class for TimeMoE model
+    Data Format:
+    Dict with keys:
+    input_ts: np.ndarray, historical time series data
+    actual_ts: np.ndarray, actual time series data
+    """
+
+    def __init__(
+        self,
+        name=None,
+        datetime_col=None,
+        path=None,
+        batch_size=16,
+        mode="train",
+        boundaries=[0, 0, 0],
+        task_name="evaluation",
+        stride=10,
+        context_len=512,
+        horizon_len=96,
+        normalize=True,
+        **kwargs,
+    ):
+        super().__init__(
+            name=name,
+            datetime_col=datetime_col,
+            path=path,
+            batchsize=batch_size,
+            mode=mode,
+        )
+        self.context_len = context_len
+        self.horizon_len = horizon_len
+        self.task_name = task_name
+
+        self.stride = stride
+        self.boundaries = boundaries
+        self.normalize = normalize
+
+        self.pad = False
+        self._read_data()
+
+    def _read_data(self):
+        self.df = pd.read_csv(self.data_path)
+        self.horizon_len = min(self.horizon_len, int(0.3*len(self.df)+1))
+
+        self.n_channels = self.df.shape[1] - 1
+        
+        if self.datetime_col:
+            self.df.drop(columns=[self.datetime_col], inplace=True)
+
+        self.df = np.array(self.df)
+
+        if self.boundaries[0] == 0:
+            self.boundaries[0] = int(len(self.df) * 0.5)
+        if self.boundaries[1] == 0:
+            self.boundaries[1] = int(len(self.df) * 0.7)
+        if self.boundaries[2] == 0:
+            self.boundaries[2] = int(len(self.df) - 1)
+
+        self.scaler = StandardScaler()
+        if self.boundaries == [-1, -1, -1]:
+            # use all data for training
+            self.boundaries = [0, 0, len(self.df) - 1]
+
+            self.scaler = self.scaler.fit(self.df)
+        else:
+            # fit the scaler on the training data
+            self.scaler = self.scaler.fit(self.df[slice(0, self.boundaries[0]), :])
+
+
+        if self.mode == "train":
+            self.data = self.df[slice(0, self.boundaries[0]), :]
+
+        elif self.mode == "test":
+            self.data = self.df[slice(self.boundaries[1], self.boundaries[2]), :]
+
+        self.data = self.scaler.transform(self.data)
+
+        self.length_timeseries = self.data.shape[0]
+        self.required_len = self.context_len + self.horizon_len
+        self.pad_len = 0
+        if self.length_timeseries < self.required_len:
+            self.pad = True
+        self.pad_sequence()
+
+    def pad_sequence(self):
+        self.pad_len = self.required_len - self.length_timeseries
+        # Pad data with zeros from the left
+        if self.pad:
+            self.data = np.pad(self.data, ((self.pad_len, 0), (0, 0)))
+        self.length_timeseries = self.data.shape[0]
+        self.num_windows = (
+            1
+            + (self.length_timeseries - self.context_len - self.horizon_len)
+            // self.stride
+        )
+
+    def __getitem__(self, index):
+        channel_idx = index // self.num_windows
+        seq_start = self.stride * (index % self.num_windows)
+        seq_end = seq_start + self.context_len
+
+        if self.task_name == "evaluation":
+            pred_end = seq_end + self.horizon_len
+
+            if pred_end > self.length_timeseries:
+                pred_end = self.length_timeseries
+                seq_end = pred_end - self.horizon_len
+                seq_start = seq_end - self.context_len
+
+            # input_seq = self.data[seq_start:seq_end, :].T
+            input_seq = self.data[seq_start:seq_end, channel_idx]
+            forecast_seq = self.data[seq_end:pred_end, channel_idx]
+            return input_seq, forecast_seq
+
+        elif self.task_name == "finetune":
+            pred_end = seq_end + self.horizon_len
+            if pred_end > self.length_timeseries:
+                pred_end = self.length_timeseries
+                seq_end = pred_end - 1
+                seq_start = seq_end - self.context_len
+
+            input_seq = self.data[
+                seq_start:seq_end, channel_idx
+            ]  # shape: (context_len, )
+            forecast_seq = self.data[seq_end:pred_end, channel_idx]
+            # loss_mask = np.ones(input_seq.shape[0])
+            return input_seq, forecast_seq
+
+    def __len__(self):
+        if self.length_timeseries < self.context_len + self.horizon_len:
+            return 1 * self.n_channels
+        return self.n_channels * self.num_windows
+
+    def get_data_loader(self):
+        if self.mode == "train":
+            return DataLoader(self, shuffle=True, batch_size=self.batchsize)
+        else:
+            return DataLoader(self, shuffle=False, batch_size=self.batchsize)
+        # shape: (batch_size, n_channels, seq_len)
+
+    def _denormalize_data(self, data: np.ndarray):
+        data = np.asarray(data)
+        if self.normalize:
+            data = data[:, : self.n_channels, :]
+            data_flatten = np.transpose(data, (0, 2, 1)).reshape(-1, self.n_channels)
+            return self.scaler.inverse_transform(data_flatten).reshape(
+                data.shape[0], data.shape[1], data.shape[2]
+            )
+        else:
+            return data

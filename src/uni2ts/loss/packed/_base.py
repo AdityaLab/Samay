@@ -137,3 +137,18 @@ class PackedDistributionLoss(PackedLoss):
         sample_id: Int[torch.Tensor, "*batch seq_len"],
         variate_id: Int[torch.Tensor, "*batch seq_len"],
     ) -> Float[torch.Tensor, "*batch seq_len #dim"]: ...
+
+
+class PackedQuantileLoss(PackedLoss):
+    """Abstract base class for loss functions on quantile forecasts."""
+
+    @abc.abstractmethod
+    def _loss_func(
+        self,
+        pred: Float[torch.Tensor, "*batch seq_len num_quantiles*patch_size"],
+        target: Float[torch.Tensor, "*batch seq_len patch_size"],
+        prediction_mask: Bool[torch.Tensor, "*batch seq_len"],
+        observed_mask: Bool[torch.Tensor, "*batch seq_len patch_size"],
+        sample_id: Int[torch.Tensor, "*batch seq_len"],
+        variate_id: Int[torch.Tensor, "*batch seq_len"],
+    ) -> Float[torch.Tensor, "*batch seq_len patch_size"]: ...

@@ -7,6 +7,9 @@ import time
 import pandas as pd
 import torch
 
+src_path = os.path.abspath(os.path.join("src"))
+if src_path not in sys.path:
+    sys.path.insert(0, src_path)
 
 from samay.model import TimesfmModel, MomentModel, ChronosModel, ChronosBoltModel, TinyTimeMixerModel, MoiraiTSModel, LPTMModel, TimeMoEModel
 from samay.dataset import TimesfmDataset, MomentDataset, ChronosDataset, ChronosBoltDataset, TinyTimeMixerDataset, MoiraiDataset, LPTMDataset, TimeMoEDataset
@@ -39,7 +42,7 @@ from samay.utils import get_gifteval_datasets, get_monash_datasets, load_args
 # }
 
 
-SERIES = "gifteval" # "monash" or "gifteval"
+SERIES = "monash" # "monash" or "gifteval"
 
 print("Loading datasets...")
 # start = time.time()
@@ -120,22 +123,22 @@ MONASH_NAMES = {
 }
 
 MONASH_SETTINGS = {
-    # "weather": 30,
+    "weather": 30,
     "tourism_yearly": 4,
     "tourism_quarterly": 8,
     "tourism_monthly": 24,
     "cif_2016": 12,
-    # "london_smart_meters": 60,
+    "london_smart_meters": 60,
     "australian_electricity_demand": 60,
-    # "wind_farms_minutely": 60,
+    "wind_farms_minutely": 60,
     "bitcoin": 30,
     "pedestrian_counts": 48,
     "vehicle_trips": 30,
     "kdd_cup_2018": 48,
     "nn5_daily": 56,
     "nn5_weekly": 8,
-    # "kaggle_web_traffic": 59,
-    # "kaggle_web_traffic_weekly": 8,
+    "kaggle_web_traffic": 59,
+    "kaggle_web_traffic_weekly": 8,
     "solar_10_minutes": 60,
     "solar_weekly": 5,
     "car_parts": 12,
@@ -162,7 +165,7 @@ if SERIES == "gifteval":
     NAMES = get_gifteval_datasets("data/gifteval")
 elif SERIES == "monash":
     # Load the datasets from the Monash dataset
-    NAMES = get_monash_datasets("data/monash", MONASH_NAMES, MONASH_SETTINGS)
+    NAMES = get_monash_datasets("data/monash")
 
 end = time.time()
 print(NAMES)
@@ -202,7 +205,7 @@ def calc_pred_and_context_len(freq):
 
 if __name__ == "__main__":
     
-    for model_name in ["timemoe"]:
+    for model_name in ["moirai2", "moment", "moirai"]:
         print(f"Evaluating model: {model_name}")
         # create csv file for leaderboard if not already created
         csv_path = f"leaderboard/{model_name}.csv"
@@ -246,6 +249,9 @@ if __name__ == "__main__":
         elif model_name == "moirai":
             arg_path = "config/moirai.json"
             args = load_args(arg_path)
+        elif model_name == "moirai2":
+            arg_path = "config/moirai2.json"
+            args = load_args(arg_path)
         elif model_name == "lptm":
             arg_path = "config/lptm.json"
             args = load_args(arg_path)
@@ -255,7 +261,8 @@ if __name__ == "__main__":
 
         mod_start = time.time()
         mod_timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        for fname, freq, fs in filesizes:
+        for fpath, (freq, fs) in NAMES.items():
+            fname = fpath.split("/")[2]
             print(f"Model eval started at: {mod_timestamp}")
             print(
                 f"Evaluating {fname} ({freq}) started at: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
@@ -275,7 +282,7 @@ if __name__ == "__main__":
             elif model_name == "ttm":
                 args["config"]["horizon_len"] = pred_len
                 args["config"]["context_len"] = context_len
-            elif model_name == "moirai":
+            elif model_name == "moirai" or model_name == "moirai2":
                 args["config"]["horizon_len"] = pred_len
                 args["config"]["context_len"] = context_len
 
@@ -437,6 +444,33 @@ if __name__ == "__main__":
                     mode="test",
                     context_len=context_len,
                     horizon_len=pred_len,
+                    boundaries=(-1, -1, -1)
+                )
+
+                start = time.time()
+                metrics = model.evaluate(dataset, leaderboard=True)
+                end = time.time()
+                print(f"Size of dataset: {fs:.2f} MB")
+                print(
+                    f"Time taken for evaluation of {fname}: {end - start:.2f} seconds"
+                )
+
+                del model
+                del dataset
+                torch.cuda.empty_cache()
+                gc.collect()
+            
+            elif model_name == "moirai2":
+                model = MoiraiTSModel(**args)
+                dataset = MoiraiDataset(
+                    name=fname,
+                    datetime_col="timestamp",
+                    freq=freq,
+                    path=dataset_path,
+                    mode="test",
+                    context_len=context_len,
+                    horizon_len=pred_len,
+                    boundaries=(-1, -1, -1)
                 )
 
                 start = time.time()
@@ -531,7 +565,7 @@ if __name__ == "__main__":
             df.to_csv(csv_path, index=False)
         mod_end = time.time()
         print(f"Time taken for model {model_name}: {mod_end - mod_start:.2f} seconds")
-        mod_times[model_name] = round(mod_end - mod_start, 2)
+        mod_timestamp = round(mod_end - mod_start, 2)
 
     print("All models evaluated!")
-    print("Model evaluation times: ", mod_times)
+    print("Model evaluation times: ", mod_timestamp)

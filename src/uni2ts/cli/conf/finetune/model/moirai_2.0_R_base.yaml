@@ -1,0 +1,29 @@
+# load a pretrained checkpoint from huggingface hub
+_target_: uni2ts.model.moirai.MoiraiFinetune
+module:
+  _target_: uni2ts.model.moirai.Moirai2Module.from_pretrained
+  pretrained_model_name_or_path: Salesforce/moirai-2.0-R-small
+module_kwargs:
+  _target_: builtins.dict
+  d_model: 384
+  num_layers: 6
+  patch_size: 16
+  max_seq_len: 512
+  attn_dropout_p: 0.0
+  dropout_p: 0.0
+  quantile_levels: ${as_tuple:[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]}
+  num_predict_token: 4
+  d_ff: 1024
+  scaling: true
+min_patches: 2
+min_mask_ratio: 0.15
+max_mask_ratio: 0.5
+max_dim: 128
+loss_func:
+  _target_: uni2ts.loss.packed.PackedNLLLoss
+lr: 1e-3
+weight_decay: 1e-1
+beta1: 0.9
+beta2: 0.98
+num_training_steps: ${mul:${trainer.max_epochs},${train_dataloader.num_batches_per_epoch}}
+num_warmup_steps: 0
