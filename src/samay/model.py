@@ -40,6 +40,7 @@ from .models.chronosforecasting.chronos.chronos_bolt import (
     ChronosBoltConfig,
     ChronosBoltPipeline,
 )
+from .models.chronosforecasting.chronos2 import Chronos2Model, Chronos2CoreConfig
 from .models.lptm.model.backbone import LPTMPipeline
 from .models.moment.momentfm.models.moment import MOMENTPipeline
 from .models.moment.momentfm.utils.masking import Masking
@@ -216,7 +217,7 @@ class TimesfmModel(Basemodel):
 
         # return average_loss, trues, preds, histories
 
-    def evaluate(self, dataset, **kwargs):
+    def evaluate(self, dataset, metric_only=False, **kwargs):
         """
         Evaluate the model.
         Args:
@@ -283,19 +284,34 @@ class TimesfmModel(Basemodel):
         mwsq = MWSQ(trues, quantiles, self.config["quantiles"])
         crps = CRPS(trues, quantiles, self.config["quantiles"])
 
-        return {
-            "mse": mse,
-            "mae": mae,
-            "mase": mase,
-            "mape": mape,
-            "rmse": rmse,
-            "nrmse": nrmse,
-            "smape": smape,
-            "msis": msis,
-            "nd": nd,
-            "mwsq": mwsq,
-            "crps": crps,
-        }
+        if metric_only:
+            return {
+                "mse": mse,
+                "mae": mae,
+                "mase": mase,
+                "mape": mape,
+                "rmse": rmse,
+                "nrmse": nrmse,
+                "smape": smape,
+                "msis": msis,
+                "nd": nd,
+                "mwsq": mwsq,
+                "crps": crps,
+            }
+        else:
+            return {
+                "mse": mse,
+                "mae": mae,
+                "mase": mase,
+                "mape": mape,
+                "rmse": rmse,
+                "nrmse": nrmse,
+                "smape": smape,
+                "msis": msis,
+                "nd": nd,
+                "mwsq": mwsq,
+                "crps": crps,
+            }, trues, preds, histories, quantiles
 
 
 class ChronosModel(Basemodel):
@@ -403,7 +419,7 @@ class ChronosModel(Basemodel):
             **kwargs,
         )
 
-    def evaluate(self, dataset, horizon_len, quantile_levels, **kwargs):
+    def evaluate(self, dataset, horizon_len, quantile_levels, metric_only=False, **kwargs):
         """
         Evaluate the model.
         Args:
@@ -459,19 +475,34 @@ class ChronosModel(Basemodel):
         mwsq = MWSQ(trues, quantile_forecasts, quantile_levels)
         crps = CRPS(trues, quantile_forecasts, quantile_levels)
 
-        return {
-            "mse": mse,
-            "mae": mae,
-            "mase": mase,
-            "mape": mape,
-            "rmse": rmse,
-            "nrmse": nrmse,
-            "smape": smape,
-            "msis": msis,
-            "nd": nd,
-            "mwsq": mwsq,
-            "crps": crps,
-        }
+        if metric_only:
+            return {
+                "mse": mse,
+                "mae": mae,
+                "mase": mase,
+                "mape": mape,
+                "rmse": rmse,
+                "nrmse": nrmse,
+                "smape": smape,
+                "msis": msis,
+                "nd": nd,
+                "mwsq": mwsq,
+                "crps": crps,
+            }
+        else:
+            return {
+                "mse": mse,
+                "mae": mae,
+                "mase": mase,
+                "mape": mape,
+                "rmse": rmse,
+                "nrmse": nrmse,
+                "smape": smape,
+                "msis": msis,
+                "nd": nd,
+                "mwsq": mwsq,
+                "crps": crps,
+            }, trues, preds, histories, quantile_forecasts 
 
 
 class ChronosBoltModel(Basemodel):
@@ -571,7 +602,7 @@ class ChronosBoltModel(Basemodel):
             **kwargs,
         )
 
-    def evaluate(self, dataset, horizon_len, quantile_levels, **kwargs):
+    def evaluate(self, dataset, horizon_len, quantile_levels, metric_only=False, **kwargs):
         """
         Evaluate the model.
         Args:
@@ -625,20 +656,246 @@ class ChronosBoltModel(Basemodel):
         mwsq = MWSQ(trues, quantile_forecasts, quantile_levels)
         crps = CRPS(trues, quantile_forecasts, quantile_levels)
 
-        return {
-            "mse": mse,
-            "mae": mae,
-            "mase": mase,
-            "mape": mape,
-            "rmse": rmse,
-            "nrmse": nrmse,
-            "smape": smape,
-            "msis": msis,
-            "nd": nd,
-            "mwsq": mwsq,
-            "crps": crps,
-        }
+        if metric_only:
+            return {
+                "mse": mse,
+                "mae": mae,
+                "mase": mase,
+                "mape": mape,
+                "rmse": rmse,
+                "nrmse": nrmse,
+                "smape": smape,
+                "msis": msis,
+                "nd": nd,
+                "mwsq": mwsq,
+                "crps": crps,
+            }
+        else:
+            return {
+                "mse": mse,
+                "mae": mae,
+                "mase": mase,
+                "mape": mape,
+                "rmse": rmse,
+                "nrmse": nrmse,
+                "smape": smape,
+                "msis": msis,
+                "nd": nd,
+                "mwsq": mwsq,
+                "crps": crps,
+            }, trues, preds, histories, quantile_forecasts
 
+
+class Chronos_2_Model(Basemodel):
+    def __init__(self, config=None, repo=None):
+        """
+        Args:
+            config: dict, model configuration
+            repo: str, Huggingface model repository id
+        """
+        super().__init__(config=config, repo=repo)
+        if repo:
+            print("Loading Chronos2 model from Huggingface repository")
+            try:
+                self.model = Chronos2Model.from_pretrained(repo)
+            except:
+                raise ValueError(f"Repository {repo} not found")
+        else:
+            print("Initializing a new Chronos2 model without pre-trained weights")
+            chronos_config = Chronos2CoreConfig(**config)
+            self.model = Chronos2Model(chronos_config)
+
+        self.max_patches = self.model.chronos_config.max_output_patches
+        self.patch_size = self.model.chronos_config.output_patch_size
+
+    def finetune(self, dataset, **kwargs):
+        """
+        Args:
+            dataset: dataset for finetuning, call get_data_loader() to get the dataloader
+        """
+        dataloader = dataset.get_data_loader()
+        self.model.to(self.device)
+        self.model.train()
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-4)
+        avg_loss = 0
+
+        if "epoch" in kwargs:
+            epoch_num = kwargs["epoch"]
+        else:
+            epoch_num = 5
+        for epoch in range(epoch_num):
+            for i, (inputs) in enumerate(dataloader):
+                input_seq, forecast_seq = inputs
+                input_seq = input_seq.to(self.device)
+                forecast_seq = forecast_seq.to(self.device)
+
+                # for finetuning, we assume the horizon length is smaller than max_patches
+                output = self.model(
+                    context=input_seq, num_output_patches=(forecast_seq.shape[-1] + self.patch_size - 1) // self.patch_size,
+                    future_target=forecast_seq
+                )  # b, h, q
+                quantile_output = output.quantile_preds # b, h, q
+                loss = output.loss
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                avg_loss += loss.item()
+            avg_loss /= len(dataloader)
+            print(f"Epoch {epoch}, Loss: {avg_loss}")
+
+
+    def plot(self, dataset, **kwargs):
+        """
+        Plot the forecast results.
+        Args:
+            dataset: dataset for plotting, call get_data_loader() to get the dataloader
+        """
+        dataloader = dataset.get_data_loader()
+        trues, preds, histories, quantiles = [], [], [], []
+        self.model.to(self.device)
+        self.model.eval()
+        with torch.no_grad():
+            for i, (inputs) in enumerate(dataloader):
+                input_seq, forecast_seq = inputs
+                input_seq = input_seq.to(self.device)
+                forecast_seq = forecast_seq.to(self.device)
+
+                # check whether the horizon length is larger than max_patches
+                # if yes, do autoregressive forecasting
+                remaining_length = forecast_seq.shape[-1]
+                last_ar_output = None
+                inputs = input_seq
+                all_quantile_outputs = []
+                while remaining_length > 0:
+                    inputs = input_seq if last_ar_output is None else torch.cat(
+                        [inputs, last_ar_output], dim=-1
+                    )
+                    current_horizon_patch = min((remaining_length + self.patch_size - 1) // self.patch_size, self.max_patches)
+                    output = self.model(
+                        context=inputs, num_output_patches=current_horizon_patch
+                    )
+                    quantile_output = output.quantile_preds.transpose(1, 2)  # b, h, q
+                    remaining_length -= current_horizon_patch * self.patch_size
+                    # take median as the last_ar_output
+                    last_ar_output = quantile_output[:, -current_horizon_patch * self.patch_size :, quantile_output.shape[-1] // 2]
+                    all_quantile_outputs.append(quantile_output)
+                quantile_prediction = torch.cat(all_quantile_outputs, dim=1)  # b, h, q
+                point_prediction = quantile_prediction[:, :, quantile_prediction.shape[-1] // 2]
+                trues.append(forecast_seq.detach().cpu().numpy())
+                preds.append(point_prediction.detach().cpu().numpy())
+                histories.append(input_seq.detach().cpu().numpy())
+                quantiles.append(quantile_prediction.detach().cpu().numpy().transpose(2, 0, 1))  # q, b, h
+
+        trues = np.concatenate(trues, axis=0).reshape(-1, dataset.n_channels, trues[-1].shape[-1])
+        preds = np.concatenate(preds, axis=0).reshape(-1, dataset.n_channels, preds[-1].shape[-1])
+        histories = np.concatenate(histories, axis=0).reshape(-1, dataset.n_channels, histories[-1].shape[-1])
+        quantiles = np.concatenate(quantiles, axis=1).reshape(
+            quantiles[-1].shape[0], -1, dataset.n_channels, quantiles[-1].shape[-1]
+        )
+
+        visualize(
+            task_name="forecasting",
+            trues=trues,
+            preds=preds,
+            history=histories,
+            quantiles=quantiles,
+            **kwargs,
+        )
+
+    def evaluate(self, dataset, metric_only=False, **kwargs):
+        """
+        Evaluate the model.
+        Args:
+            dataset: dataset for evaluation, call get_data_loader() to get the dataloader
+        Returns:
+            Dict[str, float]: evaluation metrics
+            Array: true values, if metric_only is False
+            Array: predicted values, if metric_only is False
+            Array: historical values, if metric_only is False
+            Array: quantile forecasts, if metric_only is False
+        """
+        dataloader = dataset.get_data_loader()
+        trues, preds, histories, quantiles = [], [], [], []
+        self.model.to(self.device)
+        self.model.eval()
+        with torch.no_grad():
+            for i, (inputs) in enumerate(dataloader):
+                input_seq, forecast_seq = inputs
+                input_seq = input_seq.to(self.device)
+                forecast_seq = forecast_seq.to(self.device)
+
+                # check whether the horizon length is larger than max_patches
+                # if yes, do autoregressive forecasting
+                remaining_length = forecast_seq.shape[-1]
+                last_ar_output = None
+                inputs = input_seq
+                all_quantile_outputs = []
+                while remaining_length > 0:
+                    inputs = input_seq if last_ar_output is None else torch.cat(
+                        [inputs, last_ar_output], dim=-1
+                    )
+                    current_horizon_patch = min((remaining_length + self.patch_size - 1) // self.patch_size, self.max_patches)
+                    output = self.model(
+                        context=inputs, num_output_patches=current_horizon_patch
+                    )  # b, h, q
+                    quantile_output = output.quantile_preds.transpose(1, 2) # b, h, q
+                    remaining_length -= current_horizon_patch * self.patch_size
+                    # take median as the last_ar_output
+                    last_ar_output = quantile_output[:, -current_horizon_patch * self.patch_size :, quantile_output.shape[-1] // 2]
+                    all_quantile_outputs.append(quantile_output)
+                quantile_prediction = torch.cat(all_quantile_outputs, dim=1)  # b, h, q
+                point_prediction = quantile_prediction[:, :, quantile_prediction.shape[-1] // 2]
+                trues.append(forecast_seq.detach().cpu().numpy())
+                preds.append(point_prediction.detach().cpu().numpy())
+                histories.append(input_seq.detach().cpu().numpy())
+                quantiles.append(quantile_prediction.detach().cpu().numpy().transpose(2, 0, 1))  # q, b, h
+
+        trues = np.concatenate(trues, axis=0).reshape(-1, dataset.n_channels, trues[-1].shape[-1])
+        preds = np.concatenate(preds, axis=0).reshape(-1, dataset.n_channels, preds[-1].shape[-1])
+        histories = np.concatenate(histories, axis=0).reshape(-1, dataset.n_channels, histories[-1].shape[-1])
+        quantiles = np.concatenate(quantiles, axis=1).reshape(
+            quantiles[-1].shape[0], -1, dataset.n_channels, quantiles[-1].shape[-1]
+        )
+
+        mse = MSE(trues, preds)
+        mae = MAE(trues, preds)
+        mase = MASE(trues, preds)
+        mape = MAPE(trues, preds)
+        rmse = RMSE(trues, preds)       
+        nrmse = NRMSE(trues, preds)
+        smape = SMAPE(trues, preds)
+        msis = MSIS(trues, preds)
+        nd = ND(trues, preds)
+        mwsq = MWSQ(trues, quantiles, self.model.chronos_config.quantiles)
+        crps = CRPS(trues, quantiles, self.model.chronos_config.quantiles)
+        if metric_only:
+            return {
+                "mse": mse,
+                "mae": mae,
+                "mase": mase,
+                "mape": mape,
+                "rmse": rmse,
+                "nrmse": nrmse,
+                "smape": smape,
+                "msis": msis,
+                "nd": nd,
+                "mwsq": mwsq,
+                "crps": crps,
+            }
+        else:
+            return {
+                "mse": mse,
+                "mae": mae,
+                "mase": mase,
+                "mape": mape,
+                "rmse": rmse,
+                "nrmse": nrmse,
+                "smape": smape,
+                "msis": msis,
+                "nd": nd,
+                "mwsq": mwsq,
+                "crps": crps,
+            }, trues, preds, histories, quantiles
 
 class LPTMModel(Basemodel):
     def __init__(self, config=None):
@@ -775,7 +1032,7 @@ class LPTMModel(Basemodel):
 
         return self.model
 
-    def evaluate(self, dataset, task_name="forecasting"):
+    def evaluate(self, dataset, task_name="forecasting", metric_only=False, **kwargs):
         dataloader = dataset.get_data_loader()
         criterion = torch.nn.MSELoss()
         self.model.to(self.device)
@@ -820,17 +1077,30 @@ class LPTMModel(Basemodel):
             msis = MSIS(trues, preds)
             nd = ND(trues, preds)
 
-            return {
-                "mse": mse,
-                "mae": mae,
-                "mase": mase,
-                "mape": mape,           
-                "rmse": rmse,
-                "nrmse": nrmse,
-                "smape": smape,
-                "msis": msis,
-                "nd": nd,
-            }
+            if metric_only:
+                return {
+                    "mse": mse,
+                    "mae": mae,
+                    "mase": mase,
+                    "mape": mape,
+                    "rmse": rmse,
+                    "nrmse": nrmse,
+                    "smape": smape,
+                    "msis": msis,
+                    "nd": nd,
+                }
+            else:
+                return {
+                    "mse": mse,
+                    "mae": mae,
+                    "mase": mase,
+                    "mape": mape,
+                    "rmse": rmse,
+                    "nrmse": nrmse,
+                    "smape": smape,
+                    "msis": msis,
+                    "nd": nd,
+                }, trues, preds, histories
 
         elif task_name == "forecasting2":
             trues, preds, histories, losses = [], [], [], []
@@ -873,17 +1143,30 @@ class LPTMModel(Basemodel):
             msis = MSIS(trues, preds)
             nd = ND(trues, preds)
 
-            return {
-                "mse": mse,
-                "mae": mae,
-                "mase": mase,
-                "mape": mape,
-                "rmse": rmse,
-                "nrmse": nrmse,
-                "smape": smape,
-                "msis": msis,
-                "nd": nd,
-            }
+            if metric_only:
+                return {
+                    "mse": mse,
+                    "mae": mae,
+                    "mase": mase,
+                    "mape": mape,
+                    "rmse": rmse,
+                    "nrmse": nrmse,
+                    "smape": smape,
+                    "msis": msis,
+                    "nd": nd,
+                }
+            else:
+                return {
+                    "mse": mse,
+                    "mae": mae,
+                    "mase": mase,
+                    "mape": mape,
+                    "rmse": rmse,
+                    "nrmse": nrmse,
+                    "smape": smape,
+                    "msis": msis,
+                    "nd": nd,
+                }, trues, preds, histories
 
             # return average_loss, trues, preds, histories
 
@@ -1277,7 +1560,7 @@ class MomentModel(Basemodel):
         #     labels = np.concatenate(labels)
         #     return accuracy, embeddings, labels
 
-    def evaluate(self, dataset, task_name="forecasting"):
+    def evaluate(self, dataset, task_name="forecasting", metric_only=False, **kwargs):
         """
         Evaluate the model.
         Args:
@@ -1327,17 +1610,30 @@ class MomentModel(Basemodel):
             msis = MSIS(trues, preds)
             nd = ND(trues, preds)
 
-            return {
-                "mse": mse,
-                "mae": mae,
-                "mase": mase,
-                "mape": mape,
-                "rmse": rmse,
-                "nrmse": nrmse,
-                "smape": smape,
-                "msis": msis,
-                "nd": nd,
-            }
+            if metric_only:
+                return {
+                    "mse": mse,
+                    "mae": mae,
+                    "mase": mase,
+                    "mape": mape,
+                    "rmse": rmse,
+                    "nrmse": nrmse,
+                    "smape": smape,
+                    "msis": msis,
+                    "nd": nd,
+                }
+            else:
+                return {
+                    "mse": mse,
+                    "mae": mae,
+                    "mase": mase,
+                    "mape": mape,
+                    "rmse": rmse,
+                    "nrmse": nrmse,
+                    "smape": smape,
+                    "msis": msis,
+                    "nd": nd,
+                }, trues, preds, histories
 
         elif task_name == "classification":
             accuracy = 0
@@ -1447,7 +1743,7 @@ class TinyTimeMixerModel(Basemodel):
             **kwargs,
         )
 
-    def evaluate(self, dataset, **kwargs):
+    def evaluate(self, dataset, metric_only=False, **kwargs):
         """
         Evaluate the model.
         Args:
@@ -1485,17 +1781,30 @@ class TinyTimeMixerModel(Basemodel):
         msis = MSIS(trues, preds)
         nd = ND(trues, preds)
 
-        return {
-            "mse": mse,
-            "mae": mae,
-            "mase": mase,
-            "mape": mape,
-            "rmse": rmse,
-            "nrmse": nrmse,
-            "smape": smape,
-            "msis": msis,
-            "nd": nd,
-        }
+        if metric_only:
+            return {
+                "mse": mse,
+                "mae": mae,
+                "mase": mase,
+                "mape": mape,
+                "rmse": rmse,
+                "nrmse": nrmse,
+                "smape": smape,
+                "msis": msis,
+                "nd": nd,
+            }
+        else:
+            return {
+                "mse": mse,
+                "mae": mae,
+                "mase": mase,
+                "mape": mape,
+                "rmse": rmse,
+                "nrmse": nrmse,
+                "smape": smape,
+                "msis": msis,
+                "nd": nd,
+            }, trues, preds, histories
 
 
 class MoiraiTSModel(Basemodel):
@@ -1670,7 +1979,7 @@ class MoiraiTSModel(Basemodel):
         output_transforms: transforms.Compose = None,
         num_sample_flag: bool = False,
         zero_shot: bool = True,
-        leaderboard: bool = False,
+        metric_only: bool = False,
         **kwargs,
     ):
         """For a given test dataset, we evaluate the model using the given metrics.
@@ -1979,7 +2288,7 @@ class MoiraiTSModel(Basemodel):
                             for s in zip(*collected_samples)
                         ]
                     )
-                    # assert that we have the right number of samples
+                    # assert that we have the right number of samples 
                     assert len(outputs[0]) == self.num_samples, (
                         "We do not have enough samples"
                     )
@@ -2123,7 +2432,7 @@ class MoiraiTSModel(Basemodel):
 
         cleanup_dataloader(inference_loader)
 
-        if leaderboard:
+        if metric_only:
             return leaderboard_metrics
         else:
             return leaderboard_metrics, trues, preds, histories, quantile_preds
@@ -2526,7 +2835,7 @@ class TimeMoEModel(Basemodel):
             history=histories,
         )
 
-    def evaluate(self, dataset, **kwargs):
+    def evaluate(self, dataset, metric_only=False, **kwargs):
         """
         Evaluate the model on the given dataset.
         Args:
@@ -2579,17 +2888,31 @@ class TimeMoEModel(Basemodel):
         msis = MSIS(trues, preds)
         nd = ND(trues, preds)
 
-        return {
-            "mse": mse,
-            "mae": mae,
-            "mase": mase,
-            "mape": mape,
-            "rmse": rmse,
-            "nrmse": nrmse,
-            "smape": smape,
-            "msis": msis,
-            "nd": nd,
-        }
+
+        if metric_only:
+            return {
+                "mse": mse,
+                "mae": mae,
+                "mase": mase,
+                "mape": mape,
+                "rmse": rmse,
+                "nrmse": nrmse,
+                "smape": smape,
+                "msis": msis,
+                "nd": nd,
+            }
+        else:
+            return {
+                "mse": mse,
+                "mae": mae,
+                "mase": mase,
+                "mape": mape,
+                "rmse": rmse,
+                "nrmse": nrmse,
+                "smape": smape,
+                "msis": msis,
+                "nd": nd,
+            }, trues, preds, histories
 
 
 class TimesFM_2p5_Model(Basemodel):
@@ -2607,7 +2930,7 @@ class TimesFM_2p5_Model(Basemodel):
         self.model.compile(self.config)
         self.quantiles = self.model.model.config.quantiles
 
-    def evaluate(self, dataset, **kwargs):
+    def evaluate(self, dataset, metric_only=False, **kwargs):
         """Evaluate the model on the given dataset.
 
         Args:
@@ -2672,19 +2995,34 @@ class TimesFM_2p5_Model(Basemodel):
         crps = CRPS(trues, q_preds, quantiles=self.quantiles)
 
         cleanup_dataloader(inference_loader)
-        return {
-            "mse": mse,
-            "mae": mae,
-            "mase": mase,
-            "mape": mape,
-            "rmse": rmse,
-            "nrmse": nrmse,
-            "smape": smape,
-            "msis": msis,
-            "nd": nd,
-            "mwsq": mwsq,
-            "crps": crps,
-        }, trues, preds, histories
+        if metric_only:
+            return {
+                "mse": mse,
+                "mae": mae,
+                "mase": mase,
+                "mape": mape,
+                "rmse": rmse,
+                "nrmse": nrmse,
+                "smape": smape,
+                "msis": msis,
+                "nd": nd,
+                "mwsq": mwsq,
+                "crps": crps,
+            }
+        else:
+            return {
+                "mse": mse,
+                "mae": mae,
+                "mase": mase,
+                "mape": mape,
+                "rmse": rmse,
+                "nrmse": nrmse,
+                "smape": smape,
+                "msis": msis,
+                "nd": nd,
+                "mwsq": mwsq,
+                "crps": crps,
+            }, trues, preds, histories
     
     def plot(self, dataset, **kwargs):
         """Plot the results of the model on the given dataset.
