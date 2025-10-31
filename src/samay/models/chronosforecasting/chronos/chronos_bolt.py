@@ -71,34 +71,44 @@ class Patch(nn.Module):
 
 class InstanceNorm(nn.Module):
     """
-    See, also, RevIN. Apply standardization along the last dimension.
+    Apply standardization along the last dimension and optionally apply arcsinh after standardization.
     """
 
-    def __init__(self, eps: float = 1e-5) -> None:
+    def __init__(self, eps: float = 1e-5, use_arcsinh: bool = False) -> None:
         super().__init__()
         self.eps = eps
+        self.use_arcsinh = use_arcsinh
 
     def forward(
-        self,
-        x: torch.Tensor,
-        loc_scale: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        self, x: torch.Tensor, loc_scale: tuple[torch.Tensor, torch.Tensor] | None = None
+    ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
+        orig_dtype = x.dtype
+        x = x.to(torch.float32)
         if loc_scale is None:
             loc = torch.nan_to_num(torch.nanmean(x, dim=-1, keepdim=True), nan=0.0)
-            scale = torch.nan_to_num(
-                torch.nanmean((x - loc).square(), dim=-1, keepdim=True).sqrt(), nan=1.0
-            )
-            scale = torch.where(scale == 0, torch.abs(loc) + self.eps, scale)
+            scale = torch.nan_to_num((x - loc).square().nanmean(dim=-1, keepdim=True).sqrt(), nan=1.0)
+            scale = torch.where(scale == 0, self.eps, scale)
         else:
             loc, scale = loc_scale
 
-        return (x - loc) / scale, (loc, scale)
+        scaled_x = (x - loc) / scale
 
-    def inverse(
-        self, x: torch.Tensor, loc_scale: Tuple[torch.Tensor, torch.Tensor]
-    ) -> torch.Tensor:
+        if self.use_arcsinh:
+            scaled_x = torch.arcsinh(scaled_x)
+
+        return scaled_x.to(orig_dtype), (loc, scale)
+
+    def inverse(self, x: torch.Tensor, loc_scale: tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
+        orig_dtype = x.dtype
+        x = x.to(torch.float32)
         loc, scale = loc_scale
-        return x * scale + loc
+
+        if self.use_arcsinh:
+            x = torch.sinh(x)
+
+        x = x * scale + loc
+
+        return x.to(orig_dtype)
 
 
 class ResidualBlock(nn.Module):

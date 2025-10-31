@@ -11,8 +11,8 @@ src_path = os.path.abspath(os.path.join("src"))
 if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
-from samay.model import TimesfmModel, MomentModel, ChronosModel, ChronosBoltModel, TinyTimeMixerModel, MoiraiTSModel, LPTMModel, TimeMoEModel
-from samay.dataset import TimesfmDataset, MomentDataset, ChronosDataset, ChronosBoltDataset, TinyTimeMixerDataset, MoiraiDataset, LPTMDataset, TimeMoEDataset
+from samay.model import TimesfmModel, MomentModel, ChronosModel, ChronosBoltModel, TinyTimeMixerModel, MoiraiTSModel, LPTMModel, TimeMoEModel, TimesFM_2p5_Model
+from samay.dataset import TimesfmDataset, MomentDataset, ChronosDataset, ChronosBoltDataset, TinyTimeMixerDataset, MoiraiDataset, LPTMDataset, TimeMoEDataset, TimesFM_2p5_Dataset
 from samay.utils import load_args, get_gifteval_datasets, get_monash_datasets
 from samay.metric import *
 from samay.model import (
@@ -205,7 +205,7 @@ def calc_pred_and_context_len(freq):
 
 if __name__ == "__main__":
     
-    for model_name in ["moirai2", "moment", "moirai"]:
+    for model_name in ["timesfm_2p5"]:
         print(f"Evaluating model: {model_name}")
         # create csv file for leaderboard if not already created
         csv_path = f"leaderboard/{model_name}.csv"
@@ -236,6 +236,9 @@ if __name__ == "__main__":
         # Load model config
         if model_name == "timesfm":
             arg_path = "config/timesfm.json"
+            args = load_args(arg_path)
+        elif model_name == "timesfm_2p5":
+            arg_path = "config/timesfm_2p5.json"
             args = load_args(arg_path)
         elif model_name == "moment":
             arg_path = "config/moment_forecast.json"
@@ -310,6 +313,30 @@ if __name__ == "__main__":
                 )
 
                 del model
+                torch.cuda.empty_cache()
+                gc.collect()
+
+            elif model_name == "timesfm_2p5":
+                dataset = TimesFM_2p5_Dataset(
+                    datetime_col="timestamp",
+                    path=dataset_path,
+                    mode="test",
+                    context_len=context_len,
+                    horizon_len=pred_len,
+                    boundaries=(-1, -1, -1),
+                )
+                # args["config"]["horizon_len"] = dataset.horizon_len
+                model = TimesFM_2p5_Model(**args)
+                start = time.time()
+                metrics = model.evaluate(dataset, leaderboard=True)
+                end = time.time()
+                print(f"Size of dataset: {fs:.2f} MB")
+                print(
+                    f"Time taken for evaluation of {fname}: {end - start:.2f} seconds"
+                )
+
+                del model
+                del dataset
                 torch.cuda.empty_cache()
                 gc.collect()
 
