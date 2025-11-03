@@ -1019,7 +1019,7 @@ class LPTMModel(Basemodel):
                     timeseries, input_mask, forecast = data
                     # Move the data to the GPU
                     timeseries = timeseries.float().to(self.device)
-                    input_mask = input_mask.to(self.device)
+                    input_mask = input_mask.float().to(self.device)
                     forecast = forecast.float().to(self.device)
                     with torch.amp.autocast(device_type="cuda"):
                         output = self.model(x_enc=timeseries, input_mask=input_mask)
@@ -1028,7 +1028,7 @@ class LPTMModel(Basemodel):
                     timeseries, input_mask, forecast = data
                     # Move the data to the GPU
                     timeseries = timeseries.float().to(self.device)
-                    input_mask = input_mask.to(self.device)
+                    input_mask = input_mask.float().to(self.device)
                     forecast = forecast.float().to(self.device)
                     with torch.amp.autocast(device_type="cuda"):
                         output = self.model(x_enc=timeseries, input_mask=input_mask)
@@ -1124,7 +1124,7 @@ class LPTMModel(Basemodel):
                     timeseries, input_mask, forecast = data
                     # Move the data to the GPU
                     timeseries = timeseries.float().to(self.device)
-                    input_mask = input_mask.to(self.device)
+                    input_mask = input_mask.float().to(self.device)
                     forecast = forecast.float().to(self.device)
 
                     output = self.model(x_enc=timeseries, input_mask=input_mask)
@@ -1194,7 +1194,7 @@ class LPTMModel(Basemodel):
                     timeseries, input_mask, forecast = data
                     # Move the data to the GPU
                     timeseries = timeseries.float().to(self.device)
-                    input_mask = input_mask.to(self.device)
+                    input_mask = input_mask.float().to(self.device)
                     forecast = forecast.float().to(self.device)
 
                     output = self.model(x_enc=timeseries, input_mask=input_mask)
@@ -1354,7 +1354,7 @@ class LPTMModel(Basemodel):
                     timeseries, input_mask, forecast = data
                     # Move the data to the GPU
                     timeseries = timeseries.float().to(self.device)
-                    input_mask = input_mask.to(self.device)
+                    input_mask = input_mask.float().to(self.device)
                     forecast = forecast.float().to(self.device)
 
                     output = self.model(x_enc=timeseries, input_mask=input_mask)

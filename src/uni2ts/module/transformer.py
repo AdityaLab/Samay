@@ -180,7 +180,7 @@ class TransformerEncoder(nn.Module):
                 ffn_dropout_p=dropout_p,
             )
             self.register_buffer(
-                "centroid", torch.empty(num_layers, 32, d_model, dtype=torch.float64)
+                "centroid", torch.empty(num_layers, 32, d_model, dtype=torch.float32)
             )
         get_encoder_layer_norm = partial(norm_layer, d_model)
 

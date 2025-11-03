@@ -87,7 +87,7 @@ def validate_and_prepare_single_dict_task(
     # validate target
     task_target = task["target"]
     if isinstance(task_target, np.ndarray):
-        task_target = torch.from_numpy(task_target)
+        task_target = torch.from_numpy(task_target).float()
     assert isinstance(task_target, torch.Tensor)
     if task_target.ndim > 2:
         raise ValueError(
@@ -147,7 +147,7 @@ def validate_and_prepare_single_dict_task(
                     cat_encoder.fit(tensor.astype(str).reshape(-1, 1))
                 tensor = cat_encoder.transform(tensor.astype(str).reshape(-1, 1)).reshape(tensor.shape)
                 cat_encoders[key] = cat_encoder
-            tensor = torch.from_numpy(tensor)
+            tensor = torch.from_numpy(tensor).float()
         assert isinstance(tensor, torch.Tensor)
         if tensor.ndim != 1 or len(tensor) != history_length:
             raise ValueError(
@@ -171,7 +171,7 @@ def validate_and_prepare_single_dict_task(
             if not np.issubdtype(tensor.dtype, np.number):
                 cat_encoder = cat_encoders[key]
                 tensor = cat_encoder.transform(tensor.astype(str).reshape(-1, 1)).reshape(tensor.shape)
-            tensor = torch.from_numpy(tensor)
+            tensor = torch.from_numpy(tensor).float()
         assert isinstance(tensor, torch.Tensor)
         if tensor.ndim != 1 or len(tensor) != prediction_length:
             raise ValueError(
@@ -229,7 +229,7 @@ def convert_list_of_tensors_input_to_list_of_dicts_input(
     output: list[dict[str, torch.Tensor]] = []
     for idx, tensor in enumerate(list_of_tensors):
         if isinstance(tensor, np.ndarray):
-            tensor = torch.from_numpy(tensor)
+            tensor = torch.from_numpy(tensor).float()
         if tensor.ndim > 2:
             raise ValueError(
                 "When the input is a list of torch tensors or numpy arrays, the elements should either be 1-d with shape (history_length,) "
@@ -260,7 +260,7 @@ def convert_tensor_input_to_list_of_dicts_input(tensor: TensorOrArray) -> list[d
     """
 
     if isinstance(tensor, np.ndarray):
-        tensor = torch.from_numpy(tensor)
+        tensor = torch.from_numpy(tensor).float()
     if tensor.ndim != 3:
         raise ValueError(
             "When the input is a torch tensor or numpy array, it should be 3-d with shape (n_series, n_variates, history_length). "
@@ -594,7 +594,7 @@ def _cast_fev_features(
             cat_cols.append(col)
 
     numeric_cols = target_columns + list(set(dynamic_columns) - set(cat_cols))
-    past_feature_updates = {col: datasets.Sequence(datasets.Value("float64")) for col in numeric_cols} | {
+    past_feature_updates = {col: datasets.Sequence(datasets.Value("float32")) for col in numeric_cols} | {
         col: datasets.Sequence(datasets.Value("string")) for col in cat_cols
     }
     past_data_features = past_data.features
@@ -603,7 +603,7 @@ def _cast_fev_features(
 
     future_cat_cols = [k for k in cat_cols if k in known_dynamic_columns]
     future_numeric_cols = list(set(known_dynamic_columns) - set(future_cat_cols))
-    future_feature_updates = {col: datasets.Sequence(datasets.Value("float64")) for col in future_numeric_cols} | {
+    future_feature_updates = {col: datasets.Sequence(datasets.Value("float32")) for col in future_numeric_cols} | {
         col: datasets.Sequence(datasets.Value("string")) for col in future_cat_cols
     }
     future_data_features = future_data.features
