@@ -51,6 +51,8 @@ class TimesFmTorch(timesfm_base.TimesFmBase):
         least_used_gpu = get_least_used_gpu()
         if least_used_gpu >= 0:
             self._device = torch.device(f"cuda:{least_used_gpu}")
+        elif torch.backends.mps.is_available():
+            self._device = torch.device("mps")
         else:
             self._device = torch.device("cpu")
         print(f"Using device: {self._device}")

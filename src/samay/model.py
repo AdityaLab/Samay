@@ -1,3 +1,4 @@
+import importlib
 import json
 import math
 
@@ -7,7 +8,6 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import yaml
-import importlib
 from einops import rearrange, repeat
 from jaxtyping import Float
 from sklearn.metrics import mean_squared_error
@@ -20,8 +20,8 @@ from samay.models.chronosforecasting.chronos.chronos import ChronosPipeline
 from samay.moirai_utils import convert_module_kwargs, filter_dict
 from uni2ts.model.moirai import MoiraiForecast, MoiraiModule
 from uni2ts.model.moirai.finetune import MoiraiFinetune
-from uni2ts.model.moirai_moe import MoiraiMoEForecast, MoiraiMoEModule
 from uni2ts.model.moirai2 import Moirai2Forecast, Moirai2Module
+from uni2ts.model.moirai_moe import MoiraiMoEForecast, MoiraiMoEModule
 from uni2ts.module.norm import RMSNorm
 
 # from gluonts.model.forecast import Forecast, QuantileForecast, SampleForecast
@@ -40,7 +40,7 @@ from .models.chronosforecasting.chronos.chronos_bolt import (
     ChronosBoltConfig,
     ChronosBoltPipeline,
 )
-from .models.chronosforecasting.chronos2 import Chronos2Model, Chronos2CoreConfig
+from .models.chronosforecasting.chronos2 import Chronos2CoreConfig, Chronos2Model
 from .models.lptm.model.backbone import LPTMPipeline
 from .models.moment.momentfm.models.moment import MOMENTPipeline
 from .models.moment.momentfm.utils.masking import Masking
@@ -48,13 +48,12 @@ from .models.Time_MoE.time_moe.models.configuration_time_moe import TimeMoeConfi
 from .models.Time_MoE.time_moe.models.modeling_time_moe import TimeMoeForPrediction
 from .models.timesfm import timesfm as tfm
 from .models.timesfm.timesfm import pytorch_patched_decoder as ppd
-from .models.timesfm.timesfm.v2.timesfm_2p5_torch import TimesFM_2p5_200M_torch
 from .models.timesfm.timesfm.v2.configs import ForecastConfig
-from .models.timesfm.timesfm.v2 import util
+from .models.timesfm.timesfm.v2.timesfm_2p5_torch import TimesFM_2p5_200M_torch
 from .models.TinyTimeMixer.models.tinytimemixer.modeling_tinytimemixer import (
     TinyTimeMixerForPrediction,
 )
-from .utils import get_least_used_gpu, visualize, cleanup_dataloader, quantile_loss
+from .utils import cleanup_dataloader, get_least_used_gpu, quantile_loss, visualize
 
 
 class Basemodel:
@@ -68,6 +67,8 @@ class Basemodel:
         least_used_gpu = get_least_used_gpu()
         if least_used_gpu >= 0:
             self.device = torch.device(f"cuda:{least_used_gpu}")
+        elif torch.backends.mps.is_available():
+            self.device = torch.device("mps")
         else:
             self.device = torch.device("cpu")
 
@@ -203,8 +204,12 @@ class TimesfmModel(Basemodel):
         if dataset.normalize:
             trues = dataset._denormalize_data(trues.reshape(-1, 1)).reshape(trues.shape)
             preds = dataset._denormalize_data(preds.reshape(-1, 1)).reshape(preds.shape)
-            histories = dataset._denormalize_data(histories.reshape(-1, 1)).reshape(histories.shape)
-            quantiles = dataset._denormalize_data(quantiles.reshape(-1, 1)).reshape(quantiles.shape)
+            histories = dataset._denormalize_data(histories.reshape(-1, 1)).reshape(
+                histories.shape
+            )
+            quantiles = dataset._denormalize_data(quantiles.reshape(-1, 1)).reshape(
+                quantiles.shape
+            )
 
         visualize(
             task_name="forecasting",
@@ -238,7 +243,9 @@ class TimesfmModel(Basemodel):
 
                 output, quantile_output = self.model.forecast(input_ts)
                 output = output[:, 0 : actual_ts.shape[1]]
-                quantile_output = quantile_output[:, 0 : actual_ts.shape[1], 1:].transpose(2, 0, 1)  # q, b, h
+                quantile_output = quantile_output[
+                    :, 0 : actual_ts.shape[1], 1:
+                ].transpose(2, 0, 1)  # q, b, h
 
                 loss = np.mean((output - actual_ts) ** 2)
                 losses.append(loss.item())
@@ -299,19 +306,25 @@ class TimesfmModel(Basemodel):
                 "crps": crps,
             }
         else:
-            return {
-                "mse": mse,
-                "mae": mae,
-                "mase": mase,
-                "mape": mape,
-                "rmse": rmse,
-                "nrmse": nrmse,
-                "smape": smape,
-                "msis": msis,
-                "nd": nd,
-                "mwsq": mwsq,
-                "crps": crps,
-            }, trues, preds, histories, quantiles
+            return (
+                {
+                    "mse": mse,
+                    "mae": mae,
+                    "mase": mase,
+                    "mape": mape,
+                    "rmse": rmse,
+                    "nrmse": nrmse,
+                    "smape": smape,
+                    "msis": msis,
+                    "nd": nd,
+                    "mwsq": mwsq,
+                    "crps": crps,
+                },
+                trues,
+                preds,
+                histories,
+                quantiles,
+            )
 
 
 class ChronosModel(Basemodel):
@@ -403,7 +416,9 @@ class ChronosModel(Basemodel):
             preds.append(mean.detach().cpu().numpy())
             input_seq = input_seq.reshape(shape[0], shape[1], shape[2])
             histories.append(input_seq.detach().cpu().numpy())
-            quantiles.append(quantile_outputs.detach().cpu().numpy().transpose(2, 0, 1))  # q, b, h
+            quantiles.append(
+                quantile_outputs.detach().cpu().numpy().transpose(2, 0, 1)
+            )  # q, b, h
 
         trues = np.concatenate(trues, axis=0)
         preds = np.concatenate(preds, axis=0)
@@ -419,7 +434,9 @@ class ChronosModel(Basemodel):
             **kwargs,
         )
 
-    def evaluate(self, dataset, horizon_len, quantile_levels, metric_only=False, **kwargs):
+    def evaluate(
+        self, dataset, horizon_len, quantile_levels, metric_only=False, **kwargs
+    ):
         """
         Evaluate the model.
         Args:
@@ -490,19 +507,25 @@ class ChronosModel(Basemodel):
                 "crps": crps,
             }
         else:
-            return {
-                "mse": mse,
-                "mae": mae,
-                "mase": mase,
-                "mape": mape,
-                "rmse": rmse,
-                "nrmse": nrmse,
-                "smape": smape,
-                "msis": msis,
-                "nd": nd,
-                "mwsq": mwsq,
-                "crps": crps,
-            }, trues, preds, histories, quantile_forecasts 
+            return (
+                {
+                    "mse": mse,
+                    "mae": mae,
+                    "mase": mase,
+                    "mape": mape,
+                    "rmse": rmse,
+                    "nrmse": nrmse,
+                    "smape": smape,
+                    "msis": msis,
+                    "nd": nd,
+                    "mwsq": mwsq,
+                    "crps": crps,
+                },
+                trues,
+                preds,
+                histories,
+                quantile_forecasts,
+            )
 
 
 class ChronosBoltModel(Basemodel):
@@ -586,7 +609,9 @@ class ChronosBoltModel(Basemodel):
             preds.append(mean.detach().cpu().numpy())
             input_seq = context.reshape(c_shape[0], c_shape[1], c_shape[2])
             histories.append(input_seq.detach().cpu().numpy())
-            quantiles.append(quantile_outputs.detach().cpu().numpy().transpose(2, 0, 1))  # q, b, h
+            quantiles.append(
+                quantile_outputs.detach().cpu().numpy().transpose(2, 0, 1)
+            )  # q, b, h
 
         trues = np.concatenate(trues, axis=0)
         preds = np.concatenate(preds, axis=0)
@@ -602,7 +627,9 @@ class ChronosBoltModel(Basemodel):
             **kwargs,
         )
 
-    def evaluate(self, dataset, horizon_len, quantile_levels, metric_only=False, **kwargs):
+    def evaluate(
+        self, dataset, horizon_len, quantile_levels, metric_only=False, **kwargs
+    ):
         """
         Evaluate the model.
         Args:
@@ -671,19 +698,25 @@ class ChronosBoltModel(Basemodel):
                 "crps": crps,
             }
         else:
-            return {
-                "mse": mse,
-                "mae": mae,
-                "mase": mase,
-                "mape": mape,
-                "rmse": rmse,
-                "nrmse": nrmse,
-                "smape": smape,
-                "msis": msis,
-                "nd": nd,
-                "mwsq": mwsq,
-                "crps": crps,
-            }, trues, preds, histories, quantile_forecasts
+            return (
+                {
+                    "mse": mse,
+                    "mae": mae,
+                    "mase": mase,
+                    "mape": mape,
+                    "rmse": rmse,
+                    "nrmse": nrmse,
+                    "smape": smape,
+                    "msis": msis,
+                    "nd": nd,
+                    "mwsq": mwsq,
+                    "crps": crps,
+                },
+                trues,
+                preds,
+                histories,
+                quantile_forecasts,
+            )
 
 
 class Chronos_2_Model(Basemodel):
@@ -731,10 +764,12 @@ class Chronos_2_Model(Basemodel):
 
                 # for finetuning, we assume the horizon length is smaller than max_patches
                 output = self.model(
-                    context=input_seq, num_output_patches=(forecast_seq.shape[-1] + self.patch_size - 1) // self.patch_size,
-                    future_target=forecast_seq
+                    context=input_seq,
+                    num_output_patches=(forecast_seq.shape[-1] + self.patch_size - 1)
+                    // self.patch_size,
+                    future_target=forecast_seq,
                 )  # b, h, q
-                quantile_output = output.quantile_preds # b, h, q
+                quantile_output = output.quantile_preds  # b, h, q
                 loss = output.loss
                 optimizer.zero_grad()
                 loss.backward()
@@ -742,7 +777,6 @@ class Chronos_2_Model(Basemodel):
                 avg_loss += loss.item()
             avg_loss /= len(dataloader)
             print(f"Epoch {epoch}, Loss: {avg_loss}")
-
 
     def plot(self, dataset, **kwargs):
         """
@@ -767,28 +801,47 @@ class Chronos_2_Model(Basemodel):
                 inputs = input_seq
                 all_quantile_outputs = []
                 while remaining_length > 0:
-                    inputs = input_seq if last_ar_output is None else torch.cat(
-                        [inputs, last_ar_output], dim=-1
+                    inputs = (
+                        input_seq
+                        if last_ar_output is None
+                        else torch.cat([inputs, last_ar_output], dim=-1)
                     )
-                    current_horizon_patch = min((remaining_length + self.patch_size - 1) // self.patch_size, self.max_patches)
+                    current_horizon_patch = min(
+                        (remaining_length + self.patch_size - 1) // self.patch_size,
+                        self.max_patches,
+                    )
                     output = self.model(
                         context=inputs, num_output_patches=current_horizon_patch
                     )
                     quantile_output = output.quantile_preds.transpose(1, 2)  # b, h, q
                     remaining_length -= current_horizon_patch * self.patch_size
                     # take median as the last_ar_output
-                    last_ar_output = quantile_output[:, -current_horizon_patch * self.patch_size :, quantile_output.shape[-1] // 2]
+                    last_ar_output = quantile_output[
+                        :,
+                        -current_horizon_patch * self.patch_size :,
+                        quantile_output.shape[-1] // 2,
+                    ]
                     all_quantile_outputs.append(quantile_output)
                 quantile_prediction = torch.cat(all_quantile_outputs, dim=1)  # b, h, q
-                point_prediction = quantile_prediction[:, :, quantile_prediction.shape[-1] // 2]
+                point_prediction = quantile_prediction[
+                    :, :, quantile_prediction.shape[-1] // 2
+                ]
                 trues.append(forecast_seq.detach().cpu().numpy())
                 preds.append(point_prediction.detach().cpu().numpy())
                 histories.append(input_seq.detach().cpu().numpy())
-                quantiles.append(quantile_prediction.detach().cpu().numpy().transpose(2, 0, 1))  # q, b, h
+                quantiles.append(
+                    quantile_prediction.detach().cpu().numpy().transpose(2, 0, 1)
+                )  # q, b, h
 
-        trues = np.concatenate(trues, axis=0).reshape(-1, dataset.n_channels, trues[-1].shape[-1])
-        preds = np.concatenate(preds, axis=0).reshape(-1, dataset.n_channels, preds[-1].shape[-1])
-        histories = np.concatenate(histories, axis=0).reshape(-1, dataset.n_channels, histories[-1].shape[-1])
+        trues = np.concatenate(trues, axis=0).reshape(
+            -1, dataset.n_channels, trues[-1].shape[-1]
+        )
+        preds = np.concatenate(preds, axis=0).reshape(
+            -1, dataset.n_channels, preds[-1].shape[-1]
+        )
+        histories = np.concatenate(histories, axis=0).reshape(
+            -1, dataset.n_channels, histories[-1].shape[-1]
+        )
         quantiles = np.concatenate(quantiles, axis=1).reshape(
             quantiles[-1].shape[0], -1, dataset.n_channels, quantiles[-1].shape[-1]
         )
@@ -831,28 +884,47 @@ class Chronos_2_Model(Basemodel):
                 inputs = input_seq
                 all_quantile_outputs = []
                 while remaining_length > 0:
-                    inputs = input_seq if last_ar_output is None else torch.cat(
-                        [inputs, last_ar_output], dim=-1
+                    inputs = (
+                        input_seq
+                        if last_ar_output is None
+                        else torch.cat([inputs, last_ar_output], dim=-1)
                     )
-                    current_horizon_patch = min((remaining_length + self.patch_size - 1) // self.patch_size, self.max_patches)
+                    current_horizon_patch = min(
+                        (remaining_length + self.patch_size - 1) // self.patch_size,
+                        self.max_patches,
+                    )
                     output = self.model(
                         context=inputs, num_output_patches=current_horizon_patch
                     )  # b, h, q
-                    quantile_output = output.quantile_preds.transpose(1, 2) # b, h, q
+                    quantile_output = output.quantile_preds.transpose(1, 2)  # b, h, q
                     remaining_length -= current_horizon_patch * self.patch_size
                     # take median as the last_ar_output
-                    last_ar_output = quantile_output[:, -current_horizon_patch * self.patch_size :, quantile_output.shape[-1] // 2]
+                    last_ar_output = quantile_output[
+                        :,
+                        -current_horizon_patch * self.patch_size :,
+                        quantile_output.shape[-1] // 2,
+                    ]
                     all_quantile_outputs.append(quantile_output)
                 quantile_prediction = torch.cat(all_quantile_outputs, dim=1)  # b, h, q
-                point_prediction = quantile_prediction[:, :, quantile_prediction.shape[-1] // 2]
+                point_prediction = quantile_prediction[
+                    :, :, quantile_prediction.shape[-1] // 2
+                ]
                 trues.append(forecast_seq.detach().cpu().numpy())
                 preds.append(point_prediction.detach().cpu().numpy())
                 histories.append(input_seq.detach().cpu().numpy())
-                quantiles.append(quantile_prediction.detach().cpu().numpy().transpose(2, 0, 1))  # q, b, h
+                quantiles.append(
+                    quantile_prediction.detach().cpu().numpy().transpose(2, 0, 1)
+                )  # q, b, h
 
-        trues = np.concatenate(trues, axis=0).reshape(-1, dataset.n_channels, trues[-1].shape[-1])
-        preds = np.concatenate(preds, axis=0).reshape(-1, dataset.n_channels, preds[-1].shape[-1])
-        histories = np.concatenate(histories, axis=0).reshape(-1, dataset.n_channels, histories[-1].shape[-1])
+        trues = np.concatenate(trues, axis=0).reshape(
+            -1, dataset.n_channels, trues[-1].shape[-1]
+        )
+        preds = np.concatenate(preds, axis=0).reshape(
+            -1, dataset.n_channels, preds[-1].shape[-1]
+        )
+        histories = np.concatenate(histories, axis=0).reshape(
+            -1, dataset.n_channels, histories[-1].shape[-1]
+        )
         quantiles = np.concatenate(quantiles, axis=1).reshape(
             quantiles[-1].shape[0], -1, dataset.n_channels, quantiles[-1].shape[-1]
         )
@@ -861,7 +933,7 @@ class Chronos_2_Model(Basemodel):
         mae = MAE(trues, preds)
         mase = MASE(trues, preds)
         mape = MAPE(trues, preds)
-        rmse = RMSE(trues, preds)       
+        rmse = RMSE(trues, preds)
         nrmse = NRMSE(trues, preds)
         smape = SMAPE(trues, preds)
         msis = MSIS(trues, preds)
@@ -883,19 +955,26 @@ class Chronos_2_Model(Basemodel):
                 "crps": crps,
             }
         else:
-            return {
-                "mse": mse,
-                "mae": mae,
-                "mase": mase,
-                "mape": mape,
-                "rmse": rmse,
-                "nrmse": nrmse,
-                "smape": smape,
-                "msis": msis,
-                "nd": nd,
-                "mwsq": mwsq,
-                "crps": crps,
-            }, trues, preds, histories, quantiles
+            return (
+                {
+                    "mse": mse,
+                    "mae": mae,
+                    "mase": mase,
+                    "mape": mape,
+                    "rmse": rmse,
+                    "nrmse": nrmse,
+                    "smape": smape,
+                    "msis": msis,
+                    "nd": nd,
+                    "mwsq": mwsq,
+                    "crps": crps,
+                },
+                trues,
+                preds,
+                histories,
+                quantiles,
+            )
+
 
 class LPTMModel(Basemodel):
     def __init__(self, config=None):
@@ -1070,7 +1149,7 @@ class LPTMModel(Basemodel):
             mse = MSE(trues, preds)
             mae = MAE(trues, preds)
             mase = MASE(trues, preds)
-            mape = MAPE(trues, preds)   
+            mape = MAPE(trues, preds)
             rmse = RMSE(trues, preds)
             nrmse = NRMSE(trues, preds)
             smape = SMAPE(trues, preds)
@@ -1090,17 +1169,22 @@ class LPTMModel(Basemodel):
                     "nd": nd,
                 }
             else:
-                return {
-                    "mse": mse,
-                    "mae": mae,
-                    "mase": mase,
-                    "mape": mape,
-                    "rmse": rmse,
-                    "nrmse": nrmse,
-                    "smape": smape,
-                    "msis": msis,
-                    "nd": nd,
-                }, trues, preds, histories
+                return (
+                    {
+                        "mse": mse,
+                        "mae": mae,
+                        "mase": mase,
+                        "mape": mape,
+                        "rmse": rmse,
+                        "nrmse": nrmse,
+                        "smape": smape,
+                        "msis": msis,
+                        "nd": nd,
+                    },
+                    trues,
+                    preds,
+                    histories,
+                )
 
         elif task_name == "forecasting2":
             trues, preds, histories, losses = [], [], [], []
@@ -1156,17 +1240,22 @@ class LPTMModel(Basemodel):
                     "nd": nd,
                 }
             else:
-                return {
-                    "mse": mse,
-                    "mae": mae,
-                    "mase": mase,
-                    "mape": mape,
-                    "rmse": rmse,
-                    "nrmse": nrmse,
-                    "smape": smape,
-                    "msis": msis,
-                    "nd": nd,
-                }, trues, preds, histories
+                return (
+                    {
+                        "mse": mse,
+                        "mae": mae,
+                        "mase": mase,
+                        "mape": mape,
+                        "rmse": rmse,
+                        "nrmse": nrmse,
+                        "smape": smape,
+                        "msis": msis,
+                        "nd": nd,
+                    },
+                    trues,
+                    preds,
+                    histories,
+                )
 
             # return average_loss, trues, preds, histories
 
@@ -1531,7 +1620,13 @@ class MomentModel(Basemodel):
             preds = np.concatenate(preds, axis=0).flatten()
             labels = np.concatenate(labels, axis=0).flatten()
 
-            visualize(task_name="detection", trues=trues, preds=preds, labels=labels, pad_len=dataset.pad_len)
+            visualize(
+                task_name="detection",
+                trues=trues,
+                preds=preds,
+                labels=labels,
+                pad_len=dataset.pad_len,
+            )
 
             # return trues, preds, labels
 
@@ -1623,17 +1718,22 @@ class MomentModel(Basemodel):
                     "nd": nd,
                 }
             else:
-                return {
-                    "mse": mse,
-                    "mae": mae,
-                    "mase": mase,
-                    "mape": mape,
-                    "rmse": rmse,
-                    "nrmse": nrmse,
-                    "smape": smape,
-                    "msis": msis,
-                    "nd": nd,
-                }, trues, preds, histories
+                return (
+                    {
+                        "mse": mse,
+                        "mae": mae,
+                        "mase": mase,
+                        "mape": mape,
+                        "rmse": rmse,
+                        "nrmse": nrmse,
+                        "smape": smape,
+                        "msis": msis,
+                        "nd": nd,
+                    },
+                    trues,
+                    preds,
+                    histories,
+                )
 
         elif task_name == "classification":
             accuracy = 0
@@ -1794,17 +1894,22 @@ class TinyTimeMixerModel(Basemodel):
                 "nd": nd,
             }
         else:
-            return {
-                "mse": mse,
-                "mae": mae,
-                "mase": mase,
-                "mape": mape,
-                "rmse": rmse,
-                "nrmse": nrmse,
-                "smape": smape,
-                "msis": msis,
-                "nd": nd,
-            }, trues, preds, histories
+            return (
+                {
+                    "mse": mse,
+                    "mae": mae,
+                    "mase": mase,
+                    "mape": mape,
+                    "rmse": rmse,
+                    "nrmse": nrmse,
+                    "smape": smape,
+                    "msis": msis,
+                    "nd": nd,
+                },
+                trues,
+                preds,
+                histories,
+            )
 
 
 class MoiraiTSModel(Basemodel):
@@ -1823,14 +1928,27 @@ class MoiraiTSModel(Basemodel):
         self.context_len = config.get("context_len", 128)
         self.patch_size = config.get("patch_size", 16)
         self.batch_size = config.get("batch_size", 16)
-        self.quantiles = config.get("quantiles", [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]) if self.model_type == "moirai2" else []
-        self.num_samples = config.get("num_samples", 100) if self.model_type != "moirai2" else len(self.quantiles)    # for moirai2, we regard num_samples as the number of quantiles
+        self.quantiles = (
+            config.get("quantiles", [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9])
+            if self.model_type == "moirai2"
+            else []
+        )
+        self.num_samples = (
+            config.get("num_samples", 100)
+            if self.model_type != "moirai2"
+            else len(self.quantiles)
+        )  # for moirai2, we regard num_samples as the number of quantiles
         self.target_dim = config.get("target_dim", 1)
         self.feat_dynamic_real_dim = config.get("feat_dynamic_real_dim", 0)
         self.past_feat_dynamic_real_dim = config.get("past_feat_dynamic_real_dim", 0)
         self.finetuned_model = None
 
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if torch.cuda.is_available():
+            self.device = torch.device("cuda")
+        elif torch.backends.mps.is_available():
+            self.device = torch.device("mps")
+        else:
+            self.device = torch.device("cpu")
 
         if self.model_type == "moirai":  # standard moirai
             if repo is None:
@@ -1922,12 +2040,16 @@ class MoiraiTSModel(Basemodel):
 
     def _format_preds(
         self,
-        preds: Float[torch.Tensor, "sample batch combine_seq patch"], # if quantile_prediction: (batch, pred_idx*per_pred_tokens, num_quantiles, patch_size); else: (num_samples, batch, seq_len, patch_size)
+        preds: Float[
+            torch.Tensor, "sample batch combine_seq patch"
+        ],  # if quantile_prediction: (batch, pred_idx*per_pred_tokens, num_quantiles, patch_size); else: (num_samples, batch, seq_len, patch_size)
         context_token_len: int,
         pred_token_len: int,
         quantile_prediction: bool = False,
         target_dim: int = 1,
-    ) -> Float[torch.Tensor, "batch sample future_time *tgt"]:  # if quantile_prediction: (batch, num_quantiles, horizon, *tgt); else: (batch, num_samples, horizon, *tgt)
+    ) -> Float[
+        torch.Tensor, "batch sample future_time *tgt"
+    ]:  # if quantile_prediction: (batch, num_quantiles, horizon, *tgt); else: (batch, num_samples, horizon, *tgt)
         start = self.target_dim * context_token_len
         end = start + self.target_dim * pred_token_len
         if not quantile_prediction:
@@ -1938,14 +2060,14 @@ class MoiraiTSModel(Basemodel):
                 dim=self.target_dim,
             )[..., : self.horizon_len, :]
         else:
-            preds = preds[..., start:end, :len(self.quantiles), :self.patch_size]
+            preds = preds[..., start:end, : len(self.quantiles), : self.patch_size]
             preds = rearrange(
                 preds,
                 "... (dim seq) num_quantiles patch -> ... num_quantiles (seq patch) dim",
                 dim=target_dim,
             )[..., : self.horizon_len, :]
         return preds.squeeze(-1)
-    
+
     def structure_multi_predict(
         self,
         per_var_predict_token,
@@ -2040,7 +2162,11 @@ class MoiraiTSModel(Basemodel):
                     pred_token_len = math.ceil(self.horizon_len / self.patch_size)
                     num_context_tokens = context_token_len * self.target_dim
                     num_pred_tokens = pred_token_len * self.target_dim
-                    num_token_generate = self.model.module.num_predict_token if self.model_type == 'moirai2' else 1
+                    num_token_generate = (
+                        self.model.module.num_predict_token
+                        if self.model_type == "moirai2"
+                        else 1
+                    )
 
                     # prepare the inputs
                     pred_index = torch.arange(
@@ -2085,14 +2211,18 @@ class MoiraiTSModel(Basemodel):
 
                         elif self.model_type == "moirai2":
                             # new version model directly generates prediction outputs
-                            preds = self.finetuned_model.forward(**inputs)  # (batch, all_pred_idx, num_tokens*quantiles*patch_size) # all_pred_idx = (c1/ps, c2/ps, ..., cN/ps, p1/ps, p2/ps, ..., pM/ps)
+                            preds = self.finetuned_model.forward(
+                                **inputs
+                            )  # (batch, all_pred_idx, num_tokens*quantiles*patch_size) # all_pred_idx = (c1/ps, c2/ps, ..., cN/ps, p1/ps, p2/ps, ..., pM/ps)
                             preds, adjusted_assign_index = self.structure_multi_predict(
                                 per_var_predict_token=pred_token_len,
                                 pred_index=pred_index,
                                 assign_index=assign_index,
                                 preds=preds,
                             )
-                            quantile_prediction[..., adjusted_assign_index, :, :] = preds
+                            quantile_prediction[..., adjusted_assign_index, :, :] = (
+                                preds
+                            )
                             outputs = self._format_preds(
                                 preds=quantile_prediction,
                                 context_token_len=context_token_len,
@@ -2104,17 +2234,23 @@ class MoiraiTSModel(Basemodel):
                         if self.model_type in ["moirai", "moirai-moe"]:
                             # old version models generate distribution outputs
                             distr = self.finetuned_model.forward(**inputs)
-                            preds = distr.sample(torch.Size((self.num_samples,))) # (num_samples, batch, combine_seq, patch), combined_seq = all pred index
+                            preds = distr.sample(
+                                torch.Size((self.num_samples,))
+                            )  # (num_samples, batch, combine_seq, patch), combined_seq = all pred index
                         elif self.model_type == "moirai2":
                             # new version model directly generates prediction outputs
-                            preds = self.finetuned_model.forward(**inputs)  # (batch, all_pred_idx, num_tokens*quantiles*patch_size)
+                            preds = self.finetuned_model.forward(
+                                **inputs
+                            )  # (batch, all_pred_idx, num_tokens*quantiles*patch_size)
                             preds, adjusted_assign_index = self.structure_multi_predict(
                                 self.model.module.num_predict_token,
                                 pred_index,
                                 assign_index,
                                 preds,
                             )
-                            quantile_prediction[..., adjusted_assign_index, :, :] = preds
+                            quantile_prediction[..., adjusted_assign_index, :, :] = (
+                                preds
+                            )
 
                         expand_target = (
                             inputs["target"]
@@ -2122,42 +2258,54 @@ class MoiraiTSModel(Basemodel):
                             .repeat(self.num_samples, 1, 1, 1)
                         )
                         if self.model_type == "moirai2":
-                            expand_target = expand_target.permute(1, 0, 2, 3)  # (batch, num_samples, seq_len, patch_size), here num_samples = num_quantiles
+                            expand_target = expand_target.permute(
+                                1, 0, 2, 3
+                            )  # (batch, num_samples, seq_len, patch_size), here num_samples = num_quantiles
                         expand_prediction_mask = (
                             inputs["prediction_mask"]
                             .unsqueeze(0)
                             .repeat(self.num_samples, 1, 1)
                         )
                         if self.model_type == "moirai2":
-                            expand_prediction_mask = expand_prediction_mask.permute(1, 0, 2)  # (batch, num_samples, seq_len), here num_samples = num_quantiles
+                            expand_prediction_mask = expand_prediction_mask.permute(
+                                1, 0, 2
+                            )  # (batch, num_samples, seq_len), here num_samples = num_quantiles
                         expand_observed_mask = (
                             inputs["observed_mask"]
                             .unsqueeze(0)
                             .expand(self.num_samples, -1, -1, -1)
                         )
                         if self.model_type == "moirai2":
-                            expand_observed_mask = expand_observed_mask.permute(1, 0, 2, 3)  # (batch, num_samples, seq_len, patch_size), here num_samples = num_quantiles
+                            expand_observed_mask = expand_observed_mask.permute(
+                                1, 0, 2, 3
+                            )  # (batch, num_samples, seq_len, patch_size), here num_samples = num_quantiles
                         expand_sample_id = (
                             inputs["sample_id"]
                             .unsqueeze(0)
                             .expand(self.num_samples, -1, -1)
                         )
                         if self.model_type == "moirai2":
-                            expand_sample_id = expand_sample_id.permute(1, 0, 2)  # (batch, num_samples, seq_len), here num_samples = num_quantiles
+                            expand_sample_id = expand_sample_id.permute(
+                                1, 0, 2
+                            )  # (batch, num_samples, seq_len), here num_samples = num_quantiles
                         expand_time_id = (
                             inputs["time_id"]
                             .unsqueeze(0)
                             .expand(self.num_samples, -1, -1)
                         )
                         if self.model_type == "moirai2":
-                            expand_time_id = expand_time_id.permute(1, 0, 2)  # (batch, num_samples, seq_len), here num_samples = num_quantiles
+                            expand_time_id = expand_time_id.permute(
+                                1, 0, 2
+                            )  # (batch, num_samples, seq_len), here num_samples = num_quantiles
                         expand_variate_id = (
                             inputs["variate_id"]
                             .unsqueeze(0)
                             .expand(self.num_samples, -1, -1)
                         )
                         if self.model_type == "moirai2":
-                            expand_variate_id = expand_variate_id.permute(1, 0, 2)  # (batch, num_samples, seq_len), here num_samples = num_quantiles
+                            expand_variate_id = expand_variate_id.permute(
+                                1, 0, 2
+                            )  # (batch, num_samples, seq_len), here num_samples = num_quantiles
                         expand_patch_size = (
                             inputs["patch_size"]
                             .unsqueeze(0)
@@ -2165,10 +2313,14 @@ class MoiraiTSModel(Basemodel):
                         )
 
                         if self.model_type == "moirai2":
-                            expand_target[..., adjusted_assign_index, :, :] = preds.permute(0, 2, 1, 3)  # (batch, num_quantiles, seq_len, patch_size)
+                            expand_target[..., adjusted_assign_index, :, :] = (
+                                preds.permute(0, 2, 1, 3)
+                            )  # (batch, num_quantiles, seq_len, patch_size)
                             expand_prediction_mask[..., adjusted_assign_index] = False
                         else:
-                            expand_target[..., assign_index, :] = preds[..., pred_index, :]
+                            expand_target[..., assign_index, :] = preds[
+                                ..., pred_index, :
+                            ]
                             expand_prediction_mask[..., assign_index] = False
 
                         remain_step = pred_token_len - num_token_generate
@@ -2183,17 +2335,25 @@ class MoiraiTSModel(Basemodel):
                                     expand_prediction_mask,
                                     training_mode=False,
                                 )
-                                pred_index = assign_index + self.model.module.num_predict_token - 1
+                                pred_index = (
+                                    assign_index
+                                    + self.model.module.num_predict_token
+                                    - 1
+                                )
                                 assign_index = pred_index + 1
-                                preds, adjusted_assign_index = self.structure_multi_predict(
-                                    (
-                                        self.model.module.num_predict_token
-                                        if remain_step - self.model.module.num_predict_token > 0
-                                        else remain_step
-                                    ),
-                                    pred_index,
-                                    assign_index,
-                                    preds,
+                                preds, adjusted_assign_index = (
+                                    self.structure_multi_predict(
+                                        (
+                                            self.model.module.num_predict_token
+                                            if remain_step
+                                            - self.model.module.num_predict_token
+                                            > 0
+                                            else remain_step
+                                        ),
+                                        pred_index,
+                                        assign_index,
+                                        preds,
+                                    )
                                 )
                                 quantile_prediction_next_step = rearrange(
                                     preds,
@@ -2211,20 +2371,26 @@ class MoiraiTSModel(Basemodel):
                                     ),
                                     dim=-2,
                                 )
-                                quantile_prediction[..., adjusted_assign_index, :, :] = rearrange(
+                                quantile_prediction[
+                                    ..., adjusted_assign_index, :, :
+                                ] = rearrange(
                                     quantile_prediction_next_step,
                                     "num_quantiles ... patch_size -> ... num_quantiles patch_size",
                                 )
 
                                 # choose current quantiles values as point forecast for next-step prediction
-                                expand_target[..., adjusted_assign_index, :] = rearrange(
-                                    quantile_prediction_next_step,
-                                    "num_quantiles batch_size predict_token patch_size -> batch_size num_quantiles predict_token patch_size",
-                                    num_quantiles=self.model.module.num_quantiles,
-                                    patch_size=self.model.module.patch_size,
-                                    predict_token=len(adjusted_assign_index),
+                                expand_target[..., adjusted_assign_index, :] = (
+                                    rearrange(
+                                        quantile_prediction_next_step,
+                                        "num_quantiles batch_size predict_token patch_size -> batch_size num_quantiles predict_token patch_size",
+                                        num_quantiles=self.model.module.num_quantiles,
+                                        patch_size=self.model.module.patch_size,
+                                        predict_token=len(adjusted_assign_index),
+                                    )
                                 )
-                                expand_prediction_mask[..., adjusted_assign_index] = False
+                                expand_prediction_mask[..., adjusted_assign_index] = (
+                                    False
+                                )
 
                                 remain_step -= self.model.module.num_predict_token
                             else:
@@ -2288,7 +2454,7 @@ class MoiraiTSModel(Basemodel):
                             for s in zip(*collected_samples)
                         ]
                     )
-                    # assert that we have the right number of samples 
+                    # assert that we have the right number of samples
                     assert len(outputs[0]) == self.num_samples, (
                         "We do not have enough samples"
                     )
@@ -2324,12 +2490,19 @@ class MoiraiTSModel(Basemodel):
                     if isinstance(input["target"], np.ndarray)
                     else np.array(input["target"])
                 )
-                if self.model_type == 'moirai2':
+                if self.model_type == "moirai2":
                     quantiles = np.array(forecast)
                     if len(quantiles.shape) == 3:  # (quantiles, horizon, target_dim)
-                        quantiles = quantiles[: len(quantile_levels), : min(self.horizon_len, true_values.shape[0]), :]  # (quantiles, horizon, target_dim)
+                        quantiles = quantiles[
+                            : len(quantile_levels),
+                            : min(self.horizon_len, true_values.shape[0]),
+                            :,
+                        ]  # (quantiles, horizon, target_dim)
                     elif len(quantiles.shape) == 2:  # (quantiles, horizon)
-                        quantiles = quantiles[: len(quantile_levels), : min(self.horizon_len, true_values.shape[0])]  # (quantiles, horizon)
+                        quantiles = quantiles[
+                            : len(quantile_levels),
+                            : min(self.horizon_len, true_values.shape[0]),
+                        ]  # (quantiles, horizon)
                 else:
                     quantiles = np.percentile(
                         forecast[:, : min(self.horizon_len, true_values.shape[0])],
@@ -2392,10 +2565,7 @@ class MoiraiTSModel(Basemodel):
             trues = dataset._denormalize_data(trues)
             preds = dataset._denormalize_data(preds)
             histories = dataset._denormalize_data(histories)
-            quantile_preds = [
-                dataset._denormalize_data(q)
-                for q in quantile_preds
-            ]
+            quantile_preds = [dataset._denormalize_data(q) for q in quantile_preds]
 
         mse = np.mean(np.array([MSE(t, p) for t, p in zip(trues, preds)]), axis=0)
         mae = np.mean(np.array([MAE(t, p) for t, p in zip(trues, preds)]), axis=0)
@@ -2408,11 +2578,21 @@ class MoiraiTSModel(Basemodel):
         nd = np.mean(np.array([ND(t, p) for t, p in zip(trues, preds)]), axis=0)
 
         mwsq = np.mean(
-            np.array([MWSQ(t, p, q) for t, p, q in zip(trues, quantile_preds, quantile_levels)],),
+            np.array(
+                [
+                    MWSQ(t, p, q)
+                    for t, p, q in zip(trues, quantile_preds, quantile_levels)
+                ],
+            ),
             axis=0,
         )
         crps = np.mean(
-            np.array([CRPS(t, p, q) for t, p, q in zip(trues, quantile_preds, quantile_levels)],),
+            np.array(
+                [
+                    CRPS(t, p, q)
+                    for t, p, q in zip(trues, quantile_preds, quantile_levels)
+                ],
+            ),
             axis=0,
         )
 
@@ -2455,7 +2635,9 @@ class MoiraiTSModel(Basemodel):
             model_config = f"../src/uni2ts/cli/conf/finetune/model/moirai_moe_1.0_R_{model_size}.yaml"
         elif self.model_type == "moirai2":
             # only small version is available for moirai2 for now
-            model_config = f"../src/uni2ts/cli/conf/finetune/model/moirai_2.0_R_{model_size}.yaml" 
+            model_config = (
+                f"../src/uni2ts/cli/conf/finetune/model/moirai_2.0_R_{model_size}.yaml"
+            )
 
         with open(model_config, "r") as file:
             fin_model_config = yaml.load(file, Loader=yaml.FullLoader)
@@ -2513,11 +2695,13 @@ class MoiraiTSModel(Basemodel):
 
         # instantiate loss function
         spec = fin_model_config["loss_func"]
+
         def locate(path: str):
             """Locate a class from a string path."""
             module_path, class_name = path.rsplit(".", 1)
             module = importlib.import_module(module_path)
-            return getattr(module, class_name)   
+            return getattr(module, class_name)
+
         cls = locate(spec["_target_"])
         kwargs = {k: v for k, v in spec.items() if k != "_target_"}
         fin_model_config["loss_func"] = cls(**kwargs)
@@ -2740,15 +2924,15 @@ class MoiraiTSModel(Basemodel):
         Args:
             dataset (MoiraiDataset): Dataset containing the input data and relevant functions like dataloaders etc.
         """
-        _, trues, preds, history = self.evaluate(dataset, leaderboard=False, zero_shot=zero_shot)
+        _, trues, preds, history = self.evaluate(
+            dataset, leaderboard=False, zero_shot=zero_shot
+        )
         visualize(
             task_name="forecasting",
             trues=np.concatenate(trues, axis=0),
             preds=np.concatenate(preds, axis=0),
-            history=np.concatenate(history, axis=0
-            ),
+            history=np.concatenate(history, axis=0),
         )
-
 
 
 class TimeMoEModel(Basemodel):
@@ -2888,7 +3072,6 @@ class TimeMoEModel(Basemodel):
         msis = MSIS(trues, preds)
         nd = ND(trues, preds)
 
-
         if metric_only:
             return {
                 "mse": mse,
@@ -2902,17 +3085,22 @@ class TimeMoEModel(Basemodel):
                 "nd": nd,
             }
         else:
-            return {
-                "mse": mse,
-                "mae": mae,
-                "mase": mase,
-                "mape": mape,
-                "rmse": rmse,
-                "nrmse": nrmse,
-                "smape": smape,
-                "msis": msis,
-                "nd": nd,
-            }, trues, preds, histories
+            return (
+                {
+                    "mse": mse,
+                    "mae": mae,
+                    "mase": mase,
+                    "mape": mape,
+                    "rmse": rmse,
+                    "nrmse": nrmse,
+                    "smape": smape,
+                    "msis": msis,
+                    "nd": nd,
+                },
+                trues,
+                preds,
+                histories,
+            )
 
 
 class TimesFM_2p5_Model(Basemodel):
@@ -2920,9 +3108,11 @@ class TimesFM_2p5_Model(Basemodel):
 
     def __init__(self, config=None, repo=None, **kwargs):
         super().__init__(config=config, repo=repo)
-        
+
         if repo:
-            self.model = TimesFM_2p5_200M_torch.from_pretrained(repo, device=self.device)
+            self.model = TimesFM_2p5_200M_torch.from_pretrained(
+                repo, device=self.device
+            )
         else:
             self.model = TimesFM_2p5_200M_torch(device=self.device)
 
@@ -2968,10 +3158,18 @@ class TimesFM_2p5_Model(Basemodel):
                 q_preds.append(quantile_forecast)
                 histories.append(input_seq.cpu().numpy())
 
-        trues = np.concatenate(trues, axis=0).reshape(-1, dataset.n_channels, dataset.horizon_len)
-        preds = np.concatenate(preds, axis=0).reshape(-1, dataset.n_channels, dataset.horizon_len)
-        q_preds = np.concatenate(q_preds, axis=1).reshape(q_preds[-1].shape[0], -1, dataset.n_channels, dataset.horizon_len)
-        histories = np.concatenate(histories, axis=0).reshape(-1, dataset.n_channels, dataset.context_len)
+        trues = np.concatenate(trues, axis=0).reshape(
+            -1, dataset.n_channels, dataset.horizon_len
+        )
+        preds = np.concatenate(preds, axis=0).reshape(
+            -1, dataset.n_channels, dataset.horizon_len
+        )
+        q_preds = np.concatenate(q_preds, axis=1).reshape(
+            q_preds[-1].shape[0], -1, dataset.n_channels, dataset.horizon_len
+        )
+        histories = np.concatenate(histories, axis=0).reshape(
+            -1, dataset.n_channels, dataset.context_len
+        )
 
         trues = dataset._denormalize_data(trues)
         preds = dataset._denormalize_data(preds)
@@ -2983,7 +3181,7 @@ class TimesFM_2p5_Model(Basemodel):
 
         # Calculate metrics
         mse = MSE(trues, preds)
-        mae = MAE(trues, preds) 
+        mae = MAE(trues, preds)
         mase = MASE(trues, preds)
         mape = MAPE(trues, preds)
         rmse = RMSE(trues, preds)
@@ -3010,20 +3208,25 @@ class TimesFM_2p5_Model(Basemodel):
                 "crps": crps,
             }
         else:
-            return {
-                "mse": mse,
-                "mae": mae,
-                "mase": mase,
-                "mape": mape,
-                "rmse": rmse,
-                "nrmse": nrmse,
-                "smape": smape,
-                "msis": msis,
-                "nd": nd,
-                "mwsq": mwsq,
-                "crps": crps,
-            }, trues, preds, histories
-    
+            return (
+                {
+                    "mse": mse,
+                    "mae": mae,
+                    "mase": mase,
+                    "mape": mape,
+                    "rmse": rmse,
+                    "nrmse": nrmse,
+                    "smape": smape,
+                    "msis": msis,
+                    "nd": nd,
+                    "mwsq": mwsq,
+                    "crps": crps,
+                },
+                trues,
+                preds,
+                histories,
+            )
+
     def plot(self, dataset, **kwargs):
         """Plot the results of the model on the given dataset.
 
@@ -3035,10 +3238,8 @@ class TimesFM_2p5_Model(Basemodel):
             task_name="forecasting",
             trues=np.concatenate(trues, axis=0),
             preds=np.concatenate(preds, axis=0),
-            history=np.concatenate(history, axis=0
-            ),
+            history=np.concatenate(history, axis=0),
         )
-
 
     def finetune(self, dataset, **kwargs):
         """Finetune the model on the given dataset.
@@ -3067,28 +3268,26 @@ class TimesFM_2p5_Model(Basemodel):
 
                 optimizer.zero_grad()
                 point_forecast, quantile_forecast = self.model.compiled_decode(
-                    horizon,
-                    input_seq,
-                    mask_seq,
-                    train=True
+                    horizon, input_seq, mask_seq, train=True
                 )
                 # quantile_forecast = quantile_forecast[..., 1:]
                 # point_forecast, quantile_forecast = torch.Tensor(point_forecast), torch.Tensor(quantile_forecast)
-                
+
                 loss = nn.functional.mse_loss(point_forecast, target_seq)
                 quantiles = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
                 for i, quantile in enumerate(quantiles):
                     last_patch_quantile = quantile_forecast[:, :, i + 1]
                     loss += torch.mean(
-                        quantile_loss(last_patch_quantile, target_seq.squeeze(-1),
-                                            quantile))
+                        quantile_loss(
+                            last_patch_quantile, target_seq.squeeze(-1), quantile
+                        )
+                    )
 
                 loss.backward()
                 optimizer.step()
                 total_loss += loss.item()
             avg_loss = total_loss / len(dataloader)
             print(f"Epoch {ep}, Loss: {avg_loss:.4f}")
-
 
 
 if __name__ == "__main__":
@@ -3125,7 +3324,3 @@ if __name__ == "__main__":
     forecast_df.columns = ["ds", "unique_id", "y"]
 
     print(forecast_df.head())
-
-
-
-        
