@@ -328,7 +328,7 @@ if __name__ == "__main__":
                 # args["config"]["horizon_len"] = dataset.horizon_len
                 model = TimesFM_2p5_Model(**args)
                 start = time.time()
-                metrics = model.evaluate(dataset, leaderboard=True)
+                metrics = model.evaluate(dataset, metric_only=True)
                 end = time.time()
                 print(f"Size of dataset: {fs:.2f} MB")
                 print(
