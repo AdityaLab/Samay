@@ -10,7 +10,7 @@ import torch.nn as nn
 import yaml
 from einops import rearrange, repeat
 from jaxtyping import Float
-from samay.dataset import MoiraiDataset
+from samay.dataset import *
 
 # from chronos import ChronosPipeline
 from samay.models.chronosforecasting.chronos.chronos import ChronosPipeline
@@ -70,17 +70,70 @@ class Basemodel:
         else:
             self.device = torch.device("cpu")
 
-    def finetune(self, dataset, **kwargs):
+    def finetune(self, dataset: BaseDataset, **kwargs):
+        """Finetune the model on the given dataset.
+
+        This is an abstract method that concrete model classes must implement.
+
+        Args:
+            dataset (Dataset): Dataset used for finetuning.
+            **kwargs: Optional keyword arguments for finetuning (e.g. lr, epoch).
+
+        Returns:
+            Any: Model or training result produced by the finetune operation;
+                concrete classes decide the exact return type.
+
+        Raises:
+            NotImplementedError: If a subclass does not implement this method.
+        """
         raise NotImplementedError
 
     def forecast(self, input, **kwargs):
+        """Generate forecast(s) from input data.
+
+        Args:
+            input (Any): Input data for forecasting (e.g. torch.Tensor, numpy array,
+                or model-specific input structure).
+            **kwargs: Optional keyword arguments for forecasting.
+
+        Returns:
+            Any: Forecast outputs. The concrete model defines the exact format
+                (for example, mean forecasts, quantiles, or full distribution).
+
+        Raises:
+            NotImplementedError: If a subclass does not implement this method.
+        """
         raise NotImplementedError
 
-    def evaluate(self, dateset, **kwargs):
-        pass
+    def evaluate(self, dataset: BaseDataset, **kwargs):
+        """Evaluate the model on a dataset.
+
+        Args:
+            dataset (Dataset): Dataset used for evaluation.
+            **kwargs: Optional evaluation arguments (e.g. metric_only).
+
+        Returns:
+            Any: Evaluation metrics or (metrics, details) tuple as defined by
+                the concrete model implementation.
+
+        Raises:
+            NotImplementedError: If a subclass does not implement this method.
+        """
+        raise NotImplementedError
 
     def save(self, path):
-        pass
+        """Save the model to disk.
+
+        Args:
+            path (str): Filesystem path where model artifacts should be saved.
+
+        Returns:
+            None
+
+        Raises:
+            NotImplementedError: If a subclass does not implement this method.
+        """
+        raise NotImplementedError
 
 
 class TimesfmModel(Basemodel):
@@ -102,7 +155,7 @@ class TimesfmModel(Basemodel):
 
         self.model = tfm.TimesFm(hparams=hparams, checkpoint=ckpt)
 
-    def finetune(self, dataset, freeze_transformer=True, **kwargs):
+    def finetune(self, dataset: TimesfmDataset, freeze_transformer=True, **kwargs):
         """Finetune the model on the given dataset.
 
         Args:
@@ -110,7 +163,7 @@ class TimesfmModel(Basemodel):
             freeze_transformer (bool): Whether to freeze the transformer layers during finetuning.
 
         Returns:
-            ppd.PatchedDecoderFinetuneModel: The finetuned model.
+            (ppd.PatchedDecoderFinetuneModel): The finetuned model.
         """
         lr = 1e-4 if "lr" not in kwargs else kwargs["lr"]
         epoch = 5 if "epoch" not in kwargs else kwargs["epoch"]
@@ -152,18 +205,24 @@ class TimesfmModel(Basemodel):
             input (torch.Tensor): Input data.
 
         Returns:
-            Tuple[torch.Tensor, torch.Tensor]: A tuple containing:
+            (Tuple[torch.Tensor, torch.Tensor]): A tuple containing:
                 - the mean forecast of size (# inputs, # forecast horizon),
                 - the full forecast (mean + quantiles) of size
                   (# inputs, # forecast horizon, 1 + # quantiles).
         """
         return self.model.forecast(input)
 
-    def plot(self, dataset, **kwargs):
-        """
-        Plot the forecast results.
+    def plot(self, dataset: TimesfmDataset, **kwargs):
+        """Plot forecast results.
+
         Args:
-            dataset: dataset for plotting, call get_data_loader() to get the dataloader
+            dataset (TimesfmDataset): Dataset for plotting. Use
+                ``get_data_loader()`` to obtain the dataloader.
+            **kwargs: Additional keyword arguments forwarded to the
+                visualization helper.
+
+        Returns:
+            None
         """
         dataloader = dataset.get_data_loader()
         trues, preds, histories, losses, quantiles = [], [], [], [], []
@@ -225,7 +284,7 @@ class TimesfmModel(Basemodel):
 
         # return average_loss, trues, preds, histories
 
-    def evaluate(self, dataset, metric_only=False, **kwargs):
+    def evaluate(self, dataset: TimesfmDataset, metric_only=False, **kwargs):
         """Evaluate the model.
 
         Args:
@@ -233,7 +292,7 @@ class TimesfmModel(Basemodel):
             metric_only (bool): If True, return only metrics. Defaults to False.
 
         Returns:
-            Dict[str, float]: Evaluation metrics, including mse, mae, mase, mape, rmse, nrmse, smape, msis, nd, mwsq, crps.
+           ( Dict[str, float]): Evaluation metrics, including mse, mae, mase, mape, rmse, nrmse, smape, msis, nd, mwsq, crps.
             If metric_only is False, returns a tuple of (metrics, trues, preds, histories, quantiles):
                 - trues: Ground truth values.
                 - preds: Predicted values.
@@ -358,7 +417,7 @@ class ChronosModel(Basemodel):
             print("Initializing a new Chronos model without pre-trained weights")
             self.pipeline = ChronosPipeline(config=ChronosConfig(**config))
 
-    def finetune(self, dataset, **kwargs):
+    def finetune(self, dataset: ChronosDataset, **kwargs):
         """Finetune the model on the given dataset.
 
         Args:
@@ -399,13 +458,20 @@ class ChronosModel(Basemodel):
 
         finetune_model.eval()
 
-    def plot(self, dataset, horizon_len, quantile_levels, **kwargs):
-        """
-        Plot the forecast results.
+    def plot(self, dataset: ChronosDataset, horizon_len: int, quantile_levels: list, **kwargs):
+        """Plot forecast results produced by the Chronos pipeline.
+
         Args:
-            dataset: dataset for plotting, call get_data_loader() to get the dataloader
-            horizon_len: int, forecast horizon length
-            quantile_levels: list, list of quantile levels
+            dataset (ChronosDataset): Dataset for plotting. Use
+                ``get_data_loader()`` to obtain the dataloader.
+            horizon_len (int): Forecast horizon length.
+            quantile_levels (list[float]): List of quantile levels to request
+                from the model (e.g. [0.1, 0.5, 0.9]).
+            **kwargs: Additional keyword arguments forwarded to the
+                visualization helper.
+
+        Returns:
+            None
         """
         # Todo: forecast
         dataloader = dataset.get_data_loader()
@@ -447,16 +513,36 @@ class ChronosModel(Basemodel):
         )
 
     def evaluate(
-        self, dataset, horizon_len, quantile_levels, metric_only=False, **kwargs
+        self, dataset: ChronosDataset, horizon_len: int, quantile_levels: list, metric_only=False, **kwargs
     ):
-        """
-        Evaluate the model.
+        """Evaluate the Chronos model on a dataset.
+
         Args:
-            dataset: dataset for evaluation, call get_data_loader() to get the dataloader
-            horizon_len: int, forecast horizon length
-            quantile_levels: list, list of quantile levels
+            dataset (ChronosDataset): Dataset for evaluation. Use
+                ``get_data_loader()`` to obtain the dataloader.
+            horizon_len (int): Forecast horizon length.
+            quantile_levels (list[float]): Quantile levels used to compute
+                quantile forecasts and scoring metrics.
+            metric_only (bool): If True, return only a dict of metrics. If
+                False, return a tuple (metrics, trues, preds, histories,
+                quantile_forecasts).
+            **kwargs: Additional backend-specific options (ignored by default).
+
         Returns:
-            Dict[str, float]: evaluation metrics, including mse, mae, mase, mape, rmse, nrmse, smape, msis, nd, mwsq, crps
+            (Dict[str, float]): If `metric_only` is True, returns a dict of
+                evaluation metrics, including mse, mae, mase, mape, rmse, nrmse,
+                smape, msis, nd, mwsq, crps.
+            (Tuple[Dict[str, float], np.ndarray, np.ndarray, np.ndarray, np.ndarray]):
+                If `metric_only` is False, returns a tuple containing:
+                - A dict of evaluation metrics (as above).
+                - `trues`: Ground truth values as a numpy array of shape
+                  (num_samples, horizon_len, num_ts).
+                - `preds`: Mean predictions as a numpy array of shape
+                  (num_samples, horizon_len, num_ts).
+                - `histories`: Input context sequences as a numpy array of shape
+                  (num_samples, context_len, num_ts).
+                - `quantile_forecasts`: Quantile forecasts as a numpy array of shape
+                  (num_quantiles, num_samples, horizon_len, num_ts).
         """
         dataloader = dataset.get_data_loader()
         trues, preds, histories, quantile_forecasts = [], [], [], []
@@ -561,11 +647,11 @@ class ChronosBoltModel(Basemodel):
             print("Initializing a new Chronos model without pre-trained weights")
             self.pipeline = ChronosBoltPipeline(config=ChronosBoltConfig(**config))
 
-    def finetune(self, dataset, **kwargs):
+    def finetune(self, dataset: ChronosBoltDataset, **kwargs):
         """Finetune the model on the given dataset.
 
         Args:
-            dataset: Dataset for finetuning, call get_data_loader() to get the dataloader.
+            dataset (ChronosBoltDataset): Dataset for finetuning, call get_data_loader() to get the dataloader.
         """
         # Todo: finetune model
         finetune_model = self.pipeline.model
@@ -596,13 +682,20 @@ class ChronosBoltModel(Basemodel):
 
         finetune_model.eval()
 
-    def plot(self, dataset, horizon_len, quantile_levels, **kwargs):
-        """Plot the forecast results.
+    def plot(self, dataset: ChronosBoltDataset, horizon_len: int, quantile_levels: list, **kwargs):
+        """Plot forecast results produced by the ChronosBolt pipeline.
 
         Args:
-            dataset: Dataset for plotting, call get_data_loader() to get the dataloader.
+            dataset (ChronosBoltDataset): Dataset for plotting. Use
+                ``get_data_loader()`` to obtain the dataloader.
             horizon_len (int): Forecast horizon length.
-            quantile_levels (list): List of quantile levels.
+            quantile_levels (list[float]): List of quantile levels to request
+                from the model.
+            **kwargs: Additional keyword arguments forwarded to the
+                visualization helper.
+
+        Returns:
+            None
         """
         dataloader = dataset.get_data_loader()
         trues, preds, histories, quantiles = [], [], [], []
@@ -642,19 +735,36 @@ class ChronosBoltModel(Basemodel):
         )
 
     def evaluate(
-        self, dataset, horizon_len, quantile_levels, metric_only=False, **kwargs
+        self, dataset: ChronosBoltDataset, horizon_len: int, quantile_levels: list, metric_only=False, **kwargs
     ):
-        """Evaluate the model.
+        """Evaluate the ChronosBolt model on a dataset.
 
         Args:
-            dataset: Dataset for evaluation, call get_data_loader() to get the dataloader.
+            dataset (ChronosBoltDataset): Dataset for evaluation. Use
+                ``get_data_loader()`` to obtain the dataloader.
             horizon_len (int): Forecast horizon length.
-            quantile_levels (list): List of quantile levels.
-            metric_only (bool): If True, return only metrics. Defaults to False.
+            quantile_levels (list[float]): Quantile levels used to compute
+                quantile forecasts and scoring metrics.
+            metric_only (bool): If True, return only a dict of metrics. If
+                False, return a tuple (metrics, trues, preds, histories,
+                quantile_forecasts).
+            **kwargs: Additional backend-specific options (ignored by default).
 
         Returns:
-            Dict[str, float]: Evaluation metrics, including mse, mae, mase, mape, rmse, nrmse, smape, msis, nd, mwsq, crps.
-            If metric_only is False, returns a tuple of (metrics, trues, preds, histories, quantile_forecasts).
+            (Dict[str, float]): If `metric_only` is True, returns a dict of
+                evaluation metrics, including mse, mae, mase, mape, rmse, nrmse,
+                smape, msis, nd, mwsq, crps.
+            (Tuple[Dict[str, float], np.ndarray, np.ndarray, np.ndarray, np.ndarray]):
+                If `metric_only` is False, returns a tuple containing:
+                - A dict of evaluation metrics (as above).
+                - `trues`: Ground truth values as a numpy array of shape
+                  (num_samples, horizon_len, num_ts).
+                - `preds`: Mean predictions as a numpy array of shape
+                  (num_samples, horizon_len, num_ts).
+                - `histories`: Input context sequences as a numpy array of shape
+                  (num_samples, context_len, num_ts).
+                - `quantile_forecasts`: Quantile forecasts as a numpy array of shape
+                  (num_quantiles, num_samples, horizon_len, num_ts).
         """
         dataloader = dataset.get_data_loader()
         trues, preds, histories, quantile_forecasts = [], [], [], []
@@ -759,11 +869,11 @@ class Chronos_2_Model(Basemodel):
         self.max_patches = self.model.chronos_config.max_output_patches
         self.patch_size = self.model.chronos_config.output_patch_size
 
-    def finetune(self, dataset, **kwargs):
+    def finetune(self, dataset: Chronos_2_Dataset, **kwargs):
         """Finetune the model on the given dataset.
 
         Args:
-            dataset: Dataset for finetuning, call get_data_loader() to get the dataloader.
+            dataset (Chronos_2_Dataset): Dataset for finetuning, call get_data_loader() to get the dataloader.
         """
         dataloader = dataset.get_data_loader()
         self.model.to(self.device)
@@ -797,11 +907,16 @@ class Chronos_2_Model(Basemodel):
             avg_loss /= len(dataloader)
             print(f"Epoch {epoch}, Loss: {avg_loss}")
 
-    def plot(self, dataset, **kwargs):
-        """Plot the forecast results.
+    def plot(self, dataset: Chronos_2_Dataset, **kwargs):
+        """Plot forecast results for Chronos2 model.
 
         Args:
-            dataset: Dataset for plotting, call get_data_loader() to get the dataloader.
+            dataset (Chronos_2_Dataset): Dataset for plotting. Use
+                ``get_data_loader()`` to obtain the dataloader.
+            **kwargs: Forwarded to the visualization helper.
+
+        Returns:
+            None
         """
         dataloader = dataset.get_data_loader()
         trues, preds, histories, quantiles = [], [], [], []
@@ -874,20 +989,32 @@ class Chronos_2_Model(Basemodel):
             **kwargs,
         )
 
-    def evaluate(self, dataset, metric_only=False, **kwargs):
-        """Evaluate the model.
+    def evaluate(self, dataset: Chronos_2_Dataset, metric_only=False, **kwargs):
+        """Evaluate the Chronos2 model on a dataset.
 
         Args:
-            dataset: Dataset for evaluation, call get_data_loader() to get the dataloader.
-            metric_only (bool): If True, return only metrics. Defaults to False.
+            dataset (Chronos_2_Dataset): Dataset for evaluation. Use
+                ``get_data_loader()`` to obtain the dataloader.
+            metric_only (bool): If True, return only a dict of metrics. If
+                False, return a tuple (metrics, trues, preds, histories,
+                quantiles).
+            **kwargs: Additional backend-specific options (ignored by default).
 
         Returns:
-            Dict[str, float]: Evaluation metrics.
-            If metric_only is False, returns a tuple of (metrics, trues, preds, histories, quantiles):
-                - trues: True values.
-                - preds: Predicted values.
-                - histories: Historical values.
-                - quantiles: Quantile forecasts.
+            (Dict[str, float]): If `metric_only` is True, returns a dict of
+                evaluation metrics, including mse, mae, mase, mape, rmse, nrmse,
+                smape, msis, nd, mwsq, crps.
+            (Tuple[Dict[str, float], np.ndarray, np.ndarray, np.ndarray, np.ndarray]):
+                If `metric_only` is False, returns a tuple containing:
+                - A dict of evaluation metrics (as above).
+                - `trues`: Ground truth values as a numpy array of shape
+                  (num_samples, horizon_len, num_ts).
+                - `preds`: Mean predictions as a numpy array of shape
+                  (num_samples, horizon_len, num_ts).
+                - `histories`: Input context sequences as a numpy array of shape
+                  (num_samples, context_len, num_ts).
+                - `quantiles`: Quantile forecasts as a numpy array of shape
+                  (num_quantiles, num_samples, horizon_len, num_ts).
         """
         dataloader = dataset.get_data_loader()
         trues, preds, histories, quantiles = [], [], [], []
@@ -1008,7 +1135,22 @@ class LPTMModel(Basemodel):
 
         self.model.init()
 
-    def finetune(self, dataset, task_name="forecasting", **kwargs):
+    def finetune(self, dataset: LPTMDataset, task_name: str = "forecasting", **kwargs):
+        """Finetune the LPTM model on a dataset.
+
+        Args:
+            dataset (LPTMDataset): Dataset used for finetuning. Use
+                ``get_data_loader()`` to obtain the dataloader.
+            task_name (str): Training task to perform. Options include
+                ``"forecasting"``, ``"imputation"``, ``"detection"``, and
+                ``"classification"``. Defaults to ``"forecasting"``.
+            **kwargs: Optional keyword arguments such as ``lr`` (learning rate),
+                ``epoch`` (number of epochs), ``norm`` (gradient clipping norm),
+                and ``mask_ratio`` (for masking-based tasks).
+
+        Returns:
+            (nn.Module): The trained model instance.
+        """
         # arguments
         max_lr = 1e-4 if "lr" not in kwargs else kwargs["lr"]
         max_epoch = 5 if "epoch" not in kwargs else kwargs["epoch"]
@@ -1133,7 +1275,43 @@ class LPTMModel(Basemodel):
 
         return self.model
 
-    def evaluate(self, dataset, task_name="forecasting", metric_only=False, **kwargs):
+    def evaluate(self, dataset: LPTMDataset, task_name: str = "forecasting", metric_only=False, **kwargs):
+        """Evaluate the LPTM model on a dataset.
+
+        Args:
+            dataset (LPTMDataset): Dataset for evaluation. Use
+                ``get_data_loader()`` to obtain the dataloader.
+            task_name (str): Evaluation task. One of ``"forecasting"``,
+                ``"forecasting2"``, ``"imputation"``, ``"detection"``, or
+                ``"classification"``.
+            metric_only (bool): If True, return only computed metrics.
+            **kwargs: Additional options for evaluation.
+
+        Returns:
+            (Dict[str, float]): If `metric_only` is True, and the task is
+                ``"forecasting"`` or ``"forecasting2"``, returns a dict of
+                evaluation metrics, including mse, mae, mase, mape, rmse, nrmse,
+                smape, msis, nd.
+            (Tuple[Dict[str, float], np.ndarray, np.ndarray, np.ndarray]):
+                If `metric_only` is False, and the task is ``"forecasting"`` or
+                ``"forecasting2"``, returns a tuple containing:
+                - A dict of evaluation metrics (as above).
+                - `trues`: Ground truth values as a numpy array of shape
+                  (num_samples, num_ts, horizon_len).
+                - `preds`: Mean predictions as a numpy array of shape
+                  (num_samples, num_ts, horizon_len).
+                - `histories`: Input context sequences as a numpy array of shape
+                  (num_samples, num_ts, context_len).
+            trues (np.ndarray): If the task is ``"imputation"`` or
+                ``"detection"``, returns the ground truth values as a numpy array.
+            preds (np.ndarray): If the task is ``"imputation"`` or
+                ``"detection"``, returns the model predictions as a numpy array.
+            masks (np.ndarray): If the task is ``"imputation"``, returns the masks used for imputation
+                 as a numpy array.
+            labels (np.ndarray): If the task is ``"detection"`` or ``"classification"``, returns the anomaly labels as a numpy array.
+            accuracy (float): If the task is ``"classification"``, returns the classification accuracy.
+            embeddings (np.ndarray): If the task is ``"classification"``, returns the learned embeddings as a numpy array.
+        """
         dataloader = dataset.get_data_loader()
         criterion = torch.nn.MSELoss()
         self.model.to(self.device)
@@ -1421,7 +1599,7 @@ class MomentModel(Basemodel):
             self.model = MOMENTPipeline.from_pretrained(repo, model_kwargs=self.config)
         self.model.init()
 
-    def finetune(self, dataset, task_name="forecasting", **kwargs):
+    def finetune(self, dataset: MomentDataset, task_name: str = "forecasting", **kwargs):
         """Finetune the model on the given dataset.
 
         Args:
@@ -1429,7 +1607,7 @@ class MomentModel(Basemodel):
             task_name (str): Task name, forecasting, imputation, detection, classification.
 
         Returns:
-            MOMENT model: The finetuned model.
+            (MomentModel): The finetuned model.
         """
         # arguments
         max_lr = 1e-4 if "lr" not in kwargs else kwargs["lr"]
@@ -1544,12 +1722,18 @@ class MomentModel(Basemodel):
 
         return self.model
 
-    def plot(self, dataset, task_name="forecasting"):
-        """Plot the forecast results.
+    def plot(self, dataset: MomentDataset, task_name: str = "forecasting"):
+        """Visualize results from the MOMENT model.
 
         Args:
-            dataset: Dataset for plotting, call get_data_loader() to get the dataloader.
-            task_name (str): Task name, forecasting, imputation, detection, classification.
+            dataset (MomentDataset): Dataset for plotting. Use
+                ``get_data_loader()`` to obtain the dataloader.
+            task_name (str): Task to visualize. One of
+                ``"forecasting"``, ``"imputation"``, ``"detection"`` or
+                ``"classification"``. Defaults to ``"forecasting"``.
+
+        Returns:
+            None
         """
         dataloader = dataset.get_data_loader()
         criterion = torch.nn.MSELoss()
@@ -1680,7 +1864,7 @@ class MomentModel(Basemodel):
         #     labels = np.concatenate(labels)
         #     return accuracy, embeddings, labels
 
-    def evaluate(self, dataset, task_name="forecasting", metric_only=False, **kwargs):
+    def evaluate(self, dataset: MomentDataset, task_name: str = "forecasting", metric_only: bool = False, **kwargs):
         """Evaluate the model.
 
         Args:
@@ -1689,8 +1873,26 @@ class MomentModel(Basemodel):
             metric_only (bool): If True, return only metrics. Defaults to False.
 
         Returns:
-            Dict[str, float]: Evaluation metrics, including mse, mae, mase, mape, rmse, nrmse, smape, msis, nd, mwsq, crps.
-            If metric_only is False, returns a tuple of (metrics, trues, preds, histories).
+            (Dict[str, float]): If `metric_only` is True, and the task is
+                ``"forecasting"``, returns a dict of evaluation metrics, including
+                mse, mae, mase, mape, rmse, nrmse, smape, msis, nd.
+            (Tuple[Dict[str, float], np.ndarray, np.ndarray, np.ndarray]):
+                If `metric_only` is False, and the task is ``"forecasting"``, returns a tuple containing:
+                - A dict of evaluation metrics (as above).
+                - `trues`: Ground truth values as a numpy array of shape
+                  (num_samples, num_ts, horizon_len).
+                - `preds`: Mean predictions as a numpy array of shape
+                  (num_samples, num_ts, horizon_len).
+                - `histories`: Input context sequences as a numpy array of shape
+                  (num_samples, num_ts, context_len).
+            trues (np.ndarray): If the task is ``"imputation"`` or
+                ``"detection"``, returns the ground truth values as a numpy array.
+            preds (np.ndarray): If the task is ``"imputation"`` or
+                ``"detection"``, returns the model predictions as a numpy array.
+            masks (np.ndarray): If the task is ``"imputation"``, returns the masks used for imputation as a numpy array.
+            labels (np.ndarray): If the task is ``"detection"`` or ``"classification"``, returns the anomaly labels as a numpy array.
+            accuracy (float): If the task is ``"classification"``, returns the classification accuracy.
+            embeddings (np.ndarray): If the task is ``"classification"``, returns the learned embeddings as a numpy array.
         """
         dataloader = dataset.get_data_loader()
         self.model.to(self.device)
@@ -1814,7 +2016,7 @@ class TinyTimeMixerModel(Basemodel):
         else:
             raise ValueError("TinyTimeMixer model requires a repository")
 
-    def finetune(self, dataset, **kwargs):
+    def finetune(self, dataset: TinyTimeMixerDataset, **kwargs):
         """Finetune the model on the given dataset.
 
         Args:
@@ -1840,7 +2042,7 @@ class TinyTimeMixerModel(Basemodel):
             print(f"Epoch {epoch}, Loss: {avg_loss}")
         self.model.eval()
 
-    def plot(self, dataset, **kwargs):
+    def plot(self, dataset: TinyTimeMixerDataset, **kwargs):
         """Plot the forecast results.
 
         Args:
@@ -1873,7 +2075,7 @@ class TinyTimeMixerModel(Basemodel):
             **kwargs,
         )
 
-    def evaluate(self, dataset, metric_only=False, **kwargs):
+    def evaluate(self, dataset: TinyTimeMixerDataset, metric_only=False, **kwargs):
         """Evaluate the model.
 
         Args:
@@ -1881,8 +2083,17 @@ class TinyTimeMixerModel(Basemodel):
             metric_only (bool): If True, return only metrics. Defaults to False.
 
         Returns:
-            Dict[str, float]: Evaluation metrics, including mse, mae, mase, mape, rmse, nrmse, smape, msis, nd.
-            If metric_only is False, returns a tuple of (metrics, trues, preds, histories).
+            (Dict[str, float]): If `metric_only` is True, returns a dict of evaluation metrics, including
+                mse, mae, mase, mape, rmse, nrmse, smape, msis, nd.
+            (Tuple[Dict[str, float], np.ndarray, np.ndarray, np.ndarray]):
+                If `metric_only` is False, returns a tuple containing:
+                - A dict of evaluation metrics (as above).
+                - `trues`: Ground truth values as a numpy array of shape
+                  (num_samples, num_ts, horizon_len).
+                - `preds`: Mean predictions as a numpy array of shape
+                  (num_samples, num_ts, horizon_len).
+                - `histories`: Input context sequences as a numpy array of shape
+                  (num_samples, num_ts, context_len).
         """
         dataloader = dataset.get_data_loader()
         trues, preds, histories = [], [], []
@@ -2027,23 +2238,19 @@ class MoiraiTSModel(Basemodel):
 
     def preprocess_inputs(self, inputs: dict):
         """Preprocess the inputs to the model - specifically adds the following fields:
-        +--------------------+--------------------------------------+-----------------------+----------------------------------+
-        | FIELD              | DESCRIPTION                          | TYPE                  | SHAPE                            |
-        +--------------------+--------------------------------------+-----------------------+----------------------------------+
-        | target             | Batched time series data             | torch.tensor[float]   | (batch_size, seq_len, max_patch) |
-        | observed_mask      | Binary mask for the context part     | torch.tensor[bool]    | (batch_size, seq_len, max_patch) |
-        | prediction_mask    | Binary mask for the prediction part  | torch.tensor[bool]    | (batch_size, seq_len)            |
-        | time_id            | Time index                           | torch.tensor[int]     | (batch_size, seq_len)            |
-        | sample_id          | Time index                           | torch.tensor[int]     | (batch_size, seq_len)            |
-        | variate_id         | Index indicating the variate         | torch.tensor[int]     | (batch_size, seq_len)            |
-        | patch_size         | Patch size the model should use      | torch.tensor[int]     | (batch_size, seq_len)            |
-        +--------------------+--------------------------------------+-----------------------+----------------------------------+
 
         Args:
             inputs (dict): Dictionary containing the input data.
 
         Returns:
-            dict: Preprocessed input data.
+            (Dict[str, torch.Tensor]): Preprocessed inputs with additional fields.
+                - target: Batched time series data of shape (batch_size, seq_len, max_patch).
+                - observed_mask: Binary mask for the context part of shape (batch_size, seq_len, max_patch).
+                - prediction_mask: Binary mask for the prediction part of shape (batch_size, seq_len).
+                - time_id: Time index of shape (batch_size, seq_len).
+                - sample_id: Sample index of shape (batch_size, seq_len).
+                - variate_id: Index indicating the variate of shape (batch_size, seq_len).
+                - patch_size: Patch size the model should use of shape (batch_size, seq_len).
         """
         (target, observed_mask, sample_id, time_id, variate_id, prediction_mask) = (
             self.model._convert(
@@ -2098,10 +2305,10 @@ class MoiraiTSModel(Basemodel):
 
     def structure_multi_predict(
         self,
-        per_var_predict_token,
-        pred_index,
-        assign_index,
-        preds,
+        per_var_predict_token: int,
+        pred_index: int,
+        assign_index: int,
+        preds: torch.Tensor,
     ):
         preds = rearrange(
             preds,
@@ -2146,12 +2353,18 @@ class MoiraiTSModel(Basemodel):
             ValueError: Any metric other than "MSE" or "MASE" is not supported.
 
         Returns:
-            dict: Evaluation results for each column (variate).
-            If metric_only is False, returns a tuple of (metrics, trues, preds, histories, quantile_preds):
-                - trues: True values for each column (variate).
-                - preds: Predictions for each column (variate).
-                - histories: Histories for each column (variate).
-                - quantile_preds: Quantile predictions for each column (variate).
+            (Dict[str, float]): If `metric_only` is True, returns a dict of evaluation metrics, including
+                mse, mae, mase, mape, rmse, nrmse, smape, msis, nd.
+            (Tuple[Dict[str, float], np.ndarray, np.ndarray]): If `metric_only` is False, returns a tuple containing:
+                - A dict of evaluation metrics.
+                - `trues`: Ground truth values as a numpy array of shape
+                  (num_samples, num_ts, horizon_len).
+                - `preds`: Mean predictions as a numpy array of shape
+                  (num_samples, num_ts, horizon_len).
+                - `histories`: Historical values as a numpy array of shape
+                (num_samples, num_ts, horizon_len).
+                - `quantile_preds`: Quantile predictions as a numpy array of shape
+                (num_samples, num_ts, horizon_len, num_quantiles).
         """
         # required fields for the forecast
         inp_names = [
@@ -2647,7 +2860,7 @@ class MoiraiTSModel(Basemodel):
         else:
             return leaderboard_metrics, trues, preds, histories, quantile_preds
 
-    def finetune(self, dataset, **kwargs):
+    def finetune(self, dataset: MoiraiDataset, **kwargs):
         """Finetune the model on the given dataset.
 
         Args:
@@ -2948,7 +3161,7 @@ class MoiraiTSModel(Basemodel):
         print("Fineuned model updated")
         cleanup_dataloader(dataloader)
 
-    def plot(self, dataset, zero_shot=False, **kwargs):
+    def plot(self, dataset: MoiraiDataset, zero_shot: bool = False, **kwargs):
         """Plot the results of the model on the given dataset.
 
         Args:
@@ -2975,7 +3188,7 @@ class TimeMoEModel(Basemodel):
             t_config = TimeMoeConfig(**self.config)
             self.model = TimeMoeForPrediction(t_config)
 
-    def finetune(self, dataset, **kwargs):
+    def finetune(self, dataset: TimeMoEDataset, **kwargs):
         """Finetune the model on the given dataset.
 
         Args:
@@ -3007,7 +3220,7 @@ class TimeMoEModel(Basemodel):
 
         self.model.eval()
 
-    def plot(self, dataset, **kwargs):
+    def plot(self, dataset: TimeMoEDataset, **kwargs):
         """Plot the results of the model on the given dataset.
 
         Args:
@@ -3050,7 +3263,7 @@ class TimeMoEModel(Basemodel):
             history=histories,
         )
 
-    def evaluate(self, dataset, metric_only=False, **kwargs):
+    def evaluate(self, dataset: TimeMoEDataset, metric_only: bool = False, **kwargs):
         """Evaluate the model on the given dataset.
 
         Args:
@@ -3058,8 +3271,14 @@ class TimeMoEModel(Basemodel):
             metric_only (bool): If True, return only metrics. Defaults to False.
 
         Returns:
-            Dict[str, float]: Evaluation metrics, including mse, mae, mase, mape, rmse, nrmse, smape, msis, nd.
-            If metric_only is False, returns a tuple of (metrics, trues, preds, histories).
+            (Dict[str, float]): If `metric_only` is True, returns a dictionary containing evaluation metrics, 
+                including mse, mae, mase, mape, rmse, nrmse, smape, msis, nd.
+            (Tuple[Dict[str, float], np.ndarray, np.ndarray, np.ndarray]): If `metric_only` is False, returns a tuple of
+                (metrics, trues, preds, histories).
+                - metrics (Dict[str, float]): Dictionary containing evaluation metrics (as above).
+                - trues (np.ndarray): True values of shape (batch_size, n_channels, horizon_len).
+                - preds (np.ndarray): Predicted values of shape (batch_size, n_channels, horizon_len).
+                - histories (np.ndarray): Historical context values of shape (batch_size, n_channels, context_len).
         """
         # Implement evaluation logic here
         dataloader = dataset.get_data_loader()
@@ -3156,7 +3375,7 @@ class TimesFM_2p5_Model(Basemodel):
         self.model.compile(self.config)
         self.quantiles = self.model.model.config.quantiles
 
-    def evaluate(self, dataset, metric_only=False, **kwargs):
+    def evaluate(self, dataset: TimesFm_2p5_Dataset, metric_only: bool = False, **kwargs):
         """Evaluate the model on the given dataset.
 
         Args:
@@ -3164,8 +3383,14 @@ class TimesFM_2p5_Model(Basemodel):
             metric_only (bool): If True, return only metrics. Defaults to False.
 
         Returns:
-            Dict[str, float]: Dictionary containing evaluation metrics, including mse, mae, mase, mape, rmse, nrmse, smape, msis, nd, mwsq, crps.
-            If metric_only is False, returns a tuple of (metrics, trues, preds, histories, quantiles).
+            (Dict[str, float]): If `metric_only` is True, returns a dictionary containing evaluation metrics, 
+                including mse, mae, mase, mape, rmse, nrmse, smape, msis, nd, mwsq, crps.
+            (Tuple[Dict[str, float], np.ndarray, np.ndarray, np.ndarray]): If `metric_only` is False, returns a tuple of
+                (metrics, trues, preds, histories).
+                - metrics (Dict[str, float]): Dictionary containing evaluation metrics (as above).
+                - trues (np.ndarray): True values of shape (batch_size, n_channels, horizon_len).
+                - preds (np.ndarray): Predicted values of shape (batch_size, n_channels, horizon_len).
+                - histories (np.ndarray): Historical context values of shape (batch_size, n_channels, context_len).
         """
         # self.model.to(self.device)
         self.model.model.eval()
@@ -3265,7 +3490,7 @@ class TimesFM_2p5_Model(Basemodel):
                 histories,
             )
 
-    def plot(self, dataset, **kwargs):
+    def plot(self, dataset: TimesFm_2p5_Dataset, **kwargs):
         """Plot the results of the model on the given dataset.
 
         Args:
@@ -3279,7 +3504,7 @@ class TimesFM_2p5_Model(Basemodel):
             history=np.concatenate(history, axis=0),
         )
 
-    def finetune(self, dataset, **kwargs):
+    def finetune(self, dataset: TimesFm_2p5_Dataset, **kwargs):
         """Finetune the model on the given dataset.
 
         Args:
