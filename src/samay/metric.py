@@ -33,7 +33,7 @@ def MASE(
     y_pred: np.ndarray,    # (W, S, H)
     reduce: Literal["none", "series", "window", "mean"] = "mean",
 ) -> np.ndarray | float:
-  """Mean absolute scaled error (MASE).
+    """Mean absolute scaled error (MASE).
 
     MASE scales the absolute errors by the average in-sample one-step
     naive forecast error. This implementation approximates the scaling by
