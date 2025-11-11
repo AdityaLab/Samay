@@ -1,4 +1,5 @@
 import numpy as np
+from typing import Literal
 
 
 def MSE(y_true: np.ndarray, y_pred: np.ndarray):
@@ -26,9 +27,13 @@ def MAE(y_true: np.ndarray, y_pred: np.ndarray):
     """
     return np.mean(np.abs(y_true - y_pred))
 
-
-def MASE(y_true: np.ndarray, y_pred: np.ndarray, freq: str = "h"):
-    """Mean absolute scaled error (MASE).
+def MASE(
+    context: np.ndarray,   # (W, S, Lc)
+    y_true: np.ndarray,    # (W, S, H)
+    y_pred: np.ndarray,    # (W, S, H)
+    reduce: Literal["none", "series", "window", "mean"] = "mean",
+) -> np.ndarray | float:
+  """Mean absolute scaled error (MASE).
 
     MASE scales the absolute errors by the average in-sample one-step
     naive forecast error. This implementation approximates the scaling by
@@ -45,27 +50,42 @@ def MASE(y_true: np.ndarray, y_pred: np.ndarray, freq: str = "h"):
     Returns:
         (float): The mean absolute scaled error.
     """
-    DEFAULT_SEASONALITIES = {
-        "S": 3600,  # 1 hour
-        "s": 3600,  # 1 hour
-        "T": 1440,  # 1 day
-        "min": 1440,  # 1 day
-        "H": 24,  # 1 day
-        "h": 24,  # 1 day
-        "D": 1,  # 1 day
-        "W": 1,  # 1 week
-        "M": 12,
-        "ME": 12,
-        "B": 5,
-        "Q": 4,
-        "QE": 4,
-    }
-    # seasonality = DEFAULT_SEASONALITIES[freq]
-    if len(y_true.shape) == 3:  # num_batch, bs, seq_len
-        y_t = y_true[:, :, 1:] - y_true[:, :, :-1]
-    else:  # num_seq, seq_len
-        y_t = y_true[:, 1:] - y_true[:, :-1]
-    return np.mean(np.abs(y_true - y_pred) / (np.mean(np.abs(y_t)) + 1e-5))
+    context = np.asarray(context, dtype=float)
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+
+    if y_true.shape != y_pred.shape:
+        raise ValueError(f"y_true {y_true.shape} != y_pred {y_pred.shape}")
+    if context.ndim != 3 or y_true.ndim != 3:
+        raise ValueError("all inputs must be 3D arrays: (num_windows, num_series, seq_len)")
+    if context.shape[:2] != y_true.shape[:2]:
+        raise ValueError("context and y_true/y_pred must match on (W, S)")
+    if context.shape[-1] <= 1:
+        base = np.full(y_true.shape[:2], np.nan)  # (W, S)
+        return _reduce_mase(base, reduce)
+
+    diffs = np.abs(context[..., 1:] - context[..., :-1])   # (W, S, Lc-1)
+    denom = diffs.mean(axis=-1)                            # (W, S)
+
+    num = np.abs(y_true - y_pred).mean(axis=-1)            # (W, S)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        mase_ws = num / denom
+        mase_ws = np.where(denom > 0, mase_ws, np.nan)     # (W, S)
+
+    return _reduce_mase(mase_ws, reduce)
+
+
+def _reduce_mase(mase_ws: np.ndarray, reduce: str):
+    if reduce == "none":
+        return mase_ws
+    if reduce == "series":
+        return np.nanmean(mase_ws, axis=0)  # -> (S,)
+    if reduce == "window":
+        return np.nanmean(mase_ws, axis=1)  # -> (W,)
+    if reduce == "mean":
+        return float(np.nanmean(mase_ws))   # -> scalar
+    raise ValueError(f"unknown reduce={reduce!r}")
 
 
 def MAPE(y_true: np.ndarray, y_pred: np.ndarray):
@@ -121,7 +141,7 @@ def SMAPE(y_true: np.ndarray, y_pred: np.ndarray):
         (float): SMAPE value.
     """
     return np.mean(
-        2.0 * np.abs(y_true - y_pred) / (np.abs(y_true) + np.abs(y_pred) + 1e-5)
+        2.0 * np.abs(y_true - y_pred) / (np.abs(y_true) + np.abs(y_pred) + 1e-9)
     )
 
 

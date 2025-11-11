@@ -82,6 +82,7 @@ class BaseDataset:
             **kwargs: Extra backend-specific options.
         """
         self.name = name
+        self.freq = freq
         self.datetime_col = datetime_col
         self.batchsize = batchsize
         self.mode = mode
@@ -2267,11 +2268,10 @@ class TimeMoEDataset(BaseDataset):
         # rebuild the original shape
         # original shape: (window_per_col, n_channels, seq_len)
         # data shape: (n_channels*window_per_col, 1, seq_len)
-        data = data.reshape(self.n_channels, self.num_windows, -1).transpose(1, 0, 2)
-        data_flatten = np.transpose(data, (0, 2, 1)).reshape(-1, self.n_channels)
+        data_flatten = data.transpose(0, 2, 1).reshape(-1, self.n_channels)
         return self.scaler.inverse_transform(data_flatten).reshape(
-            data.shape[0], data.shape[1], data.shape[2]
-        )
+            data.shape[0], data.shape[2], data.shape[1]
+        ).transpose(0, 2, 1)
 
 
 class TimesFM_2p5_Dataset(BaseDataset):
@@ -2380,32 +2380,18 @@ class TimesFM_2p5_Dataset(BaseDataset):
         seq_start = self.stride * (index % self.num_windows)
         seq_end = seq_start + self.context_len
 
-        if self.task_name == "evaluation":
-            pred_end = seq_end + self.horizon_len
+        pred_end = seq_end + self.horizon_len
 
-            if pred_end > self.length_timeseries:
-                pred_end = self.length_timeseries
-                seq_end = pred_end - self.horizon_len
-                seq_start = seq_end - self.context_len
+        if pred_end > self.length_timeseries:
+            pred_end = self.length_timeseries
+            seq_end = pred_end - self.horizon_len
+            seq_start = seq_end - self.context_len
 
-            # input_seq = self.data[seq_start:seq_end, :].T
-            input_seq = self.data[seq_start:seq_end, channel_idx]
-            forecast_seq = self.data[seq_end:pred_end, channel_idx]
-            return input_seq, forecast_seq
+        # input_seq = self.data[seq_start:seq_end, :].T
+        input_seq = self.data[seq_start:seq_end, channel_idx]
+        forecast_seq = self.data[seq_end:pred_end, channel_idx]
+        return input_seq, forecast_seq
 
-        elif self.task_name == "finetune":
-            pred_end = seq_end + self.horizon_len
-            if pred_end > self.length_timeseries:
-                pred_end = self.length_timeseries
-                seq_end = pred_end - 1
-                seq_start = seq_end - self.context_len
-
-            input_seq = self.data[
-                seq_start:seq_end, channel_idx
-            ]  # shape: (context_len, )
-            forecast_seq = self.data[seq_end:pred_end, channel_idx]
-            # loss_mask = np.ones(input_seq.shape[0])
-            return input_seq, forecast_seq
 
     def __len__(self) -> int:
         """Get the length of the dataset.
@@ -2438,8 +2424,8 @@ class TimesFM_2p5_Dataset(BaseDataset):
             data = data[:, : self.n_channels, :]
             data_flatten = np.transpose(data, (0, 2, 1)).reshape(-1, self.n_channels)
             return self.scaler.inverse_transform(data_flatten).reshape(
-                data.shape[0], data.shape[1], data.shape[2]
-            )
+                data.shape[0], data.shape[2], data.shape[1]
+            ).transpose(0, 2, 1)
         else:
             return data
 

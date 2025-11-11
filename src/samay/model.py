@@ -279,6 +279,8 @@ class TimesfmModel(Basemodel):
             preds=preds,
             history=histories,
             quantiles=quantiles,
+            dataset=dataset.name,
+            freq=dataset.freq,
             **kwargs,
         )
 
@@ -350,7 +352,7 @@ class TimesfmModel(Basemodel):
 
         mse = MSE(trues, preds)
         mae = MAE(trues, preds)
-        mase = MASE(trues, preds)
+        mase = MASE(histories, trues, preds)
         mape = MAPE(trues, preds)
         rmse = RMSE(trues, preds)
         nrmse = NRMSE(trues, preds)
@@ -580,7 +582,7 @@ class ChronosModel(Basemodel):
 
         mse = MSE(trues, preds)
         mae = MAE(trues, preds)
-        mase = MASE(trues, preds)
+        mase = MASE(histories, trues, preds)
         mape = MAPE(trues, preds)
         rmse = RMSE(trues, preds)
         nrmse = NRMSE(trues, preds)
@@ -800,7 +802,7 @@ class ChronosBoltModel(Basemodel):
 
         mse = MSE(trues, preds)
         mae = MAE(trues, preds)
-        mase = MASE(trues, preds)
+        mase = MASE(histories, trues, preds)
         mape = MAPE(trues, preds)
         rmse = RMSE(trues, preds)
         nrmse = NRMSE(trues, preds)
@@ -1080,7 +1082,7 @@ class Chronos_2_Model(Basemodel):
 
         mse = MSE(trues, preds)
         mae = MAE(trues, preds)
-        mase = MASE(trues, preds)
+        mase = MASE(histories, trues, preds)
         mape = MAPE(trues, preds)
         rmse = RMSE(trues, preds)
         nrmse = NRMSE(trues, preds)
@@ -1348,8 +1350,8 @@ class LPTMModel(Basemodel):
             # return average_loss, trues, preds, histories
             mse = MSE(trues, preds)
             mae = MAE(trues, preds)
-            mase = MASE(trues, preds)
-            mape = MAPE(trues, preds)
+            mase = MASE(histories, trues, preds)
+            mape = MAPE(trues, preds)   
             rmse = RMSE(trues, preds)
             nrmse = NRMSE(trues, preds)
             smape = SMAPE(trues, preds)
@@ -1419,7 +1421,7 @@ class LPTMModel(Basemodel):
 
             mse = MSE(trues, preds)
             mae = MAE(trues, preds)
-            mase = MASE(trues, preds)
+            mase = MASE(histories, trues, preds)
             mape = MAPE(trues, preds)
             rmse = RMSE(trues, preds)
             nrmse = NRMSE(trues, preds)
@@ -1927,7 +1929,7 @@ class MomentModel(Basemodel):
             histories = dataset._denormalize_data(histories)
             mse = MSE(trues, preds)
             mae = MAE(trues, preds)
-            mase = MASE(trues, preds)
+            mase = MASE(histories, trues, preds)
             mape = MAPE(trues, preds)
             rmse = RMSE(trues, preds)
             nrmse = NRMSE(trues, preds)
@@ -2117,7 +2119,7 @@ class TinyTimeMixerModel(Basemodel):
         print(trues.shape, preds.shape, histories.shape)
         mse = MSE(trues, preds)
         mae = MAE(trues, preds)
-        mase = MASE(trues, preds)
+        mase = MASE(histories, trues, preds)
         mape = MAPE(trues, preds)
         rmse = RMSE(trues, preds)
         nrmse = NRMSE(trues, preds)
@@ -2812,7 +2814,7 @@ class MoiraiTSModel(Basemodel):
 
         mse = np.mean(np.array([MSE(t, p) for t, p in zip(trues, preds)]), axis=0)
         mae = np.mean(np.array([MAE(t, p) for t, p in zip(trues, preds)]), axis=0)
-        mase = np.mean(np.array([MASE(t, p) for t, p in zip(trues, preds)]), axis=0)
+        mase = np.mean(np.array([MASE(h, t, p) for h, t, p in zip(histories, trues, preds)]), axis=0)
         mape = np.mean(np.array([MAPE(t, p) for t, p in zip(trues, preds)]), axis=0)
         rmse = np.mean(np.array([RMSE(t, p) for t, p in zip(trues, preds)]), axis=0)
         nrmse = np.mean(np.array([NRMSE(t, p) for t, p in zip(trues, preds)]), axis=0)
@@ -3247,14 +3249,14 @@ class TimeMoEModel(Basemodel):
                 preds.append(pred)
                 histories.append(history)
         trues = np.concatenate(trues, axis=0).reshape(
-            -1, dataset.n_channels, dataset.horizon_len
-        )
+            dataset.n_channels, -1, dataset.horizon_len
+        ).transpose(1, 0, 2)
         preds = np.concatenate(preds, axis=0).reshape(
-            -1, dataset.n_channels, dataset.horizon_len
-        )
+            dataset.n_channels, -1, dataset.horizon_len
+        ).transpose(1, 0, 2)
         histories = np.concatenate(histories, axis=0).reshape(
-            -1, dataset.n_channels, dataset.context_len
-        )
+            dataset.n_channels, -1, dataset.context_len
+        ).transpose(1, 0, 2)
 
         visualize(
             task_name="forecasting",
@@ -3302,13 +3304,13 @@ class TimeMoEModel(Basemodel):
                 preds.append(pred)
                 histories.append(history)
         trues = np.concatenate(trues, axis=0).reshape(
-            -1, dataset.n_channels, dataset.horizon_len
+            dataset.n_channels, -1, dataset.horizon_len
         )
         preds = np.concatenate(preds, axis=0).reshape(
-            -1, dataset.n_channels, dataset.horizon_len
+            dataset.n_channels, -1, dataset.horizon_len
         )
         histories = np.concatenate(histories, axis=0).reshape(
-            -1, dataset.n_channels, dataset.context_len
+            dataset.n_channels, -1, dataset.context_len
         )
 
         # denormalize the data
@@ -3319,7 +3321,7 @@ class TimeMoEModel(Basemodel):
         # Calculate metrics
         mse = MSE(trues, preds)
         mae = MAE(trues, preds)
-        mase = MASE(trues, preds)
+        mase = MASE(histories, trues, preds)
         mape = MAPE(trues, preds)
         rmse = RMSE(trues, preds)
         nrmse = NRMSE(trues, preds)
@@ -3414,25 +3416,17 @@ class TimesFM_2p5_Model(Basemodel):
                     input_seq,
                     mask_seq,
                 )
-                quantile_forecast = quantile_forecast[..., 1:].transpose(2, 0, 1)
+                quantile_forecast = quantile_forecast[..., 1:].transpose(2, 0, 1)   # (q, b, h)
 
                 trues.append(target_seq.cpu().numpy())
                 preds.append(point_forecast)
                 q_preds.append(quantile_forecast)
                 histories.append(input_seq.cpu().numpy())
 
-        trues = np.concatenate(trues, axis=0).reshape(
-            -1, dataset.n_channels, dataset.horizon_len
-        )
-        preds = np.concatenate(preds, axis=0).reshape(
-            -1, dataset.n_channels, dataset.horizon_len
-        )
-        q_preds = np.concatenate(q_preds, axis=1).reshape(
-            q_preds[-1].shape[0], -1, dataset.n_channels, dataset.horizon_len
-        )
-        histories = np.concatenate(histories, axis=0).reshape(
-            -1, dataset.n_channels, dataset.context_len
-        )
+        trues = np.concatenate(trues, axis=0).reshape(dataset.n_channels, -1, dataset.horizon_len).transpose(1, 0, 2)
+        preds = np.concatenate(preds, axis=0).reshape(dataset.n_channels, -1, dataset.horizon_len).transpose(1, 0, 2)
+        q_preds = np.concatenate(q_preds, axis=1).reshape(q_preds[-1].shape[0], dataset.n_channels, -1, dataset.horizon_len).transpose(0, 2, 1, 3)
+        histories = np.concatenate(histories, axis=0).reshape(dataset.n_channels, -1, dataset.context_len).transpose(1, 0, 2)
 
         trues = dataset._denormalize_data(trues)
         preds = dataset._denormalize_data(preds)
@@ -3444,8 +3438,8 @@ class TimesFM_2p5_Model(Basemodel):
 
         # Calculate metrics
         mse = MSE(trues, preds)
-        mae = MAE(trues, preds)
-        mase = MASE(trues, preds)
+        mae = MAE(trues, preds) 
+        mase = MASE(histories, trues, preds)
         mape = MAPE(trues, preds)
         rmse = RMSE(trues, preds)
         nrmse = NRMSE(trues, preds)
@@ -3496,12 +3490,13 @@ class TimesFM_2p5_Model(Basemodel):
         Args:
             dataset (TimesFm_2p5_Dataset): Dataset containing the input data and relevant functions like dataloaders etc.
         """
-        _, trues, preds, history = self.evaluate(dataset, metric_only=False)
+        _, trues, preds, history, q_preds = self.evaluate(dataset, metric_only=False)
         visualize(
             task_name="forecasting",
-            trues=np.concatenate(trues, axis=0),
-            preds=np.concatenate(preds, axis=0),
-            history=np.concatenate(history, axis=0),
+            trues=trues,
+            preds=preds,
+            history=history,
+            quantiles=q_preds,
         )
 
     def finetune(self, dataset: TimesFm_2p5_Dataset, **kwargs):
