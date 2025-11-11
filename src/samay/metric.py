@@ -3,14 +3,29 @@ from typing import Literal
 
 
 def MSE(y_true: np.ndarray, y_pred: np.ndarray):
-    """Mean squared error"""
+    """Mean squared error.
+
+    Args:
+        y_true (np.ndarray): Ground-truth array of shape (..., seq_len).
+        y_pred (np.ndarray): Predicted array with the same shape as ``y_true``.
+
+    Returns:
+        (float): Mean squared error between ``y_true`` and ``y_pred``.
+    """
     return np.mean((y_true - y_pred) ** 2)
 
 
 def MAE(y_true: np.ndarray, y_pred: np.ndarray):
-    """Mean absolute error"""
-    return np.mean(np.abs(y_true - y_pred))
+    """Mean absolute error.
 
+    Args:
+        y_true (np.ndarray): Ground-truth array.
+        y_pred (np.ndarray): Predicted array with the same shape as ``y_true``.
+
+    Returns:
+        (float): Mean absolute error between ``y_true`` and ``y_pred``.
+    """
+    return np.mean(np.abs(y_true - y_pred))
 
 def MASE(
     context: np.ndarray,   # (W, S, Lc)
@@ -18,6 +33,23 @@ def MASE(
     y_pred: np.ndarray,    # (W, S, H)
     reduce: Literal["none", "series", "window", "mean"] = "mean",
 ) -> np.ndarray | float:
+  """Mean absolute scaled error (MASE).
+
+    MASE scales the absolute errors by the average in-sample one-step
+    naive forecast error. This implementation approximates the scaling by
+    using first differences along the sequence dimension.
+
+    Args:
+        y_true (np.ndarray): Ground-truth array. Shape can be either
+            ``(num_seq, seq_len)`` or ``(batch, num_seq, seq_len)``.
+        y_pred (np.ndarray): Predicted array with the same shape as
+            ``y_true``.
+        freq (str): Frequency string used to derive seasonality if needed.
+            Currently provided for compatibility; default is ``"h"``.
+
+    Returns:
+        (float): The mean absolute scaled error.
+    """
     context = np.asarray(context, dtype=float)
     y_true = np.asarray(y_true, dtype=float)
     y_pred = np.asarray(y_pred, dtype=float)
@@ -57,29 +89,78 @@ def _reduce_mase(mase_ws: np.ndarray, reduce: str):
 
 
 def MAPE(y_true: np.ndarray, y_pred: np.ndarray):
-    """Mean absolute percentage error"""
+    """Mean absolute percentage error.
+
+    Args:
+        y_true (np.ndarray): Ground-truth array.
+        y_pred (np.ndarray): Predicted array with the same shape as ``y_true``.
+
+    Returns:
+        (float): Mean absolute percentage error. A small epsilon is added to
+            the denominator to avoid division by zero.
+    """
     return np.mean(np.abs(y_true - y_pred) / (y_true + 1e-5))
 
 
 def RMSE(y_true: np.ndarray, y_pred: np.ndarray):
-    """Root mean squared error"""
+    """Root mean squared error.
+
+    Args:
+        y_true (np.ndarray): Ground-truth array.
+        y_pred (np.ndarray): Predicted array with the same shape as ``y_true``.
+
+    Returns:
+        (float): Root mean squared error.
+    """
     return np.sqrt(MSE(y_true, y_pred))
 
 
 def NRMSE(y_true: np.ndarray, y_pred: np.ndarray):
-    """Normalized root mean squared error"""
+    """Normalized root mean squared error.
+
+    Normalizes RMSE by the range of the true values.
+
+    Args:
+        y_true (np.ndarray): Ground-truth array.
+        y_pred (np.ndarray): Predicted array with the same shape as ``y_true``.
+
+    Returns:
+        (float): Normalized RMSE.
+    """
     return RMSE(y_true, y_pred) / (np.max(y_true) - np.min(y_true) + 1e-5)
 
 
 def SMAPE(y_true: np.ndarray, y_pred: np.ndarray):
-    """Symmetric mean absolute percentage error"""
+    """Symmetric mean absolute percentage error.
+
+    Args:
+        y_true (np.ndarray): Ground-truth array.
+        y_pred (np.ndarray): Predicted array with the same shape as ``y_true``.
+
+    Returns:
+        (float): SMAPE value.
+    """
     return np.mean(
         2.0 * np.abs(y_true - y_pred) / (np.abs(y_true) + np.abs(y_pred) + 1e-9)
     )
 
 
 def MSIS(y_true: np.ndarray, y_pred: np.ndarray, alpha: float = 0.05):
-    """Mean scaled interval score"""
+    """Mean scaled interval score (MSIS).
+
+    Computes a simple interval scoring metric using empirical percentiles of
+    the ground-truth data. This is a lightweight approximation useful for
+    quick evaluation.
+
+    Args:
+        y_true (np.ndarray): Ground-truth array.
+        y_pred (np.ndarray): Predicted values or interval endpoints.
+        alpha (float): Significance level for the central prediction interval
+            (default ``0.05`` corresponds to a 95% interval).
+
+    Returns:
+        (float): MSIS score.
+    """
     q1 = np.percentile(y_true, 100 * alpha / 2)
     q2 = np.percentile(y_true, 100 * (1 - alpha / 2))
     denominator = q2 - q1
@@ -90,16 +171,33 @@ def MSIS(y_true: np.ndarray, y_pred: np.ndarray, alpha: float = 0.05):
 
 
 def ND(y_true: np.ndarray, y_pred: np.ndarray):
-    """Normalized deviation"""
+    """Normalized deviation.
+
+    Args:
+        y_true (np.ndarray): Ground-truth array.
+        y_pred (np.ndarray): Predicted array with the same shape as ``y_true``.
+
+    Returns:
+        (float): Normalized deviation.
+    """
     return np.mean(np.abs(y_true - y_pred)) / (np.mean(y_true) + 1e-5)
 
 
 def MWSQ(y_true: np.ndarray, y_pred: np.ndarray, quantiles: np.ndarray):
-    """
-    Mean weighted squared quantile loss
-    y_true: (num_seq, n_var, seq_len)
-    y_pred: (q, num_seq, n_var, seq_len)
-    quantiles: (q, )
+    """Mean weighted squared quantile loss.
+
+    This function computes a squared pinball loss across quantile forecasts.
+
+    Args:
+        y_true (np.ndarray): Ground-truth array with shape
+            ``(num_seq, n_var, seq_len)``.
+        y_pred (np.ndarray): Predicted quantiles with shape
+            ``(q, num_seq, n_var, seq_len)`` where ``q`` is the number of
+            quantiles.
+        quantiles (np.ndarray): Array of quantile levels with shape ``(q,)``.
+
+    Returns:
+        (float): Mean squared pinball loss across quantiles and sequences.
     """
 
     y_true = np.expand_dims(y_true, axis=0)  # (1, num_seq, n_var, seq_len)
@@ -107,17 +205,26 @@ def MWSQ(y_true: np.ndarray, y_pred: np.ndarray, quantiles: np.ndarray):
     quantiles = np.expand_dims(
         np.expand_dims(np.expand_dims(quantiles, axis=-1), axis=-1), axis=-1
     )  # (q, 1, 1, 1)
-    pinball = np.maximum(quantiles * diff, (quantiles - 1) * diff)  # (num_seq, n_var, seq_len, q)
-    mwsq = np.mean(pinball ** 2)  # (num_seq, n_var, seq_len)
+    pinball = np.maximum(quantiles * diff, (quantiles - 1) * diff)
+    mwsq = np.mean(pinball ** 2)
     return mwsq
 
 
 def CRPS(y_true: np.ndarray, y_pred: np.ndarray, quantiles: np.ndarray):
-    """
-    Continuous ranked probability score
-    y_true: (num_seq, n_var, seq_len)
-    y_pred: (q, num_seq, n_var, seq_len)
-    quantiles: (q, )
+    """Continuous Ranked Probability Score (CRPS) using discrete quantiles.
+
+    This implementation approximates CRPS by averaging the (non-squared)
+    pinball loss across quantile levels.
+
+    Args:
+        y_true (np.ndarray): Ground-truth array with shape
+            ``(num_seq, n_var, seq_len)``.
+        y_pred (np.ndarray): Predicted quantiles with shape
+            ``(q, num_seq, n_var, seq_len)``.
+        quantiles (np.ndarray): Array of quantile levels with shape ``(q,)``.
+
+    Returns:
+        (float): Approximated CRPS (mean pinball loss over quantiles).
     """
     y_true = np.expand_dims(y_true, axis=0)  # (1, num_seq, n_var, seq_len)
     diff = y_true - y_pred  # (q, num_seq, n_var, seq_len)

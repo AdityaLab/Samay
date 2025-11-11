@@ -30,12 +30,21 @@ from .utils import get_multivariate_data
 
 
 def freq_mapping(freq: str)-> str:
-    if freq == 'ME':
-        return 'M'
-    elif freq.split('-')[0] == 'YE':
-        return 'Y-' + freq.split('-')[1]
-    elif freq.split('-')[0] == 'QE':
-        return 'Q-' + freq.split('-')[1]
+    """Normalize frequency codes used across datasets.
+
+    Args:
+        freq (str): Frequency code (examples: 'ME', 'YE-XXXX', 'QE-XXXX',
+            or standard codes like 'H', 'D', 'M').
+
+    Returns:
+        str: Mapped frequency string suitable for downstream code paths.
+    """
+    if freq == "ME":
+        return "M"
+    elif freq.split("-")[0] == "YE":
+        return "Y-" + freq.split("-")[1]
+    elif freq.split("-")[0] == "QE":
+        return "Q-" + freq.split("-")[1]
     else:
         return freq
 
@@ -43,20 +52,34 @@ def freq_mapping(freq: str)-> str:
 # function for specific dataset to download and preprocess data, returning path
 # BaseDataset class call the specific function decided by "name" argument
 class BaseDataset:
+    """Base dataset abstraction used by model-specific dataset classes.
+
+    Subclasses should implement ``preprocess`` and ``get_data_loader``.
+    """
+
     def __init__(
         self,
-        name=None,
-        freq=None,
-        datetime_col=None,
-        path=None,
-        batchsize=8,
-        mode="train",
+        name: str = None,
+        datetime_col: str = None,
+        path: str = None,
+        batchsize: int = 8,
+        mode: str = "train",
         **kwargs,
     ):
-        """
+        """Initialize common dataset fields.
+
         Args:
-            name: str, dataset name
-            target: np.ndarray, target data
+            name (str, optional): Name of the dataset. If provided, a
+                corresponding ``get_{name}_dataset`` function may be used to
+                populate data. Defaults to None.
+            datetime_col (str, optional): Name of the datetime column in
+                the source CSV. Defaults to None.
+            path (str, optional): Path to the dataset file. If omitted, the
+                loader function for ``name`` is called. Defaults to None.
+            batchsize (int): Batch size to be used by dataloaders. Defaults
+                to 8.
+            mode (str): Mode of dataset usage, e.g. ``'train'`` or ``'test'``.
+            **kwargs: Extra backend-specific options.
         """
         self.name = name
         self.freq = freq
@@ -69,7 +92,12 @@ class BaseDataset:
             data_func = globals()[f"get_{self.name}_dataset"]
             self.data_path = data_func()
 
-    def __len__(self):
+    def __len__(self) -> int:
+        """Return the number of items in the dataset.
+
+        Returns:
+            int: Number of samples in the dataset (len(self.data)).
+        """
         return len(self.data)
 
     def __getitem__(self, idx):
@@ -89,10 +117,10 @@ class BaseDataset:
 
 
 def get_tycho_dataset():
-    """
-    Download and preprocess Tycho dataset
+    """Download and return the path to the Tycho dataset.
+
     Returns:
-        data_path: str, path to the preprocessed data
+        str: Path to the local Tycho CSV file.
     """
     repo_id = "username/tycho"
     # download data
@@ -103,10 +131,10 @@ def get_tycho_dataset():
 
 
 def get_ett_dataset():
-    """
-    Download and preprocess ETTh dataset
+    """Download and return the path to the ETTh dataset.
+
     Returns:
-        data_path: str, path to the preprocessed data
+        str: Path to the local ETTh CSV file.
     """
     repo_id = "username/ett"
     # download data
@@ -117,10 +145,10 @@ def get_ett_dataset():
 
 
 def get_ecg5000_dataset():
-    """
-    Download and preprocess ECG5000 dataset
+    """Download and return the path to the ECG5000 dataset.
+
     Returns:
-        data_path: str, path to the preprocessed data
+        str: Path to the local ECG5000 CSV file.
     """
     repo_id = "username/ECG5000"
     # download data
@@ -131,10 +159,10 @@ def get_ecg5000_dataset():
 
 
 def get_tiltABP2_dataset():
-    """
-    Download and preprocess tiltABP2 dataset
+    """Download and return the path to the tiltABP2 dataset.
+
     Returns:
-        data_path: str, path to the preprocessed data
+        str: Path to the local tiltABP2 CSV file.
     """
     repo_id = "username/tiltABP2"
     # download data
@@ -145,29 +173,38 @@ def get_tiltABP2_dataset():
 
 
 class TimesfmDataset(BaseDataset):
-    """
-    Dataset class for TimesFM model
-    Data Format:
-    Dict with keys:
-    input_ts: np.ndarray, historical time series data
-    actual_ts: np.ndarray, actual time series data
-    """
-
     def __init__(
         self,
-        name=None,
-        datetime_col="ds",
-        path=None,
-        batchsize=4,
-        mode="train",
-        boundaries=(0, 0, 0),
-        context_len=128,
-        horizon_len=32,
-        freq="h",
-        normalize=False,
-        stride=10,
+        name: str = None,
+        datetime_col: str = "ds",
+        path: str = None,
+        batchsize: int = 4,
+        mode: str = "train",
+        boundaries: tuple = (0, 0, 0),
+        context_len: int = 128,
+        horizon_len: int = 32,
+        freq: str = "h",
+        normalize: bool = False,
+        stride: int = 10,
         **kwargs,
     ):
+        """Initialize a TimesFM-compatible dataset.
+
+        Args:
+            name (str, optional): Dataset name used to locate data. Defaults to None.
+            datetime_col (str): Datetime column name in the CSV. Defaults to "ds".
+            path (str, optional): Path to CSV file. If None, loader from
+                ``BaseDataset`` will be used. Defaults to None.
+            batchsize (int): Batch size for dataloaders. Defaults to 4.
+            mode (str): Mode of use: "train" or "test". Defaults to "train".
+            boundaries (tuple): Train/val/test split boundaries. Defaults to (0,0,0).
+            context_len (int): Historical context length. Defaults to 128.
+            horizon_len (int): Forecast horizon length. Defaults to 32.
+            freq (str): Data frequency code. Defaults to "h".
+            normalize (bool): Whether to normalize input features. Defaults to False.
+            stride (int): Stride used when creating windows from the timeseries.
+            **kwargs: Extra backend-specific options.
+        """
         super().__init__(
             name=name,
             datetime_col=datetime_col,
@@ -223,28 +260,70 @@ class TimesfmDataset(BaseDataset):
         self.dataset = tfset
 
     def get_data_loader(self):
+        """
+        Get a DataLoader for the dataset.
+
+        Returns:
+            (DataLoader): DataLoader for the dataset.
+        """
         if self.mode == "train":
             return DataLoader(self.dataset, batch_size=self.batchsize, shuffle=True)
         else:
             return DataLoader(self.dataset, shuffle=False)
 
-    def preprocess_train_batch(self, data):
+    def preprocess_train_batch(self, data: tuple):
+        """
+        Preprocess a training batch.
+
+        Args:
+            data (tuple): Input data tuple.
+
+        Returns:
+            (dict): Preprocessed data dictionary.
+        """
         past_ts = data[0].reshape(data[0].shape[0] * data[0].shape[1], -1)
         actual_ts = data[3].reshape(data[3].shape[0] * data[3].shape[1], -1)
         return {"input_ts": past_ts, "actual_ts": actual_ts}
 
-    def preprocess_eval_batch(self, data):
+    def preprocess_eval_batch(self, data: tuple):
+        """
+        Preprocess an evaluation batch.
+
+        Args:
+            data (tuple): Input data tuple.
+
+        Returns:
+            (dict): Preprocessed data dictionary.
+        """
         past_ts = data[0]
         actual_ts = data[3]
         return {"input_ts": past_ts, "actual_ts": actual_ts}
 
-    def preprocess(self, data):
+    def preprocess(self, data: tuple):
+        """
+        Preprocess the input data.
+
+        Args:
+            data (tuple): Input data tuple.
+
+        Returns:
+            (dict): Preprocessed data dictionary.
+        """
         if self.mode == "train":
             return self.preprocess_train_batch(data)
         else:
             return self.preprocess_eval_batch(data)
-        
-    def _denormalize_data(self, data):
+
+    def _denormalize_data(self, data: np.ndarray):
+        """
+        Denormalize the input data.
+
+        Args:
+            data (np.ndarray): Input data array.
+
+        Returns:
+            (np.ndarray): Denormalized data array.
+        """
         if self.normalize:
             data = data[:, : self.num_ts, :]
             data_flatten = np.transpose(data, (0, 2, 1)).reshape(-1, self.num_ts)
@@ -256,29 +335,38 @@ class TimesfmDataset(BaseDataset):
 
 
 class ChronosDataset(BaseDataset):
-    """
-    Dataset class for Chronos model
-    Data Format:
-    Dict with keys:
-    input_ts: np.ndarray, historical time series data
-    actual_ts: np.ndarray, actual time series data
-    """
-
     def __init__(
         self,
-        name=None,
-        datetime_col="ds",
-        path=None,
-        boundaries=[0, 0, 0],
-        batch_size=16,
-        mode=None,
-        stride=10,
-        tokenizer_class="MeanScaleUniformBins",
-        drop_prob=0.2,
-        min_past=64,
-        np_dtype=np.float32,
-        config=None,
+        name: str = None,
+        datetime_col: str = "ds",
+        path: str = None,
+        boundaries: list = [0, 0, 0],
+        batch_size: int = 16,
+        mode: str = None,
+        stride: int = 10,
+        tokenizer_class: str = "MeanScaleUniformBins",
+        drop_prob: float = 0.2,
+        min_past: int = 64,
+        np_dtype: np.dtype = np.float32,
+        config: ChronosConfig=None,
     ):
+        """Initialize a Chronos dataset wrapper.
+
+        Args:
+            name (str, optional): Dataset name. Defaults to None.
+            datetime_col (str): Datetime column name. Defaults to "ds".
+            path (str, optional): Path to CSV file. Defaults to None.
+            boundaries (list): Train/val/test split boundaries. Defaults to [0,0,0].
+            batch_size (int): Batch size for dataloaders. Defaults to 16.
+            mode (str, optional): 'train' or 'test'. Defaults to None.
+            stride (int): Stride for windowing. Defaults to 10.
+            tokenizer_class (str): Tokenizer class name used by Chronos. Defaults to
+                "MeanScaleUniformBins".
+            drop_prob (float): Dropout probability for seq2seq creation. Defaults to 0.2.
+            min_past (int): Minimum past context length. Defaults to 64.
+            np_dtype (dtype): Numpy dtype for arrays. Defaults to np.float32.
+            config (dict, optional): Chronos configuration dict. Defaults to None.
+        """
         super().__init__(
             name=name,
             datetime_col=datetime_col,
@@ -336,6 +424,7 @@ class ChronosDataset(BaseDataset):
         ) // self.stride + 1
 
     def _read_data(self):
+        """Read and preprocess the dataset from CSV."""
         self.df = pd.read_csv(self.data_path)
 
         if self.boundaries[0] == 0:
@@ -373,6 +462,7 @@ class ChronosDataset(BaseDataset):
         self.pad_sequence()
 
     def pad_sequence(self):
+        """Pad the time series data if it's shorter than required length."""
         self.pad_len = self.required_len - self.length_timeseries
         # Pad data with zeros from the left
         if self.pad:
@@ -388,7 +478,16 @@ class ChronosDataset(BaseDataset):
             )
         self.length_timeseries = self.data.shape[0]
 
-    def __getitem__(self, index):
+    def __getitem__(self, index: int):
+        """
+        Get a data sample by index.
+
+        Args:
+            index (int): Index of the data sample.
+        Returns:
+            (dict): Data sample containing input and forecast sequences, along with
+                input IDs, attention mask, and labels.
+        """
         chunk_index = index // self.one_chunk_num
         data_chunk = (
             self.data[
@@ -432,24 +531,27 @@ class ChronosDataset(BaseDataset):
             "labels": labels.squeeze(0),
         }
 
-    def __len__(self):
+    def __len__(self) -> int:
+        """Get the total number of data samples.
+
+        Returns:
+            (int): Number of samples available for iteration.
+        """
         if self.length_timeseries < self.context_len + self.horizon_len:
             return 1 * self.num_chunks
         return self.num_chunks * self.one_chunk_num
 
     def get_data_loader(self):
+        """
+        Get a data loader for the dataset.
+        """
         if self.mode == "train":
-            # dtl = DataLoader(self, batch_size=self.batchsize, shuffle=True)
-            # for i, data in enumerate(dtl):
-            #     timeseries, input_mask, forecast = data
-            #     print(self.data.shape)
-            #     print(timeseries.shape, input_mask.shape, forecast.shape)
-            #     break
             return DataLoader(self, shuffle=True, batch_size=self.batchsize)
         else:
             return DataLoader(self, shuffle=False, batch_size=self.batchsize)
 
     def preprocess(self):
+        """Preprocess the data by applying dropout if in training mode."""
         if self.mode == "train" and self.drop_prob > 0:
             target = self.data.copy()
             drop_p = np.random.uniform(low=0.0, high=self.drop_prob)
@@ -461,26 +563,31 @@ class ChronosDataset(BaseDataset):
 
 
 class ChronosBoltDataset(BaseDataset):
-    """
-    Dataset class for ChronosBolt model
-    Data Format:
-    Dict with keys:
-    input_ts: np.ndarray, historical time series data
-    actual_ts: np.ndarray, actual time series data
-    """
-
     def __init__(
         self,
-        name=None,
-        datetime_col="ds",
-        path=None,
-        boundaries=[0, 0, 0],
-        batch_size=16,
-        mode=None,
-        stride=10,
-        context_len=512,
-        horizon_len=64,
+        name: str = None,
+        datetime_col: str = "ds",
+        path: str = None,
+        boundaries: list = [0, 0, 0],
+        batch_size: int = 16,
+        mode: str = None,
+        stride: int = 10,
+        context_len: int = 512,
+        horizon_len: int = 64,
     ):
+        """Initialize a ChronosBolt dataset wrapper.
+
+        Args:
+            name (str, optional): Dataset name. Defaults to None.
+            datetime_col (str): Datetime column name. Defaults to "ds".
+            path (str, optional): Path to CSV file. Defaults to None.
+            boundaries (list): Train/val/test split boundaries. Defaults to [0,0,0].
+            batch_size (int): Batch size for dataloaders. Defaults to 16.
+            mode (str, optional): 'train' or 'test'. Defaults to None.
+            stride (int): Stride for windowing. Defaults to 10.
+            context_len (int): Historical context length. Defaults to 512.
+            horizon_len (int): Forecast horizon length. Defaults to 64.
+        """
         super().__init__(
             name=name,
             datetime_col=datetime_col,
@@ -506,6 +613,7 @@ class ChronosBoltDataset(BaseDataset):
         ) // self.stride + 1
 
     def _read_data(self):
+        """Read and preprocess the dataset from CSV."""
         self.df = pd.read_csv(self.data_path)
 
         if self.boundaries[0] == 0:
@@ -543,6 +651,7 @@ class ChronosBoltDataset(BaseDataset):
         self.pad_sequence()
 
     def pad_sequence(self):
+        """Pad the time series data if it's shorter than required length."""
         self.pad_len = self.required_len - self.length_timeseries
         # Pad data with zeros from the left
         if self.pad:
@@ -558,7 +667,16 @@ class ChronosBoltDataset(BaseDataset):
             )
         self.length_timeseries = self.data.shape[0]
 
-    def __getitem__(self, index):
+    def __getitem__(self, index: int):
+        """
+        Get a data sample by index.
+        
+        Args:
+            index (int): Index of the data sample.
+        Returns:
+            input_seq (np.ndarray): Input sequence of shape (num_channels, context_len).
+            forecast_seq (np.ndarray): Forecast sequence of shape (num_channels, horizon_len).
+        """
         chunk_index = index // self.one_chunk_num
         data_chunk = (
             self.data[
@@ -582,47 +700,60 @@ class ChronosBoltDataset(BaseDataset):
         forecast_seq = data_chunk[seq_end:pred_end, :].T
         return input_seq, forecast_seq
 
-    def __len__(self):
+    def __len__(self) -> int:
+        """Get the total number of data samples.
+
+        Returns:
+            (int): Number of samples available for iteration.
+        """
         if self.length_timeseries < self.context_len + self.horizon_len:
             return 1 * self.num_chunks
         return self.num_chunks * self.one_chunk_num
 
     def get_data_loader(self):
+        """
+        Get a DataLoader for the dataset.
+
+        Returns:
+            (DataLoader): DataLoader for the dataset.
+        """
         if self.mode == "train":
-            # dtl = DataLoader(self, batch_size=self.batchsize, shuffle=True)
-            # for i, data in enumerate(dtl):
-            #     timeseries, input_mask, forecast = data
-            #     print(self.data.shape)
-            #     print(timeseries.shape, input_mask.shape, forecast.shape)
-            #     break
             return DataLoader(self, shuffle=True, batch_size=self.batchsize)
         else:
             return DataLoader(self, shuffle=False, batch_size=self.batchsize)
 
 
 class MomentDataset(BaseDataset):
-    """
-    Dataset class for Moment model
-    Data Format:
-    Dict with keys:
-    input_ts: np.ndarray, historical time series data
-    actual_ts: np.ndarray, actual time series data
-    """
-
     def __init__(
         self,
-        name=None,
-        datetime_col=None,
-        path=None,
-        batchsize=64,
-        mode="train",
-        boundaries=[0, 0, 0],
-        horizon_len=0,
-        task_name="forecasting",
-        label_col=None,
-        stride=10,
+        name: str = None,
+        datetime_col: str = None,
+        path: str = None,
+        batchsize: int = 64,
+        mode: str = "train",
+        boundaries: list = [0, 0, 0],
+        horizon_len: int = 0,
+        task_name: str = "forecasting",
+        label_col: str = None,
+        stride: int = 10,
         **kwargs,
     ):
+        """Initialize a MOMENT dataset wrapper.
+
+        Args:
+            name (str, optional): Name of the dataset. Defaults to None.
+            datetime_col (str, optional): Name of the datetime column. Defaults to None.
+            path (str, optional): Path to CSV file. Defaults to None.
+            batchsize (int): Batch size for DataLoader. Defaults to 64.
+            mode (str): Mode of operation, e.g. 'train' or 'test'. Defaults to 'train'.
+            boundaries (list): Train/val/test split boundaries. Defaults to [0,0,0].
+            horizon_len (int): Forecast horizon length. Defaults to 0.
+            task_name (str): Task type: 'forecasting', 'imputation', 'detection',
+                or 'classification'. Defaults to 'forecasting'.
+            label_col (str, optional): Column name for labels in classification.
+            stride (int): Stride for windowing. Defaults to 10.
+            **kwargs: Extra options forwarded to DataLoader.
+        """
         super().__init__(
             name=name,
             datetime_col=datetime_col,
@@ -650,6 +781,7 @@ class MomentDataset(BaseDataset):
         ) // self.stride + 1
 
     def _read_data(self):
+        """Read and preprocess the dataset from CSV."""
         self.scaler = StandardScaler()
         self.df = pd.read_csv(self.data_path)
 
@@ -734,6 +866,7 @@ class MomentDataset(BaseDataset):
         self.pad_sequence()
 
     def pad_sequence(self):
+        """Pad the time series data if it's shorter than required length."""
         self.pad_len = self.required_len - self.length_timeseries
         # Pad data with zeros from the left
         if self.pad:
@@ -753,6 +886,16 @@ class MomentDataset(BaseDataset):
         self.length_timeseries = self.data.shape[0]
 
     def __getitem__(self, index):
+        """
+        Get a data sample by index.
+
+        Args:
+            index (int): Index of the data sample.
+
+        Returns:
+            Depending on the task, returns input sequences, masks, forecasts,
+            labels, etc.
+        """
         chunk_index = index // self.one_chunk_num
         data_chunk = (
             self.data[
@@ -795,7 +938,12 @@ class MomentDataset(BaseDataset):
             labels = self.labels[index,].astype(int)
             return input_seq, input_mask, labels
 
-    def __len__(self):
+    def __len__(self) -> int:
+        """Get the total number of data samples.
+
+        Returns:
+            (int): Number of samples available for iteration.
+        """
         if self.task_name == "classification":
             return self.num_series
         if self.length_timeseries <= self.seq_len + self.forecast_horizon:
@@ -803,18 +951,27 @@ class MomentDataset(BaseDataset):
         return self.num_chunks * self.one_chunk_num
 
     def get_data_loader(self):
+        """
+        Get a DataLoader for the dataset.
+
+        Returns:
+            (DataLoader): DataLoader for the dataset.
+        """
         if self.mode == "train":
-            # dtl = DataLoader(self, batch_size=self.batchsize, shuffle=True)
-            # for i, data in enumerate(dtl):
-            #     timeseries, input_mask, forecast = data
-            #     print(self.data.shape)
-            #     print(timeseries.shape, input_mask.shape, forecast.shape)
-            #     break
             return DataLoader(self, batch_size=self.batchsize, shuffle=True)
         else:
             return DataLoader(self, batch_size=self.batchsize, shuffle=False)
 
     def _transform_labels(self, labels: np.ndarray):
+        """
+        Transform labels to a contiguous range starting from 0.
+
+        Args:
+            labels (np.ndarray): Original labels.
+
+        Returns:
+            labels (np.ndarray): Transformed labels.
+        """
         unq_labels = np.unique(labels)  # Move the labels to {0, ..., L-1}
         transform = {}
         for i, l in enumerate(unq_labels):
@@ -824,11 +981,21 @@ class MomentDataset(BaseDataset):
 
         return labels
 
-    def _denormalize_data(self, data):
+    def _denormalize_data(self, data: np.ndarray):
+        """
+        Denormalize the input data.
+
+        Args:
+            data (np.ndarray): Input data array.
+
+        Returns:
+            data (np.ndarray): Denormalized data array.
+        """
         # rebuild the original shape
         # original shape: (window_per_chunk, n_channels, seq_len)
         # data shape: (chunk_num*window_per_chunk, max_col_num, seq_len)
         # chunk*num*max_col_num >= n_channels, if not equal, the data is padded with zeros
+
         num_chunks = (self.n_channels + self.max_col_num - 1) // self.max_col_num
         if num_chunks > 1:
             new_data = []
@@ -854,26 +1021,32 @@ class MomentDataset(BaseDataset):
 
 
 class TinyTimeMixerDataset(BaseDataset):
-    """
-    Dataset class for ChronosBolt model
-    Data Format:
-    Dict with keys:
-    input_ts: np.ndarray, historical time series data
-    actual_ts: np.ndarray, actual time series data
-    """
 
     def __init__(
         self,
-        name=None,
-        datetime_col="ds",
-        path=None,
-        boundaries=[0, 0, 0],
-        batch_size=128,
-        mode=None,
-        stride=10,
-        context_len=512,
-        horizon_len=64,
+        name: str = None,
+        datetime_col: str = "ds",
+        path: str = None,
+        boundaries: list = [0, 0, 0],
+        batch_size: int = 128,
+        mode: str = None,
+        stride: int = 10,
+        context_len: int = 512,
+        horizon_len: int = 64,
     ):
+        """Initialize a TinyTimeMixer dataset.
+
+        Args:
+            name (str, optional): Dataset name. Defaults to None.
+            datetime_col (str): Column containing datetimes. Defaults to 'date'.
+            path (str, optional): Path to CSV file. Defaults to None.
+            boundaries (tuple): Train/val/test split boundaries. Defaults to (0,0,0).
+            batch_size (int): Batch size. Defaults to 128.
+            mode (str): Mode of use: 'train','val','test'. Defaults to 'train'.
+            stride (int): Stride for windowing. Defaults to 10.
+            context_len (int): Historical context length. Defaults to 512.
+            horizon_len (int): Forecast horizon length. Defaults to 64.
+        """
         super().__init__(
             name=name,
             datetime_col=datetime_col,
@@ -899,6 +1072,7 @@ class TinyTimeMixerDataset(BaseDataset):
         ) // self.stride + 1
 
     def _read_data(self):
+        """Read and preprocess the dataset from CSV."""
         self.df = pd.read_csv(self.data_path)
 
         if self.boundaries[0] == 0:
@@ -936,6 +1110,7 @@ class TinyTimeMixerDataset(BaseDataset):
         self.pad_sequence()
 
     def pad_sequence(self):
+        """Pad the time series data if it's shorter than required length."""
         self.pad_len = self.required_len - self.length_timeseries
         # Pad data with zeros from the left
         if self.pad:
@@ -951,7 +1126,17 @@ class TinyTimeMixerDataset(BaseDataset):
             )
         self.length_timeseries = self.data.shape[0]
 
-    def __getitem__(self, index):
+    def __getitem__(self, index: int):
+        """
+        Get a data chunk for the given index.
+
+        Args:
+            index (int): Index of the data chunk.
+
+        Returns:
+            input_seq (np.ndarray): Input sequence of shape (num_channels, context_len).
+            forecast_seq (np.ndarray): Forecast sequence of shape (num_channels, horizon_len).
+        """
         chunk_index = index // self.one_chunk_num
         data_chunk = (
             self.data[
@@ -975,12 +1160,23 @@ class TinyTimeMixerDataset(BaseDataset):
         forecast_seq = data_chunk[seq_end:pred_end, :].T
         return input_seq, forecast_seq
 
-    def __len__(self):
+    def __len__(self) -> int:
+        """Get the total number of data samples.
+
+        Returns:
+            (int): Number of samples available for iteration.
+        """
         if self.length_timeseries < self.context_len + self.horizon_len:
             return 1 * self.num_chunks
         return self.num_chunks * self.one_chunk_num
 
     def get_data_loader(self):
+        """
+        Get a data loader for the dataset.
+
+        Returns:
+            (DataLoader): DataLoader for the dataset.
+        """
         if self.mode == "train":
             return DataLoader(self, shuffle=True, batch_size=self.batchsize)
         else:
@@ -989,27 +1185,19 @@ class TinyTimeMixerDataset(BaseDataset):
 
 
 class LPTMDataset(BaseDataset):
-    """
-    Dataset class for Moment model
-    Data Format:
-    Dict with keys:
-    input_ts: np.ndarray, historical time series data
-    actual_ts: np.ndarray, actual time series data
-    """
-
     def __init__(
         self,
-        name=None,
-        datetime_col=None,
-        path=None,
-        batchsize=16,
-        mode="train",
-        boundaries=[0, 0, 0],
-        horizon=0,
-        task_name="forecasting",
-        label_col=None,
-        stride=10,
-        seq_len=512,
+        name: str = None,
+        datetime_col: str = None,
+        path: str = None,
+        batchsize: int = 16,
+        mode: str = "train",
+        boundaries: list = [0, 0, 0],
+        horizon: int = 0,
+        task_name: str = "forecasting",
+        label_col: str = None,
+        stride: int = 10,
+        seq_len: int = 512,
         **kwargs,
     ):
         super().__init__(
@@ -1036,6 +1224,7 @@ class LPTMDataset(BaseDataset):
         ) // self.stride + 1
 
     def _read_data(self):
+        """Read and preprocess the dataset from CSV."""
         self.scaler = StandardScaler()
         self.df = pd.read_csv(self.data_path)
 
@@ -1134,6 +1323,7 @@ class LPTMDataset(BaseDataset):
         self.num_chunks = (self.n_channels + self.max_col_num - 1) // self.max_col_num
 
     def pad_sequence(self):
+        """Pad the time series data if it's shorter than required length."""
         self.pad_len = self.required_len - self.length_timeseries
         # Pad data with zeros from the left
         self.data = np.pad(self.data, ((self.pad_len, 0), (0, 0)))
@@ -1145,7 +1335,17 @@ class LPTMDataset(BaseDataset):
             )
         self.length_timeseries = self.data.shape[0]
 
-    def __getitem__(self, index):
+    def __getitem__(self, index: int):
+        """
+        Get a data sample by index.
+
+        Args:
+            index (int): Index of the data sample.
+
+        Returns:
+            Depending on the task, returns input sequences, masks, forecasts,
+            labels, etc.
+        """
         chunk_index = index // self.one_chunk_num
         data_chunk = (
             self.data[
@@ -1198,7 +1398,12 @@ class LPTMDataset(BaseDataset):
             labels = self.labels[index,].astype(int)
             return input_seq, input_mask, labels
 
-    def __len__(self):
+    def __len__(self) -> int:
+        """Get the total number of data samples.
+
+        Returns:
+            (int): Number of samples available for iteration.
+        """
         if self.task_name == "classification":
             return self.num_series
         if self.length_timeseries < self.seq_len + self.forecast_horizon:
@@ -1210,12 +1415,22 @@ class LPTMDataset(BaseDataset):
         return self.num_chunks * self.one_chunk_num
 
     def get_data_loader(self):
+        """Get a data loader for the dataset."""
         if self.mode == "train":
             return DataLoader(self, batch_size=self.batchsize, shuffle=True)
         else:
             return DataLoader(self, batch_size=self.batchsize, shuffle=False)
 
     def _transform_labels(self, labels: np.ndarray):
+        """
+        Transform the labels to a new space.
+
+        Args:
+            labels (np.ndarray): Original labels.
+
+        Returns:
+            (np.ndarray): Transformed labels.
+        """
         unq_labels = np.unique(labels)  # Move the labels to {0, ..., L-1}
         transform = {}
         for i, l in enumerate(unq_labels):
@@ -1225,7 +1440,16 @@ class LPTMDataset(BaseDataset):
 
         return labels
 
-    def _denormalize_data(self, data):
+    def _denormalize_data(self, data: np.ndarray):
+        """
+        Denormalize the input data.
+
+        Args:
+            data (np.ndarray): Input data array.
+
+        Returns:
+            data (np.ndarray): Denormalized data array.
+        """
         # rebuild the original shape
         # original shape: (window_per_chunk, n_channels, seq_len)
         # data shape: (chunk_num*window_per_chunk, max_col_num, seq_len)
@@ -1255,29 +1479,24 @@ class LPTMDataset(BaseDataset):
 
 
 class MoiraiDataset(BaseDataset):
-    """
-    Dataset class for Moirai model.
-    It ingests data in the form of a (num_variates x num_timesteps) matrix.
-    """
-
     def __init__(
         self,
-        name=None,
-        datetime_col="date",
-        path=None,
-        boundaries=(0, 0, 0),
-        context_len=128,
-        horizon_len=32,
-        patch_size=16,
-        batch_size=16,
-        freq=None,
-        start_date=None,
-        end_date=None,
-        operation="mean",
-        normalize=True,
-        mode="train",
-        htune=False,  # hyperparameter tuning
-        data_config=None,
+        name: str = None,
+        datetime_col: str = "date",
+        path: str = None,
+        boundaries: tuple = (0, 0, 0),
+        context_len: int = 128,
+        horizon_len: int = 32,
+        patch_size: int = 16,
+        batch_size: int = 16,
+        freq: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        operation: str = "mean",
+        normalize: bool = True,
+        mode: str = "train",
+        htune: bool = False,  # hyperparameter tuning
+        data_config: dict = None,
         **kwargs,
     ):
         super().__init__(
@@ -1426,7 +1645,7 @@ class MoiraiDataset(BaseDataset):
         """Generates training and validation data based on the boundaries
 
         Returns:
-            np.ndarray: Training and Validation data
+            (np.ndarray): Training and Validation data
         """
         data = []
         # Each column is a separate time series
@@ -1447,7 +1666,7 @@ class MoiraiDataset(BaseDataset):
         """Generates test data based on the boundaries
 
         Returns:
-            np.ndarray: Test data
+            (np.ndarray): Test data
         """
         data = []
         num_windows = (
@@ -1723,7 +1942,7 @@ class MoiraiDataset(BaseDataset):
         """Returns the iterator for data batches for the dataset based on the mode
 
         Returns:
-            torch.utils.data.DataLoader: Depends on the mode
+            (DataLoader): Depends on the mode
         """
         if self.mode == "train":
             self.prep_train_test_data(mode="train")
@@ -1753,7 +1972,12 @@ class MoiraiDataset(BaseDataset):
     def __getitem__(self, idx):
         return super().__getitem__(idx)
 
-    def __len__(self):
+    def __len__(self) -> int:
+        """Return the number of items in the dataset.
+
+        Returns:
+            (int): Number of samples in the dataset (len(self.data)).
+        """
         return len(self.data)
     
     def _denormalize_data(self, data: np.ndarray):
@@ -1763,7 +1987,7 @@ class MoiraiDataset(BaseDataset):
             data (np.ndarray): Normalized data
 
         Returns:
-            np.ndarray: Denormalized data
+            (np.ndarray): Denormalized data
         """
         data = np.asarray(data)
         if self.normalize:
@@ -1887,26 +2111,18 @@ class Moirai_old_Dataset(BaseDataset):
 
 
 class TimeMoEDataset(BaseDataset):
-    """
-    Dataset class for TimeMoE model
-    Data Format:
-    Dict with keys:
-    input_ts: np.ndarray, historical time series data
-    actual_ts: np.ndarray, actual time series data
-    """
-
     def __init__(
         self,
-        name=None,
-        datetime_col=None,
-        path=None,
-        batch_size=16,
-        mode="train",
-        boundaries=[0, 0, 0],
-        task_name="evaluation",
-        stride=10,
-        context_len=512,
-        horizon_len=96,
+        name: str = None,
+        datetime_col: str = None,
+        path: str = None,
+        batch_size: int = 16,
+        mode: str = "train",
+        boundaries: list = [0, 0, 0],
+        task_name: str = "evaluation",
+        stride: int = 10,
+        context_len: int = 512,
+        horizon_len: int = 96,
         **kwargs,
     ):
         super().__init__(
@@ -1927,6 +2143,7 @@ class TimeMoEDataset(BaseDataset):
         self._read_data()
 
     def _read_data(self):
+        """Read data from the CSV file and preprocess it."""
         self.df = pd.read_csv(self.data_path)
         self.horizon_len = min(self.horizon_len, int(0.3*len(self.df)+1))
 
@@ -1971,6 +2188,7 @@ class TimeMoEDataset(BaseDataset):
         self.pad_sequence()
 
     def pad_sequence(self):
+        """Pad the time series data if its length is less than the required length."""
         self.pad_len = self.required_len - self.length_timeseries
         # Pad data with zeros from the left
         if self.pad:
@@ -1982,7 +2200,8 @@ class TimeMoEDataset(BaseDataset):
             // self.stride
         )
 
-    def __getitem__(self, index):
+    def __getitem__(self, index: int):
+        """Get a data sample for the given index."""
         channel_idx = index // self.num_windows
         seq_start = self.stride * (index % self.num_windows)
         seq_end = seq_start + self.context_len
@@ -2014,12 +2233,23 @@ class TimeMoEDataset(BaseDataset):
             loss_mask = np.ones(input_seq.shape[0])
             return input_seq, forecast_seq, loss_mask
 
-    def __len__(self):
+    def __len__(self) -> int:
+        """Get the length of the dataset.
+
+        Returns:
+            (int): Number of samples available for iteration.
+        """
         if self.length_timeseries < self.context_len + self.horizon_len:
             return 1 * self.n_channels
         return self.n_channels * self.num_windows
 
     def get_data_loader(self):
+        """
+        Get a data loader for the dataset.
+
+        Returns:
+            (DataLoader): DataLoader object for the dataset.
+        """
         if self.mode == "train":
             return DataLoader(self, shuffle=True, batch_size=self.batchsize)
         else:
@@ -2027,6 +2257,14 @@ class TimeMoEDataset(BaseDataset):
         # shape: (batch_size, n_channels, seq_len)
 
     def _denormalize_data(self, data: np.ndarray):
+        """Denormalizes the data
+
+        Args:
+            data (np.ndarray): Normalized data
+
+        Returns:
+            (np.ndarray): Denormalized data
+        """
         # rebuild the original shape
         # original shape: (window_per_col, n_channels, seq_len)
         # data shape: (n_channels*window_per_col, 1, seq_len)
@@ -2037,27 +2275,19 @@ class TimeMoEDataset(BaseDataset):
 
 
 class TimesFM_2p5_Dataset(BaseDataset):
-    """
-    Dataset class for TimesFM 2.5 model
-    Data Format:
-    Dict with keys:
-    input_ts: np.ndarray, historical time series data
-    actual_ts: np.ndarray, actual time series data
-    """
-
     def __init__(
         self,
-        name=None,
-        datetime_col=None,
-        path=None,
-        batch_size=16,
-        mode="train",
-        boundaries=[0, 0, 0],
-        task_name="evaluation",
-        stride=10,
-        context_len=512,
-        horizon_len=96,
-        normalize=True,
+        name: str = None,
+        datetime_col: str = None,
+        path: str = None,
+        batch_size: int = 16,
+        mode: str = "train",
+        boundaries: list = [0, 0, 0],
+        task_name: str = "evaluation",
+        stride: int = 10,
+        context_len: int = 512,
+        horizon_len: int = 96,
+        normalize: bool = True,
         **kwargs,
     ):
         super().__init__(
@@ -2079,6 +2309,7 @@ class TimesFM_2p5_Dataset(BaseDataset):
         self._read_data()
 
     def _read_data(self):
+        """Read data from the CSV file and preprocess it."""
         self.df = pd.read_csv(self.data_path)
         self.horizon_len = min(self.horizon_len, int(0.3*len(self.df)+1))
 
@@ -2123,6 +2354,7 @@ class TimesFM_2p5_Dataset(BaseDataset):
         self.pad_sequence()
 
     def pad_sequence(self):
+        """Pad the time series data if its length is less than the required length."""
         self.pad_len = self.required_len - self.length_timeseries
         # Pad data with zeros from the left
         if self.pad:
@@ -2134,7 +2366,16 @@ class TimesFM_2p5_Dataset(BaseDataset):
             // self.stride
         )
 
-    def __getitem__(self, index):
+    def __getitem__(self, index: int):
+        """
+        Get a data sample for the given index.
+
+        Args:
+            index (int): Index of the data sample.
+
+        Returns:
+            (tuple): Input sequence and forecast sequence.
+        """
         channel_idx = index // self.num_windows
         seq_start = self.stride * (index % self.num_windows)
         seq_end = seq_start + self.context_len
@@ -2152,12 +2393,18 @@ class TimesFM_2p5_Dataset(BaseDataset):
         return input_seq, forecast_seq
 
 
-    def __len__(self):
+    def __len__(self) -> int:
+        """Get the length of the dataset.
+
+        Returns:
+            (int): Number of samples available for iteration.
+        """
         if self.length_timeseries < self.context_len + self.horizon_len:
             return 1 * self.n_channels
         return self.n_channels * self.num_windows
 
     def get_data_loader(self):
+        """Get a data loader for the dataset."""
         if self.mode == "train":
             return DataLoader(self, shuffle=True, batch_size=self.batchsize)
         else:
@@ -2165,6 +2412,13 @@ class TimesFM_2p5_Dataset(BaseDataset):
         # shape: (batch_size, n_channels, seq_len)
 
     def _denormalize_data(self, data: np.ndarray):
+        """Denormalizes the data.
+        Args:
+            data (np.ndarray): Normalized data to denormalize.
+
+        Returns:
+            (np.ndarray): Denormalized data.
+        """
         data = np.asarray(data)
         if self.normalize:
             data = data[:, : self.n_channels, :]
@@ -2177,27 +2431,19 @@ class TimesFM_2p5_Dataset(BaseDataset):
 
 
 class Chronos_2_Dataset(BaseDataset):
-    """
-    Dataset class for Chronos2 model
-    Data Format:
-    Dict with keys:
-    input_ts: np.ndarray, historical time series data
-    actual_ts: np.ndarray, actual time series data
-    """
-
     def __init__(
         self,
-        name=None,
-        datetime_col=None,
-        path=None,
-        batch_size=16,
-        mode="train",
-        boundaries=[0, 0, 0],
-        task_name="evaluation",
-        stride=10,
-        context_len=512,
-        horizon_len=96,
-        normalize=True,
+        name: str = None,
+        datetime_col: str = None,
+        path: str = None,
+        batch_size: int = 16,
+        mode: str = "train",
+        boundaries: list = [0, 0, 0],
+        task_name: str = "evaluation",
+        stride: int = 10,
+        context_len: int = 512,
+        horizon_len: int = 96,
+        normalize: bool = True,
         **kwargs,
     ):
         super().__init__(
@@ -2219,6 +2465,7 @@ class Chronos_2_Dataset(BaseDataset):
         self._read_data()
 
     def _read_data(self):
+        """Read data from the CSV file and preprocess it."""
         self.df = pd.read_csv(self.data_path)
         self.horizon_len = min(self.horizon_len, int(0.3*len(self.df)+1))
 
@@ -2251,6 +2498,7 @@ class Chronos_2_Dataset(BaseDataset):
         self.pad_sequence()
 
     def pad_sequence(self):
+        """Pad the time series data if its length is less than the required length."""
         self.pad_len = self.required_len - self.length_timeseries
         # Pad data with zeros from the left
         if self.pad:
@@ -2262,7 +2510,16 @@ class Chronos_2_Dataset(BaseDataset):
             // self.stride
         )
 
-    def __getitem__(self, index):
+    def __getitem__(self, index: int):
+        """
+        Get a data sample for the given index.
+        
+        Args:
+            index (int): Index of the data sample.
+
+        Returns:
+            (Tuple[np.ndarray, np.ndarray]): Input and forecast sequences.
+        """
         channel_idx = index // self.num_windows
         seq_start = self.stride * (index % self.num_windows)
         seq_end = seq_start + self.context_len
@@ -2279,12 +2536,23 @@ class Chronos_2_Dataset(BaseDataset):
         forecast_seq = self.data[seq_end:pred_end, channel_idx]
         return input_seq, forecast_seq
 
-    def __len__(self):
+    def __len__(self) -> int:
+        """Get the length of the dataset.
+
+        Returns:
+            (int): Number of samples available for iteration.
+        """
         if self.length_timeseries < self.context_len + self.horizon_len:
             return 1 * self.n_channels
         return self.n_channels * self.num_windows
 
     def get_data_loader(self):
+        """
+        Get a data loader for the dataset.
+
+        Returns:
+            (DataLoader): DataLoader object for the dataset.
+        """
         if self.mode == "train":
             return DataLoader(self, shuffle=True, batch_size=self.batchsize)
         else:
