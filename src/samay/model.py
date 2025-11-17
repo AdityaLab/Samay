@@ -3377,11 +3377,11 @@ class TimesFM_2p5_Model(Basemodel):
         self.model.compile(self.config)
         self.quantiles = self.model.model.config.quantiles
 
-    def evaluate(self, dataset: TimesFm_2p5_Dataset, metric_only: bool = False, **kwargs):
+    def evaluate(self, dataset: TimesFM_2p5_Dataset, metric_only: bool = False, **kwargs):
         """Evaluate the model on the given dataset.
 
         Args:
-            dataset (TimesFm_2p5_Dataset): Dataset containing the input data and relevant functions like dataloaders etc.
+            dataset (TimesFM_2p5_Dataset): Dataset containing the input data and relevant functions like dataloaders etc.
             metric_only (bool): If True, return only metrics. Defaults to False.
 
         Returns:
@@ -3484,11 +3484,11 @@ class TimesFM_2p5_Model(Basemodel):
                 histories,
             )
 
-    def plot(self, dataset: TimesFm_2p5_Dataset, **kwargs):
+    def plot(self, dataset: TimesFM_2p5_Dataset, **kwargs):
         """Plot the results of the model on the given dataset.
 
         Args:
-            dataset (TimesFm_2p5_Dataset): Dataset containing the input data and relevant functions like dataloaders etc.
+            dataset (TimesFM_2p5_Dataset): Dataset containing the input data and relevant functions like dataloaders etc.
         """
         _, trues, preds, history, q_preds = self.evaluate(dataset, metric_only=False)
         visualize(
@@ -3499,11 +3499,11 @@ class TimesFM_2p5_Model(Basemodel):
             quantiles=q_preds,
         )
 
-    def finetune(self, dataset: TimesFm_2p5_Dataset, **kwargs):
+    def finetune(self, dataset: TimesFM_2p5_Dataset, **kwargs):
         """Finetune the model on the given dataset.
 
         Args:
-            dataset (TimesFm_2p5_Dataset): Dataset containing the input data and relevant functions like dataloaders etc.
+            dataset (TimesFM_2p5_Dataset): Dataset containing the input data and relevant functions like dataloaders etc.
         """
         lr = 1e-4 if "lr" not in kwargs else kwargs["lr"]
         epoch = 5 if "epoch" not in kwargs else kwargs["epoch"]
