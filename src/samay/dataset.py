@@ -2236,6 +2236,9 @@ class Chronos_2_Dataset(BaseDataset):
         if self.boundaries[2] == 0:
             self.boundaries[2] = int(len(self.df) - 1)
 
+        if list(self.boundaries) == [-1, -1, -1]:
+            # use all data for training
+            self.boundaries = [0, 0, len(self.df) - 1]
 
         if self.mode == "train":
             self.data = self.df[slice(0, self.boundaries[0]), :]

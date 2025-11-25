@@ -11,8 +11,8 @@ src_path = os.path.abspath(os.path.join("src"))
 if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
-from samay.model import TimesfmModel, MomentModel, ChronosModel, ChronosBoltModel, TinyTimeMixerModel, MoiraiTSModel, LPTMModel, TimeMoEModel, TimesFM_2p5_Model
-from samay.dataset import TimesfmDataset, MomentDataset, ChronosDataset, ChronosBoltDataset, TinyTimeMixerDataset, MoiraiDataset, LPTMDataset, TimeMoEDataset, TimesFM_2p5_Dataset
+from samay.model import TimesfmModel, MomentModel, ChronosModel, ChronosBoltModel, TinyTimeMixerModel, MoiraiTSModel, LPTMModel, TimeMoEModel, TimesFM_2p5_Model, Chronos_2_Model
+from samay.dataset import TimesfmDataset, MomentDataset, ChronosDataset, ChronosBoltDataset, TinyTimeMixerDataset, MoiraiDataset, LPTMDataset, TimeMoEDataset, TimesFM_2p5_Dataset, Chronos_2_Dataset
 from samay.utils import load_args, get_gifteval_datasets, get_monash_datasets
 from samay.metric import *
 from samay.model import (
@@ -205,7 +205,7 @@ def calc_pred_and_context_len(freq):
 
 if __name__ == "__main__":
     
-    for model_name in ["timesfm_2p5"]:
+    for model_name in ["chronos2"]:
         print(f"Evaluating model: {model_name}")
         # create csv file for leaderboard if not already created
         csv_path = f"leaderboard/{model_name}.csv"
@@ -245,6 +245,9 @@ if __name__ == "__main__":
             args = load_args(arg_path)
         elif model_name == "chronos":
             arg_path = "config/chronos.json"
+            args = load_args(arg_path)
+        elif model_name == "chronos2":
+            arg_path = "config/chronos2.json"
             args = load_args(arg_path)
         elif model_name == "ttm":
             arg_path = "config/tinytimemixer.json"
@@ -304,7 +307,7 @@ if __name__ == "__main__":
                 args["config"]["horizon_len"] = dataset.horizon_len
                 model = TimesfmModel(**args)
                 start = time.time()
-                metrics = model.evaluate(dataset)
+                metrics = model.evaluate(dataset, metric_only=True)
                 print("Metrics: ", metrics)
                 end = time.time()
                 print(f"Size of dataset: {fs:.2f} MB")
@@ -361,7 +364,7 @@ if __name__ == "__main__":
                 model = MomentModel(**args)
                 finetuned_model = model.finetune(train_dataset, task_name="forecasting")
                 start = time.time()
-                metrics = model.evaluate(dataset, task_name="forecasting")
+                metrics = model.evaluate(dataset, task_name="forecasting", metric_only=True)
                 end = time.time()
                 print(f"Size of dataset: {fs:.2f} MB")
                 print(
@@ -395,6 +398,7 @@ if __name__ == "__main__":
                     dataset,
                     horizon_len=dataset.horizon_len,
                     quantile_levels=[0.1, 0.5, 0.9],
+                    metric_only=True,
                 )
                 end = time.time()
                 print(f"Size of dataset: {fs:.2f} MB")
@@ -406,6 +410,28 @@ if __name__ == "__main__":
                 del dataset
                 torch.cuda.empty_cache()
                 gc.collect()
+
+            elif model_name == "chronos2":
+                model = Chronos_2_Model(**args)
+                dataset = Chronos_2_Dataset(
+                    datetime_col="timestamp",
+                    path=dataset_path,
+                    mode="test",
+                    context_len=context_len,
+                    horizon_len=pred_len,
+                    boundaries=[-1, -1, -1],
+                    batch_size=32,
+                )
+                start = time.time()
+                metrics = model.evaluate(
+                    dataset,
+                    metric_only=True,
+                )
+                end = time.time()
+                print(f"Size of dataset: {fs:.2f} MB")
+                print(
+                    f"Time taken for evaluation of {fname}: {end - start:.2f} seconds"
+                )
 
             elif model_name == "chronosbolt":
                 repo = "amazon/chronos-bolt-small"
@@ -424,6 +450,7 @@ if __name__ == "__main__":
                     dataset,
                     horizon_len=dataset.horizon_len,
                     quantile_levels=[0.1, 0.5, 0.9],
+                    metric_only=True,
                 )
                 end = time.time()
                 print(f"Size of dataset: {fs:.2f} MB")
@@ -448,7 +475,7 @@ if __name__ == "__main__":
                 args["config"]["horizon_len"] = dataset.horizon_len
                 model = TinyTimeMixerModel(**args)
                 start = time.time()
-                metrics = model.evaluate(dataset)
+                metrics = model.evaluate(dataset, metric_only=True)
                 end = time.time()
                 print("Metrics: ", metrics)
                 print(f"Size of dataset: {fs:.2f} MB")
@@ -475,7 +502,7 @@ if __name__ == "__main__":
                 )
 
                 start = time.time()
-                metrics = model.evaluate(dataset, leaderboard=True)
+                metrics = model.evaluate(dataset, metric_only=True)
                 end = time.time()
                 print(f"Size of dataset: {fs:.2f} MB")
                 print(
@@ -501,7 +528,7 @@ if __name__ == "__main__":
                 )
 
                 start = time.time()
-                metrics = model.evaluate(dataset, leaderboard=True)
+                metrics = model.evaluate(dataset, metric_only=True)
                 end = time.time()
                 print(f"Size of dataset: {fs:.2f} MB")
                 print(
@@ -527,7 +554,7 @@ if __name__ == "__main__":
                 args["config"]["forecast_horizon"] = dataset.forecast_horizon
                 model = LPTMModel(**args)
                 start = time.time()
-                metrics = model.evaluate(dataset, task_name="forecasting2")
+                metrics = model.evaluate(dataset, task_name="forecasting2", metric_only=True)
                 end = time.time()
                 print(f"Size of dataset: {fs:.2f} MB")
                 print(
@@ -546,7 +573,7 @@ if __name__ == "__main__":
                 args["config"]["horizon_len"] = dataset.horizon_len
                 model = TimeMoEModel(**args)
                 start = time.time()
-                metrics = model.evaluate(dataset)
+                metrics = model.evaluate(dataset, metric_only=True)
                 end = time.time()
                 print(f"Size of dataset: {fs:.2f} MB")
                 print(f"Time taken for evaluation of {fname}: {end-start:.2f} seconds")
@@ -595,4 +622,4 @@ if __name__ == "__main__":
         mod_timestamp = round(mod_end - mod_start, 2)
 
     print("All models evaluated!")
-    print("Model evaluation times: ", mod_timestamp)
+    print("Model evaluation times:", mod_timestamp)
