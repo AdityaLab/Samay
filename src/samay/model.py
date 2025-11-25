@@ -920,7 +920,6 @@ class Chronos_2_Model(Basemodel):
                     output = self.model(
                         context=inputs, num_output_patches=current_horizon_patch
                     )  # b, h, q
-<<<<<<< HEAD
                     quantile_output = output.quantile_preds.transpose(1, 2) # b, h, q
                     # take median as the last_ar_output
                     # if the remaining length is smaller than the current horizon patch, we only take the first remaining_length values
@@ -929,16 +928,6 @@ class Chronos_2_Model(Basemodel):
                     
                     # last_ar_output = quantile_output[:, -current_horizon_patch * self.patch_size :, quantile_output.shape[-1] // 2]
                     last_ar_output = quantile_output[:, :, quantile_output.shape[-1] // 2]
-=======
-                    quantile_output = output.quantile_preds.transpose(1, 2)  # b, h, q
-                    remaining_length -= current_horizon_patch * self.patch_size
-                    # take median as the last_ar_output
-                    last_ar_output = quantile_output[
-                        :,
-                        -current_horizon_patch * self.patch_size :,
-                        quantile_output.shape[-1] // 2,
-                    ]
->>>>>>> 457842e961266ace1633eb676959411d8f865ba4
                     all_quantile_outputs.append(quantile_output)
                     remaining_length -= current_horizon_patch * self.patch_size
                 quantile_prediction = torch.cat(all_quantile_outputs, dim=1)  # b, h, q
