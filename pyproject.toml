@@ -29,6 +29,7 @@ dependencies = [
     "jaxtyping>=0.3.0",
     "torchvision>=0.20.1",
     "lightning>=2.5.1",
+    "plotly>=6.3.0",
 ]
 
 [build-system]
