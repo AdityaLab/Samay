@@ -23,31 +23,32 @@ print(f"Time taken to load dataset names: {end - start:.2f} seconds")
 
 if __name__ == "__main__":
     very_start = time.time()
-    for model_name in ["MomentModel", "LPTMModel"]:
+    for model_name in ["LPTMModel"]:
         csv_path = f"leaderboard/AD_{model_name}.csv"
         if not os.path.exists(csv_path):
             df = pd.DataFrame(columns=["dataset", "size_in_MB", "eval_time", "AUC_ROC", "Precision", "Recall", "F1"])
             df.to_csv(csv_path, index=False)
         mod_start = time.time()
         mod_timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        for fpath, (freq, fsize) in NAMES:
+        for fpath, (_, fsize) in NAMES.items():
             dataset_name = fpath.split("/")[-1].split(".")[0]
             print(f"Model eval started at: {mod_timestamp}")
             print(f"Running {model_name} on {dataset_name}")
             train_size = fpath.split(".")[0].split("_")[-3]
+            train_size = int(train_size)
             if model_name == "MomentModel":
-                args = load_args("configs/moment_detection.json")
-                model = MomentModel(args)
-                train_set = MomentDataset(path=fpath, boundaries=[train_size, train_size, 0], task_name="detection", mode="train")
-                test_set = MomentDataset(path=fpath, boundaries=[train_size, train_size, 0], task_name="detection", mode="test")
+                args = load_args("config/moment_detection.json")
+                model = MomentModel(**args)
+                # train_set = MomentDataset(path=fpath, boundaries=[train_size, train_size, 0], task_name="detection", mode="train")
+                test_set = MomentDataset(path=fpath, boundaries=[-1, -1, -1], task_name="detection", mode="test")
             elif model_name == "LPTMModel":
-                args = load_args("configs/lptm.json")
-                model = LPTMModel(args)
-                train_set = LPTMDataset(path=fpath, boundaries=[train_size, train_size, 0], task_name="detection", mode="train")
-                test_set = LPTMDataset(path=fpath, boundaries=[train_size, train_size, 0], task_name="detection", mode="test")
+                args = load_args("config/lptm.json")
+                model = LPTMModel(**args)
+                # train_set = LPTMDataset(path=fpath, boundaries=[train_size, train_size, 0], task_name="detection", mode="train")
+                test_set = LPTMDataset(path=fpath, boundaries=[-1, -1, -1], task_name="detection", mode="test")
 
             start = time.time()
-            model.finetune(dataset=train_set, task_name="detection")
+            # model.finetune(dataset=train_set, task_name="detection")
             trues, preds, labels = model.evaluate(test_set, task_name="detection")
             anomaly_score = ((preds - trues) ** 2).flatten()
             # set anomalies to be outside mean + 3*std
@@ -84,7 +85,7 @@ if __name__ == "__main__":
                     "Recall": f"{recall:.4f}",
                     "F1": f"{f1:.4f}"
                 }
-                df = df.append(new_row, ignore_index=True)
+                df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
                 df.to_csv(csv_path, index=False)
                 print(f"Results saved to {csv_path}")
 

@@ -1079,7 +1079,10 @@ class LPTMDataset(BaseDataset):
         elif self.task_name == "detection":
             self.labels = self.df.iloc[:, -1].values
             ts = self.df.iloc[:, 0].values.reshape(-1, 1)
-            self.scaler.fit(ts[slice(0, self.boundaries[0])])
+            if self.mode == 'train':
+                self.scaler.fit(ts[slice(0, self.boundaries[0])])
+            elif self.mode == 'test':
+                self.scaler.fit(ts[slice(self.boundaries[1], self.boundaries[2])])
             ts = self.scaler.transform(ts)
 
         elif self.task_name == "classification":
