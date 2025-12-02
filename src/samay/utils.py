@@ -415,6 +415,45 @@ def get_monash_datasets(path):
     return NAMES
 
 
+def get_tsb_ad_datasets(path):
+    """
+    Read TSB-AD datasets stored as CSV files in `path`.
+
+    Expects files directly under `path` (e.g. data/TSB-AD-U/*.csv).
+    Returns a dict mapping absolute file path -> (inferred_freq_or_None, size_in_MB).
+    """
+    # collect csv files in the given directory
+    files = [f for f in os.listdir(path) if f.lower().endswith(".csv") and not f.startswith(".")]
+
+    data = []
+    for f in files:
+        d_path = os.path.join(path, f)
+        try:
+            fsize = os.path.getsize(d_path) / 1e6
+        except Exception:
+            # skip files we can't stat
+            continue
+        data.append((d_path, fsize))
+
+    data = sorted(data, key=lambda x: x[1])
+
+    NAMES = defaultdict(tuple)
+    for d_path, fsize in data:
+        freq = None
+        try:
+            df = pd.read_csv(d_path)
+            if "timestamp" in df.columns:
+                try:
+                    freq = pd.infer_freq(df["timestamp"])
+                except Exception:
+                    freq = None
+        except Exception:
+            # If reading fails, leave freq as None but still include size
+            freq = None
+        NAMES[d_path] = (freq, fsize)
+
+    return dict(NAMES)
+
 
 def adjust_predicts(score, label, threshold=None, pred=None, calc_latency=False):
     """

@@ -1268,7 +1268,10 @@ class LPTMDataset(BaseDataset):
         elif self.task_name == "detection":
             self.labels = self.df.iloc[:, -1].values
             ts = self.df.iloc[:, 0].values.reshape(-1, 1)
-            self.scaler.fit(ts[slice(0, self.boundaries[0])])
+            if self.mode == 'train':
+                self.scaler.fit(ts[slice(0, self.boundaries[0])])
+            elif self.mode == 'test':
+                self.scaler.fit(ts[slice(self.boundaries[1], self.boundaries[2])])
             ts = self.scaler.transform(ts)
 
         elif self.task_name == "classification":
@@ -2483,6 +2486,9 @@ class Chronos_2_Dataset(BaseDataset):
         if self.boundaries[2] == 0:
             self.boundaries[2] = int(len(self.df) - 1)
 
+        if list(self.boundaries) == [-1, -1, -1]:
+            # use all data for training
+            self.boundaries = [0, 0, len(self.df) - 1]
 
         if self.mode == "train":
             self.data = self.df[slice(0, self.boundaries[0]), :]

@@ -1047,15 +1047,16 @@ class Chronos_2_Model(Basemodel):
                     output = self.model(
                         context=inputs, num_output_patches=current_horizon_patch
                     )  # b, h, q
-                    quantile_output = output.quantile_preds.transpose(1, 2)  # b, h, q
-                    remaining_length -= current_horizon_patch * self.patch_size
+                    quantile_output = output.quantile_preds.transpose(1, 2) # b, h, q
                     # take median as the last_ar_output
-                    last_ar_output = quantile_output[
-                        :,
-                        -current_horizon_patch * self.patch_size :,
-                        quantile_output.shape[-1] // 2,
-                    ]
+                    # if the remaining length is smaller than the current horizon patch, we only take the first remaining_length values
+                    if remaining_length < current_horizon_patch * self.patch_size:
+                        quantile_output = quantile_output[:, :remaining_length, :]
+                    
+                    # last_ar_output = quantile_output[:, -current_horizon_patch * self.patch_size :, quantile_output.shape[-1] // 2]
+                    last_ar_output = quantile_output[:, :, quantile_output.shape[-1] // 2]
                     all_quantile_outputs.append(quantile_output)
+                    remaining_length -= current_horizon_patch * self.patch_size
                 quantile_prediction = torch.cat(all_quantile_outputs, dim=1)  # b, h, q
                 point_prediction = quantile_prediction[
                     :, :, quantile_prediction.shape[-1] // 2
@@ -1991,6 +1992,27 @@ class MomentModel(Basemodel):
             embeddings = np.concatenate(embeddings)
             labels = np.concatenate(labels)
             return accuracy, embeddings, labels
+        
+        elif task_name == "detection":
+            trues, preds, labels = [], [], []
+            with torch.no_grad():
+                for i, data in enumerate(dataloader):
+                    # unpack the data
+                    timeseries, input_mask, label = data
+                    timeseries = timeseries.to(self.device).float()
+                    input_mask = input_mask.to(self.device).long()
+                    label = label.to(self.device).long()
+                    output = self.model(x_enc=timeseries, input_mask=input_mask)
+
+                    trues.append(timeseries.detach().cpu().numpy())
+                    preds.append(output.reconstruction.detach().cpu().numpy())
+                    labels.append(label.detach().cpu().numpy())
+
+            trues = np.concatenate(trues, axis=0).flatten()
+            preds = np.concatenate(preds, axis=0).flatten()
+            labels = np.concatenate(labels, axis=0).flatten()
+
+            return trues, preds, labels
 
 
 class TinyTimeMixerModel(Basemodel):

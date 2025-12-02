@@ -40,38 +40,52 @@ def MASE(
     using first differences along the sequence dimension.
 
     Args:
+        context (np.ndarray): Context array. Shape is (W, S, Lc).
         y_true (np.ndarray): Ground-truth array. Shape can be either
             ``(num_seq, seq_len)`` or ``(batch, num_seq, seq_len)``.
         y_pred (np.ndarray): Predicted array with the same shape as
             ``y_true``.
-        freq (str): Frequency string used to derive seasonality if needed.
-            Currently provided for compatibility; default is ``"h"``.
 
     Returns:
         (float): The mean absolute scaled error.
     """
+    # Ensure float arrays
     context = np.asarray(context, dtype=float)
     y_true = np.asarray(y_true, dtype=float)
     y_pred = np.asarray(y_pred, dtype=float)
 
+    # Basic validations
     if y_true.shape != y_pred.shape:
         raise ValueError(f"y_true {y_true.shape} != y_pred {y_pred.shape}")
     if context.ndim != 3 or y_true.ndim != 3:
         raise ValueError("all inputs must be 3D arrays: (num_windows, num_series, seq_len)")
     if context.shape[:2] != y_true.shape[:2]:
         raise ValueError("context and y_true/y_pred must match on (W, S)")
+
+    # If context too short to form first differences, return NaNs per spec
     if context.shape[-1] <= 1:
         base = np.full(y_true.shape[:2], np.nan)  # (W, S)
         return _reduce_mase(base, reduce)
 
-    diffs = np.abs(context[..., 1:] - context[..., :-1])   # (W, S, Lc-1)
-    denom = diffs.mean(axis=-1)                            # (W, S)
+    # --- Denominator (scale) ---
+    # 1) One-step first differences within each window: (W, S, Lc-1)
+    diffs = np.abs(context[..., 1:] - context[..., :-1])
 
-    num = np.abs(y_true - y_pred).mean(axis=-1)            # (W, S)
+    # 2) Mean over time within each window -> (W, S)
+    scale_ws = diffs.mean(axis=-1)
 
+    # 3) Mean over windows to get one scale per series -> (S,)
+    #    This keeps the scale independent of window, closer to standard MASE.
+    scale_s = np.nanmean(scale_ws, axis=0)
+
+    # --- Numerator (per-window multi-step absolute error mean) ---
+    # Mean over horizon to get (W, S)
+    num_ws = np.abs(y_true - y_pred).mean(axis=-1)
+
+    # --- Scale and guard against zero/invalid denominators ---
     with np.errstate(divide="ignore", invalid="ignore"):
-        mase_ws = num / denom
-        mase_ws = np.where(denom > 0, mase_ws, np.nan)     # (W, S)
+        mase_ws = num_ws / scale_s[None, :]               # broadcast (S,) over (W, S)
+        mase_ws = np.where(scale_s[None, :] > 0, mase_ws, np.nan)
 
     return _reduce_mase(mase_ws, reduce)
 
@@ -86,6 +100,7 @@ def _reduce_mase(mase_ws: np.ndarray, reduce: str):
     if reduce == "mean":
         return float(np.nanmean(mase_ws))   # -> scalar
     raise ValueError(f"unknown reduce={reduce!r}")
+
 
 
 def MAPE(y_true: np.ndarray, y_pred: np.ndarray):
