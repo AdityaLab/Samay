@@ -53,7 +53,7 @@ from .models.TinyTimeMixer.models.tinytimemixer.modeling_tinytimemixer import (
     TinyTimeMixerForPrediction,
 )
 from .utils import cleanup_dataloader, get_least_used_gpu, quantile_loss, visualize
-
+from quantization import quantize_linear_layers
 
 class Basemodel:
     def __init__(self, config=None, repo=None):
@@ -1159,6 +1159,7 @@ class LPTMModel(Basemodel):
         max_epoch = 5 if "epoch" not in kwargs else kwargs["epoch"]
         max_norm = 5.0 if "norm" not in kwargs else kwargs["norm"]
         mask_ratio = 0.25 if "mask_ratio" not in kwargs else kwargs["mask_ratio"]
+        quantization = False if "quantization" not in kwargs else kwargs["quantization"]
 
         if task_name == "imputation" or task_name == "detection":
             mask_generator = Masking(mask_ratio=mask_ratio)
@@ -1276,6 +1277,11 @@ class LPTMModel(Basemodel):
 
             scheduler.step()
 
+    def quantize(self, quant_type="int8", device="cuda"):
+        self.model.eval()
+        self.model = self.model.to(device)
+        with torch.no_grad():
+            self.model = quantize_linear_layers(self.model, quantization_type=quant_type)
         return self.model
 
     def evaluate(self, dataset: LPTMDataset, task_name: str = "forecasting", metric_only=False, **kwargs):
@@ -1724,7 +1730,14 @@ class MomentModel(Basemodel):
             scheduler.step()
 
         return self.model
-
+    
+    def quantize(self, quant_type="int8", device="cuda"):
+        self.model.eval()
+        self.model = self.model.to(device)
+        with torch.no_grad():
+            self.model = quantize_linear_layers(self.model, quantization_type=quant_type)
+        return self.model
+    
     def plot(self, dataset: MomentDataset, task_name: str = "forecasting"):
         """Visualize results from the MOMENT model.
 
