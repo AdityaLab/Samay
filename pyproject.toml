@@ -1,7 +1,7 @@
 [project]
 name = "samay"
 version = "0.1.0"
-description = "Add your description here"
+description = "A library for time-series foundational models"
 readme = "README.md"
 authors = [{ name = "kage08", email = "harshavardhan864.hk@gmail.com" }]
 requires-python = ">=3.11"
@@ -20,7 +20,6 @@ dependencies = [
     "typer-config>=1.4.2",
     "typer>=0.15.1",
     "utilsforecast>=0.2.7",
-    "datasets>=3.2.0",
     "chronos-forecasting>=1.4.1",
     "tensorboardx>=2.6.2.2",
     "einops>=0.8.1",
