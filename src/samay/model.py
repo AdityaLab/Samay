@@ -10,13 +10,14 @@ import torch.nn as nn
 import yaml
 from einops import rearrange, repeat
 from jaxtyping import Float
+from sklearn.metrics import mean_squared_error
+from torchvision import transforms
+
 from samay.dataset import *
 
 # from chronos import ChronosPipeline
 from samay.models.chronosforecasting.chronos.chronos import ChronosPipeline
 from samay.moirai_utils import convert_module_kwargs, filter_dict
-from sklearn.metrics import mean_squared_error
-from torchvision import transforms
 from uni2ts.model.moirai import MoiraiForecast, MoiraiModule
 from uni2ts.model.moirai.finetune import MoiraiFinetune
 from uni2ts.model.moirai2 import Moirai2Forecast, Moirai2Module
@@ -53,7 +54,23 @@ from .models.TinyTimeMixer.models.tinytimemixer.modeling_tinytimemixer import (
     TinyTimeMixerForPrediction,
 )
 from .utils import cleanup_dataloader, get_least_used_gpu, quantile_loss, visualize
-from quantization import quantize_linear_layers
+
+
+def quantize_linear_layers(model, quantization_type="int8"):
+
+    if quantization_type == "int8":
+        return torch.quantization.quantize_dynamic(
+            model, {nn.Linear}, dtype=torch.qint8
+        )
+
+    elif quantization_type == "float16":
+        return torch.quantization.quantize_dynamic(
+            model, {nn.Linear}, dtype=torch.float16
+        )
+
+    else:
+        raise ValueError("Unsupported quantization type")
+
 
 class Basemodel:
     def __init__(self, config=None, repo=None):
@@ -460,7 +477,9 @@ class ChronosModel(Basemodel):
 
         finetune_model.eval()
 
-    def plot(self, dataset: ChronosDataset, horizon_len: int, quantile_levels: list, **kwargs):
+    def plot(
+        self, dataset: ChronosDataset, horizon_len: int, quantile_levels: list, **kwargs
+    ):
         """Plot forecast results produced by the Chronos pipeline.
 
         Args:
@@ -515,7 +534,12 @@ class ChronosModel(Basemodel):
         )
 
     def evaluate(
-        self, dataset: ChronosDataset, horizon_len: int, quantile_levels: list, metric_only=False, **kwargs
+        self,
+        dataset: ChronosDataset,
+        horizon_len: int,
+        quantile_levels: list,
+        metric_only=False,
+        **kwargs,
     ):
         """Evaluate the Chronos model on a dataset.
 
@@ -684,7 +708,13 @@ class ChronosBoltModel(Basemodel):
 
         finetune_model.eval()
 
-    def plot(self, dataset: ChronosBoltDataset, horizon_len: int, quantile_levels: list, **kwargs):
+    def plot(
+        self,
+        dataset: ChronosBoltDataset,
+        horizon_len: int,
+        quantile_levels: list,
+        **kwargs,
+    ):
         """Plot forecast results produced by the ChronosBolt pipeline.
 
         Args:
@@ -737,7 +767,12 @@ class ChronosBoltModel(Basemodel):
         )
 
     def evaluate(
-        self, dataset: ChronosBoltDataset, horizon_len: int, quantile_levels: list, metric_only=False, **kwargs
+        self,
+        dataset: ChronosBoltDataset,
+        horizon_len: int,
+        quantile_levels: list,
+        metric_only=False,
+        **kwargs,
     ):
         """Evaluate the ChronosBolt model on a dataset.
 
@@ -1047,14 +1082,16 @@ class Chronos_2_Model(Basemodel):
                     output = self.model(
                         context=inputs, num_output_patches=current_horizon_patch
                     )  # b, h, q
-                    quantile_output = output.quantile_preds.transpose(1, 2) # b, h, q
+                    quantile_output = output.quantile_preds.transpose(1, 2)  # b, h, q
                     # take median as the last_ar_output
                     # if the remaining length is smaller than the current horizon patch, we only take the first remaining_length values
                     if remaining_length < current_horizon_patch * self.patch_size:
                         quantile_output = quantile_output[:, :remaining_length, :]
-                    
+
                     # last_ar_output = quantile_output[:, -current_horizon_patch * self.patch_size :, quantile_output.shape[-1] // 2]
-                    last_ar_output = quantile_output[:, :, quantile_output.shape[-1] // 2]
+                    last_ar_output = quantile_output[
+                        :, :, quantile_output.shape[-1] // 2
+                    ]
                     all_quantile_outputs.append(quantile_output)
                     remaining_length -= current_horizon_patch * self.patch_size
                 quantile_prediction = torch.cat(all_quantile_outputs, dim=1)  # b, h, q
@@ -1281,10 +1318,18 @@ class LPTMModel(Basemodel):
         self.model.eval()
         self.model = self.model.to(device)
         with torch.no_grad():
-            self.model = quantize_linear_layers(self.model, quantization_type=quant_type)
+            self.model = quantize_linear_layers(
+                self.model, quantization_type=quant_type
+            )
         return self.model
 
-    def evaluate(self, dataset: LPTMDataset, task_name: str = "forecasting", metric_only=False, **kwargs):
+    def evaluate(
+        self,
+        dataset: LPTMDataset,
+        task_name: str = "forecasting",
+        metric_only=False,
+        **kwargs,
+    ):
         """Evaluate the LPTM model on a dataset.
 
         Args:
@@ -1358,7 +1403,7 @@ class LPTMModel(Basemodel):
             mse = MSE(trues, preds)
             mae = MAE(trues, preds)
             mase = MASE(histories, trues, preds)
-            mape = MAPE(trues, preds)   
+            mape = MAPE(trues, preds)
             rmse = RMSE(trues, preds)
             nrmse = NRMSE(trues, preds)
             smape = SMAPE(trues, preds)
@@ -1608,7 +1653,9 @@ class MomentModel(Basemodel):
             self.model = MOMENTPipeline.from_pretrained(repo, model_kwargs=self.config)
         self.model.init()
 
-    def finetune(self, dataset: MomentDataset, task_name: str = "forecasting", **kwargs):
+    def finetune(
+        self, dataset: MomentDataset, task_name: str = "forecasting", **kwargs
+    ):
         """Finetune the model on the given dataset.
 
         Args:
@@ -1730,14 +1777,16 @@ class MomentModel(Basemodel):
             scheduler.step()
 
         return self.model
-    
+
     def quantize(self, quant_type="int8", device="cuda"):
         self.model.eval()
         self.model = self.model.to(device)
         with torch.no_grad():
-            self.model = quantize_linear_layers(self.model, quantization_type=quant_type)
+            self.model = quantize_linear_layers(
+                self.model, quantization_type=quant_type
+            )
         return self.model
-    
+
     def plot(self, dataset: MomentDataset, task_name: str = "forecasting"):
         """Visualize results from the MOMENT model.
 
@@ -1880,7 +1929,13 @@ class MomentModel(Basemodel):
         #     labels = np.concatenate(labels)
         #     return accuracy, embeddings, labels
 
-    def evaluate(self, dataset: MomentDataset, task_name: str = "forecasting", metric_only: bool = False, **kwargs):
+    def evaluate(
+        self,
+        dataset: MomentDataset,
+        task_name: str = "forecasting",
+        metric_only: bool = False,
+        **kwargs,
+    ):
         """Evaluate the model.
 
         Args:
@@ -2005,7 +2060,7 @@ class MomentModel(Basemodel):
             embeddings = np.concatenate(embeddings)
             labels = np.concatenate(labels)
             return accuracy, embeddings, labels
-        
+
         elif task_name == "detection":
             trues, preds, labels = [], [], []
             with torch.no_grad():
@@ -2849,7 +2904,10 @@ class MoiraiTSModel(Basemodel):
 
         mse = np.mean(np.array([MSE(t, p) for t, p in zip(trues, preds)]), axis=0)
         mae = np.mean(np.array([MAE(t, p) for t, p in zip(trues, preds)]), axis=0)
-        mase = np.mean(np.array([MASE(h, t, p) for h, t, p in zip(histories, trues, preds)]), axis=0)
+        mase = np.mean(
+            np.array([MASE(h, t, p) for h, t, p in zip(histories, trues, preds)]),
+            axis=0,
+        )
         mape = np.mean(np.array([MAPE(t, p) for t, p in zip(trues, preds)]), axis=0)
         rmse = np.mean(np.array([RMSE(t, p) for t, p in zip(trues, preds)]), axis=0)
         nrmse = np.mean(np.array([NRMSE(t, p) for t, p in zip(trues, preds)]), axis=0)
@@ -3283,15 +3341,21 @@ class TimeMoEModel(Basemodel):
                 trues.append(true)
                 preds.append(pred)
                 histories.append(history)
-        trues = np.concatenate(trues, axis=0).reshape(
-            dataset.n_channels, -1, dataset.horizon_len
-        ).transpose(1, 0, 2)
-        preds = np.concatenate(preds, axis=0).reshape(
-            dataset.n_channels, -1, dataset.horizon_len
-        ).transpose(1, 0, 2)
-        histories = np.concatenate(histories, axis=0).reshape(
-            dataset.n_channels, -1, dataset.context_len
-        ).transpose(1, 0, 2)
+        trues = (
+            np.concatenate(trues, axis=0)
+            .reshape(dataset.n_channels, -1, dataset.horizon_len)
+            .transpose(1, 0, 2)
+        )
+        preds = (
+            np.concatenate(preds, axis=0)
+            .reshape(dataset.n_channels, -1, dataset.horizon_len)
+            .transpose(1, 0, 2)
+        )
+        histories = (
+            np.concatenate(histories, axis=0)
+            .reshape(dataset.n_channels, -1, dataset.context_len)
+            .transpose(1, 0, 2)
+        )
 
         visualize(
             task_name="forecasting",
@@ -3308,7 +3372,7 @@ class TimeMoEModel(Basemodel):
             metric_only (bool): If True, return only metrics. Defaults to False.
 
         Returns:
-            (Dict[str, float]): If `metric_only` is True, returns a dictionary containing evaluation metrics, 
+            (Dict[str, float]): If `metric_only` is True, returns a dictionary containing evaluation metrics,
                 including mse, mae, mase, mape, rmse, nrmse, smape, msis, nd.
             (Tuple[Dict[str, float], np.ndarray, np.ndarray, np.ndarray]): If `metric_only` is False, returns a tuple of
                 (metrics, trues, preds, histories).
@@ -3412,7 +3476,9 @@ class TimesFM_2p5_Model(Basemodel):
         self.model.compile(self.config)
         self.quantiles = self.model.model.config.quantiles
 
-    def evaluate(self, dataset: TimesFM_2p5_Dataset, metric_only: bool = False, **kwargs):
+    def evaluate(
+        self, dataset: TimesFM_2p5_Dataset, metric_only: bool = False, **kwargs
+    ):
         """Evaluate the model on the given dataset.
 
         Args:
@@ -3420,7 +3486,7 @@ class TimesFM_2p5_Model(Basemodel):
             metric_only (bool): If True, return only metrics. Defaults to False.
 
         Returns:
-            (Dict[str, float]): If `metric_only` is True, returns a dictionary containing evaluation metrics, 
+            (Dict[str, float]): If `metric_only` is True, returns a dictionary containing evaluation metrics,
                 including mse, mae, mase, mape, rmse, nrmse, smape, msis, nd, mwsq, crps.
             (Tuple[Dict[str, float], np.ndarray, np.ndarray, np.ndarray]): If `metric_only` is False, returns a tuple of
                 (metrics, trues, preds, histories).
@@ -3451,17 +3517,35 @@ class TimesFM_2p5_Model(Basemodel):
                     input_seq,
                     mask_seq,
                 )
-                quantile_forecast = quantile_forecast[..., 1:].transpose(2, 0, 1)   # (q, b, h)
+                quantile_forecast = quantile_forecast[..., 1:].transpose(
+                    2, 0, 1
+                )  # (q, b, h)
 
                 trues.append(target_seq.cpu().numpy())
                 preds.append(point_forecast)
                 q_preds.append(quantile_forecast)
                 histories.append(input_seq.cpu().numpy())
 
-        trues = np.concatenate(trues, axis=0).reshape(dataset.n_channels, -1, dataset.horizon_len).transpose(1, 0, 2)
-        preds = np.concatenate(preds, axis=0).reshape(dataset.n_channels, -1, dataset.horizon_len).transpose(1, 0, 2)
-        q_preds = np.concatenate(q_preds, axis=1).reshape(q_preds[-1].shape[0], dataset.n_channels, -1, dataset.horizon_len).transpose(0, 2, 1, 3)
-        histories = np.concatenate(histories, axis=0).reshape(dataset.n_channels, -1, dataset.context_len).transpose(1, 0, 2)
+        trues = (
+            np.concatenate(trues, axis=0)
+            .reshape(dataset.n_channels, -1, dataset.horizon_len)
+            .transpose(1, 0, 2)
+        )
+        preds = (
+            np.concatenate(preds, axis=0)
+            .reshape(dataset.n_channels, -1, dataset.horizon_len)
+            .transpose(1, 0, 2)
+        )
+        q_preds = (
+            np.concatenate(q_preds, axis=1)
+            .reshape(q_preds[-1].shape[0], dataset.n_channels, -1, dataset.horizon_len)
+            .transpose(0, 2, 1, 3)
+        )
+        histories = (
+            np.concatenate(histories, axis=0)
+            .reshape(dataset.n_channels, -1, dataset.context_len)
+            .transpose(1, 0, 2)
+        )
 
         trues = dataset._denormalize_data(trues)
         preds = dataset._denormalize_data(preds)
@@ -3473,7 +3557,7 @@ class TimesFM_2p5_Model(Basemodel):
 
         # Calculate metrics
         mse = MSE(trues, preds)
-        mae = MAE(trues, preds) 
+        mae = MAE(trues, preds)
         mase = MASE(histories, trues, preds)
         mape = MAPE(trues, preds)
         rmse = RMSE(trues, preds)

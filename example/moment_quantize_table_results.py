@@ -1,24 +1,27 @@
+import copy
 import os
 import sys
 import time
-import copy
-import torch
+
 import numpy as np
+import torch
 from sklearn.metrics import mean_squared_error
-
-
 
 src_path = os.path.abspath(os.path.join("..", "src"))
 if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
-from samay.model import MomentModel
-from samay.dataset import MomentDataset
-
-import torch
 import torch.nn as nn
 
-torch.backends.quantized.engine = "qnnpack"
+try:
+    import bitsandbytes as bnb
+except ImportError:
+    bnb = None
+
+from samay.dataset import MomentDataset
+from samay.model import MomentModel
+
+# torch.backends.quantized.engine = "qnnpack"
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
@@ -26,33 +29,103 @@ def quantize_linear_layers(model, quantization_type="int8"):
 
     if quantization_type == "int8":
         return torch.quantization.quantize_dynamic(
-            model,
-            {nn.Linear},
-            dtype=torch.qint8
+            model, {nn.Linear}, dtype=torch.qint8
         )
 
     elif quantization_type == "float16":
         return torch.quantization.quantize_dynamic(
-            model,
-            {nn.Linear},
-            dtype=torch.float16
+            model, {nn.Linear}, dtype=torch.float16
         )
 
     else:
         raise ValueError("Unsupported quantization type")
-    
+
+
 def quantize(moment_model, quant_type="int8", device="cpu"):
-    
+
     moment_model.model.eval()
     moment_model.model = moment_model.model.to(device)
 
     with torch.no_grad():
         moment_model.model = quantize_linear_layers(
-            moment_model.model,
-            quantization_type=quant_type
+            moment_model.model, quantization_type=quant_type
         )
 
     return moment_model.model
+
+
+def quantize_linear_layers_bnb(module, threshold=6.0, quantization_type="int8"):
+
+    for name, child in module.named_children():
+        if isinstance(child, nn.Linear) and child.in_features >= 128:
+            if quantization_type == "int8":
+                quant_layer = bnb.nn.Linear8bitLt(
+                    child.in_features,
+                    child.out_features,
+                    bias=(child.bias is not None),
+                    threshold=threshold,
+                    has_fp16_weights=False,
+                )
+            elif quantization_type == "nf4":
+                quant_layer = bnb.nn.Linear4bit(
+                    child.in_features,
+                    child.out_features,
+                    bias=(child.bias is not None),
+                    quant_type="nf4",
+                    compute_dtype=torch.float16,
+                )
+            else:
+                raise ValueError("Unsupported CUDA quantization type")
+
+            with torch.no_grad():
+                quant_layer.weight.copy_(child.weight)
+                if child.bias is not None:
+                    quant_layer.bias.copy_(child.bias)
+
+            setattr(module, name, quant_layer)
+        else:
+            quantize_linear_layers_bnb(
+                child, threshold=threshold, quantization_type=quantization_type
+            )
+
+    return module
+
+
+def quantize_cuda(moment_model, quant_type="int8"):
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA not available for CUDA quantization")
+    if bnb is None:
+        raise RuntimeError("bitsandbytes is not installed")
+
+    moment_model.model.eval()
+    moment_model.model = moment_model.model.to("cuda")
+
+    with torch.no_grad():
+        moment_model.model = quantize_linear_layers_bnb(
+            moment_model.model, quantization_type=quant_type
+        )
+        moment_model.model = moment_model.model.to("cuda")
+
+    return moment_model.model
+
+
+def _resolve_run_device(moment_model):
+
+    return getattr(moment_model, "_run_device", device)
+
+
+def _resolve_input_dtype(moment_model):
+
+    model = moment_model.model
+    forced_dtype = getattr(moment_model, "_input_dtype", None)
+    if forced_dtype is not None:
+        return forced_dtype
+
+    try:
+        return next(model.parameters()).dtype
+    except StopIteration:
+        return torch.float32
 
 
 repo = "AutonLab/MOMENT-1-large"
@@ -81,12 +154,25 @@ val_dataset = MomentDataset(
 # Create models
 
 fp32_model = copy.deepcopy(base_model)
+fp32_model._run_device = device
+fp32_model._input_dtype = torch.float32
 
 fp16_model = copy.deepcopy(base_model)
 fp16_model.model = fp16_model.model.half().to(device)
+fp16_model._run_device = device
+fp16_model._input_dtype = torch.float16
 
 int8_model = copy.deepcopy(base_model)
-quantize(int8_model, "int8", device="cpu")
+if torch.cuda.is_available() and bnb is not None:
+    quantize_cuda(int8_model, "int8")
+    int8_model._run_device = torch.device("cuda")
+    int8_model._input_dtype = torch.float32
+    print("Using bitsandbytes INT8 on CUDA")
+else:
+    quantize(int8_model, "int8", device="cpu")
+    int8_model._run_device = torch.device("cpu")
+    int8_model._input_dtype = torch.float32
+    print("Falling back to torch dynamic INT8 on CPU")
 
 print("THIS IS DONE YES!!!!")
 
@@ -99,7 +185,7 @@ def compute_mse(moment_model, dataset):
     model = moment_model.model
     model.eval()
 
-    run_device = device
+    run_device = _resolve_run_device(moment_model)
     model.to(run_device)
 
     preds = []
@@ -107,13 +193,12 @@ def compute_mse(moment_model, dataset):
 
     with torch.no_grad():
         for i in range(len(dataset)):
-
             sample = dataset[i]
 
-            x = sample[0]          # (64, 512)
-            y_future = sample[2]   # (64, 192)
+            x = sample[0]  # (64, 512)
+            y_future = sample[2]  # (64, 192)
 
-            dtype = next(model.parameters()).dtype
+            dtype = _resolve_input_dtype(moment_model)
             x = torch.tensor(x, dtype=dtype).unsqueeze(0).to(run_device)
 
             output = model(x_enc=x)
@@ -130,6 +215,7 @@ def compute_mse(moment_model, dataset):
 
     return mean_squared_error(trues, preds)
 
+
 def model_size(moment_model):
 
     torch.save(moment_model.model.state_dict(), "temp.pt")
@@ -144,13 +230,13 @@ def inference_time(moment_model, dataset, runs=10):
     model = moment_model.model
     model.eval()
 
-    run_device = device
+    run_device = _resolve_run_device(moment_model)
     model.to(run_device)
 
     sample = dataset[0]
     x = sample[0]
 
-    dtype = next(model.parameters()).dtype
+    dtype = _resolve_input_dtype(moment_model)
     x = torch.tensor(x, dtype=dtype).unsqueeze(0).to(run_device)
 
     start = time.time()
@@ -191,5 +277,9 @@ print("\nMOMENT Results (ETTh1, Horizon=192)")
 print("-------------------------------------")
 
 print(f"Float32  | MSE: {mse_fp32:.5f} | Size: {size_fp32:.2f} MB | Speedup: 1.0x")
-print(f"Float16  | MSE: {mse_fp16:.5f} | Size: {size_fp16:.2f} MB | Speedup: {speedup_fp16:.2f}x")
-print(f"INT8     | MSE: {mse_int8:.5f} | Size: {size_int8:.2f} MB | Speedup: {speedup_int8:.2f}x")
+print(
+    f"Float16  | MSE: {mse_fp16:.5f} | Size: {size_fp16:.2f} MB | Speedup: {speedup_fp16:.2f}x"
+)
+print(
+    f"INT8     | MSE: {mse_int8:.5f} | Size: {size_int8:.2f} MB | Speedup: {speedup_int8:.2f}x"
+)

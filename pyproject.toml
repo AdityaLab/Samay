@@ -30,6 +30,7 @@ dependencies = [
     "torchvision>=0.20.1",
     "lightning>=2.5.1",
     "plotly>=6.3.0",
+    "bitsandbytes>=0.49.2",
 ]
 
 [build-system]
