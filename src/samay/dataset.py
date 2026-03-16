@@ -82,7 +82,6 @@ class BaseDataset:
             **kwargs: Extra backend-specific options.
         """
         self.name = name
-        self.freq = freq
         self.datetime_col = datetime_col
         self.batchsize = batchsize
         self.mode = mode
