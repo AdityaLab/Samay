@@ -2,7 +2,8 @@
 *.pyc
 *.pyo
 *.pyd
-__pycache__
+__pycache__/
+**/__pycache__/
 *.so
 *.egg
 *.egg-info
