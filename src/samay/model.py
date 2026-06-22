@@ -53,7 +53,11 @@ from .models.TinyTimeMixer.models.tinytimemixer.modeling_tinytimemixer import (
     TinyTimeMixerForPrediction,
 )
 from .utils import cleanup_dataloader, get_least_used_gpu, quantile_loss, visualize
-from quantization import quantize_linear_layers
+try:
+    from .quantization import quantize_linear_layers
+except ImportError:
+    # bitsandbytes is an optional dependency only needed for `quantize()`.
+    quantize_linear_layers = None
 
 class Basemodel:
     def __init__(self, config=None, repo=None):

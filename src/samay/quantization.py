@@ -1,18 +1,28 @@
 import os
 import torch
 import torch.nn as nn
-import bitsandbytes as bnb
+
+try:
+    import bitsandbytes as bnb
+except ImportError:
+    # bitsandbytes is an optional dependency: it is only required to actually
+    # run quantization. Importing this module (e.g. for `quantize_linear_layers`)
+    # must not fail when it is not installed.
+    bnb = None
 
 #CHANGE THESE
 USE_CUDA = False
 QUANT_TYPE = "int8"
 
 DEVICE = torch.device("cuda" if (USE_CUDA and torch.cuda.is_available()) else "cpu")
-print("Using device:", DEVICE)
-print("Quantization type:", QUANT_TYPE)
 
 
 def quantize_linear_layers(module, threshold=6.0, quantization_type="int8"):
+    if bnb is None:
+        raise ImportError(
+            "bitsandbytes is required for quantization. "
+            "Install it with `pip install bitsandbytes`."
+        )
     for name, child in module.named_children():
         if isinstance(child, nn.Linear) and child.in_features >= 128:
             if quantization_type == "int8":
@@ -39,33 +49,6 @@ def quantize_linear_layers(module, threshold=6.0, quantization_type="int8"):
         else:
             quantize_linear_layers(child, threshold=threshold, quantization_type=quantization_type)
     return module
-
-
-#LOADING MODEL -- FROM THE EXAMPLE LPTM NOTEBOOk
-from samay.model import LPTMModel
-
-config = {
-    "task_name": "forecasting",
-    "forecast_horizon": 192,
-    "head_dropout": 0,
-    "weight_decay": 0,
-    "max_patch": 16,
-    "freeze_encoder": True,
-    "freeze_embedder": True,
-    "freeze_head": False,
-    "freeze_segment": True,
-}
-
-lptm = LPTMModel(config)
-lptm.model = lptm.model.to(DEVICE)
-
-
-#QUANTIZATION
-print("Before quantization (bytes):",
-      sum(p.numel() * p.element_size() for p in lptm.model.parameters()))
-
-lptm.model = quantize_linear_layers(lptm.model)
-lptm.model = lptm.model.to(DEVICE)
 
 
 #CHECKING IF QUANTIZATION IS SUCCESSFUL
@@ -101,48 +84,85 @@ def proof_report_lptm(lptm):
     print("PASS: Quantized layers exist and execute\n")
 
 
-proof_report_lptm(lptm)
-
-
-#EVALUATION WITH MEMORY TRACKING
-from samay.dataset import LPTMDataset
-
-val_dataset = LPTMDataset(
-    name="ett",
-    datetime_col="date",
-    path="data/data/ETTh1.csv",
-    mode="train",
-    horizon=192,
-)
-
-
 def gpu_mem_mb():
     if DEVICE.type != "cuda":
         return None
     return torch.cuda.max_memory_allocated() / 1024**2
 
 
-if DEVICE.type == "cuda":
-    torch.cuda.reset_peak_memory_stats()
-    torch.cuda.synchronize()
+def _demo():
+    """Standalone demo: quantize LPTM and run an evaluation with memory tracking.
 
-print("GPU memory before eval (MB):", gpu_mem_mb())
+    Kept under ``__main__`` so that importing this module (e.g. to use
+    ``quantize_linear_layers``) does not build a model or trigger a circular
+    import with ``samay.model``.
+    """
+    print("Using device:", DEVICE)
+    print("Quantization type:", QUANT_TYPE)
 
-try:
-    print("Evaluating model...")
-    avg_loss, trues, preds, histories = lptm.evaluate(
-        val_dataset,
-        task_name="forecasting"
+    # LOADING MODEL -- FROM THE EXAMPLE LPTM NOTEBOOK
+    from samay.model import LPTMModel
+
+    config = {
+        "task_name": "forecasting",
+        "forecast_horizon": 192,
+        "head_dropout": 0,
+        "weight_decay": 0,
+        "max_patch": 16,
+        "freeze_encoder": True,
+        "freeze_embedder": True,
+        "freeze_head": False,
+        "freeze_segment": True,
+    }
+
+    lptm = LPTMModel(config)
+    lptm.model = lptm.model.to(DEVICE)
+
+    # QUANTIZATION
+    print("Before quantization (bytes):",
+          sum(p.numel() * p.element_size() for p in lptm.model.parameters()))
+
+    lptm.model = quantize_linear_layers(lptm.model)
+    lptm.model = lptm.model.to(DEVICE)
+
+    proof_report_lptm(lptm)
+
+    # EVALUATION WITH MEMORY TRACKING
+    from samay.dataset import LPTMDataset
+
+    val_dataset = LPTMDataset(
+        name="ett",
+        datetime_col="date",
+        path="data/data/ETTh1.csv",
+        mode="train",
+        horizon=192,
     )
 
     if DEVICE.type == "cuda":
+        torch.cuda.reset_peak_memory_stats()
         torch.cuda.synchronize()
 
-    print("GPU peak memory during eval (MB):", gpu_mem_mb())
-    print("Inference SUCCESS")
-    print("Avg loss:", avg_loss)
-    print("Num predictions:", len(preds) if hasattr(preds, "__len__") else "n/a")
+    print("GPU memory before eval (MB):", gpu_mem_mb())
 
-except Exception as e:
-    print("Inference FAILED")
-    print("Error:", repr(e))
+    try:
+        print("Evaluating model...")
+        avg_loss, trues, preds, histories = lptm.evaluate(
+            val_dataset,
+            task_name="forecasting"
+        )
+
+        if DEVICE.type == "cuda":
+            torch.cuda.synchronize()
+
+        print("GPU peak memory during eval (MB):", gpu_mem_mb())
+        print("Inference SUCCESS")
+        print("Avg loss:", avg_loss)
+        print("Num predictions:", len(preds) if hasattr(preds, "__len__") else "n/a")
+
+    except Exception as e:
+        print("Inference FAILED")
+        print("Error:", repr(e))
+
+
+if __name__ == "__main__":
+    _demo()
